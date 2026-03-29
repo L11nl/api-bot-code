@@ -206,6 +206,9 @@ const DEFAULT_TEXTS = {
     paymentMethods: '💳 Payment Methods',
     manageBots: '🤖 Manage Bots',
     manageMenuButtons: '🎛️ Manage Menu Buttons',
+    moveUp: '⬆️ Move Up',
+    moveDown: '⬇️ Move Down',
+    buttonOrderUpdated: '✅ Button order updated!',
     manageChannel: '📢 Manage Required Channel',
     manageDepositSettings: '💱 Manage Deposit Settings',
     referralSettings: '👥 Referral Settings',
@@ -401,6 +404,9 @@ const DEFAULT_TEXTS = {
     paymentMethods: '💳 طرق الدفع',
     manageBots: '🤖 إدارة البوتات',
     manageMenuButtons: '🎛️ إدارة الأزرار',
+    moveUp: '⬆️ رفع',
+    moveDown: '⬇️ تنزيل',
+    buttonOrderUpdated: '✅ تم تحديث ترتيب الزر!',
     manageChannel: '📢 إدارة القناة المطلوبة',
     manageDepositSettings: '💱 إعدادات الشحن',
     referralSettings: '👥 إعدادات الإحالة',
@@ -953,6 +959,18 @@ const DEFAULT_BUTTONS = {
   chatgpt_code: true
 };
 
+const DEFAULT_BUTTON_ORDER = [
+  'redeem',
+  'buy',
+  'my_balance',
+  'deposit',
+  'referral',
+  'discount',
+  'my_purchases',
+  'support',
+  'chatgpt_code'
+];
+
 async function getMenuButtonsVisibility() {
   const setting = await Setting.findOne({ where: { key: 'menu_buttons', lang: 'global' } });
   if (!setting) return { ...DEFAULT_BUTTONS };
@@ -972,9 +990,45 @@ async function setMenuButtonsVisibility(visibility) {
   });
 }
 
-async function showMenuButtonsAdmin(userId) {
-  const visibility = await getMenuButtonsVisibility();
-  const items = [
+async function getMenuButtonsOrder() {
+  const setting = await Setting.findOne({ where: { key: 'menu_buttons_order', lang: 'global' } });
+  if (!setting) return [...DEFAULT_BUTTON_ORDER];
+
+  try {
+    const savedOrder = JSON.parse(setting.value);
+    if (!Array.isArray(savedOrder)) return [...DEFAULT_BUTTON_ORDER];
+
+    const validSaved = savedOrder.filter(id => DEFAULT_BUTTON_ORDER.includes(id));
+    const missing = DEFAULT_BUTTON_ORDER.filter(id => !validSaved.includes(id));
+    return [...validSaved, ...missing];
+  } catch {
+    return [...DEFAULT_BUTTON_ORDER];
+  }
+}
+
+async function setMenuButtonsOrder(order) {
+  await Setting.upsert({
+    key: 'menu_buttons_order',
+    lang: 'global',
+    value: JSON.stringify(order)
+  });
+}
+
+async function moveMenuButton(buttonId, direction) {
+  const order = await getMenuButtonsOrder();
+  const index = order.indexOf(buttonId);
+  if (index === -1) return false;
+
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= order.length) return false;
+
+  [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
+  await setMenuButtonsOrder(order);
+  return true;
+}
+
+async function getMenuButtonItems(userId) {
+  return [
     { id: 'redeem', name: await getText(userId, 'redeem') },
     { id: 'buy', name: await getText(userId, 'buy') },
     { id: 'my_balance', name: await getText(userId, 'myBalance') },
@@ -985,15 +1039,35 @@ async function showMenuButtonsAdmin(userId) {
     { id: 'support', name: await getText(userId, 'support') },
     { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') }
   ];
+}
+
+async function showMenuButtonsAdmin(userId) {
+  const visibility = await getMenuButtonsVisibility();
+  const items = await getMenuButtonItems(userId);
+  const itemsMap = new Map(items.map(item => [item.id, item]));
+  const order = await getMenuButtonsOrder();
+  const orderedItems = order.map(id => itemsMap.get(id)).filter(Boolean);
 
   const keyboard = [];
-  for (const item of items) {
+  for (let i = 0; i < orderedItems.length; i += 1) {
+    const item = orderedItems[i];
     const enabled = visibility[item.id] !== false;
     const action = enabled ? 'hide' : 'show';
-    keyboard.push([{
-      text: `${enabled ? '✅' : '❌'} ${item.name}`,
-      callback_data: `toggle_button_${item.id}_${action}`
-    }]);
+
+    keyboard.push([
+      {
+        text: `${enabled ? '✅' : '❌'} ${item.name}`,
+        callback_data: `toggle_button_${item.id}_${action}`
+      },
+      {
+        text: '⬆️',
+        callback_data: i === 0 ? 'ignore' : `move_button_${item.id}_up`
+      },
+      {
+        text: '⬇️',
+        callback_data: i === orderedItems.length - 1 ? 'ignore' : `move_button_${item.id}_down`
+      }
+    ]);
   }
 
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
@@ -1287,23 +1361,25 @@ async function sendMainMenu(userId) {
   if (!canUse) return;
 
   const visibility = await getMenuButtonsVisibility();
-  const buttons = [];
-
-  const addButton = async (id, textKey, fallbackText = null) => {
-    if (visibility[id] !== false) {
-      buttons.push([{ text: fallbackText || await getText(userId, textKey), callback_data: id }]);
-    }
+  const order = await getMenuButtonsOrder();
+  const buttonLabels = {
+    redeem: await getText(userId, 'redeem'),
+    buy: await getText(userId, 'buy'),
+    my_balance: await getText(userId, 'myBalance'),
+    deposit: await getText(userId, 'deposit'),
+    referral: await getText(userId, 'referral'),
+    discount: '🎟️ Discount',
+    my_purchases: await getText(userId, 'myPurchases'),
+    support: await getText(userId, 'support'),
+    chatgpt_code: await getText(userId, 'chatgptCode')
   };
 
-  await addButton('redeem', 'redeem');
-  await addButton('buy', 'buy');
-  await addButton('my_balance', 'myBalance');
-  await addButton('deposit', 'deposit');
-  await addButton('referral', 'referral');
-  await addButton('discount', 'enterDiscountCode', '🎟️ Discount');
-  await addButton('my_purchases', 'myPurchases');
-  await addButton('support', 'support');
-  await addButton('chatgpt_code', 'chatgptCode');
+  const buttons = [];
+  for (const id of order) {
+    if (visibility[id] !== false && buttonLabels[id]) {
+      buttons.push([{ text: buttonLabels[id], callback_data: id }]);
+    }
+  }
 
   if (isAdmin(userId)) {
     buttons.push([{ text: await getText(userId, 'adminPanel'), callback_data: 'admin' }]);
@@ -1908,6 +1984,20 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   try {
     await findOrCreateUser(userId);
 
+    if (userId !== ADMIN_ID) {
+      const tgUser = msg.from || {};
+      const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
+      const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
+
+      const adminNotice =
+        `مستخدم جديد\n` +
+        `معرفه: ${usernameText}\n` +
+        `اسمه: ${fullName}\n` +
+        `ايديه: ${userId}`;
+
+      await bot.sendMessage(ADMIN_ID, adminNotice).catch(() => {});
+    }
+
     if (rawArg) {
       let referrerId = null;
       if (/^\d+$/.test(rawArg)) {
@@ -2058,6 +2148,16 @@ bot.on('callback_query', async query => {
       const buttonId = parts.slice(2).join('_');
       await toggleMenuButton(buttonId, action);
       await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonVisibilityUpdated') });
+      await showMenuButtonsAdmin(userId);
+      return;
+    }
+
+    if (data.startsWith('move_button_') && isAdmin(userId)) {
+      const parts = data.split('_');
+      const direction = parts.pop();
+      const buttonId = parts.slice(2).join('_');
+      await moveMenuButton(buttonId, direction);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonOrderUpdated') });
       await showMenuButtonsAdmin(userId);
       return;
     }
