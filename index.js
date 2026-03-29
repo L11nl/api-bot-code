@@ -282,6 +282,7 @@ const DEFAULT_TEXTS = {
     merchantDeleted: 'Merchant deleted successfully.',
     referral: '🤝 Invite Friends',
     redeemPoints: '🎁 Redeem Points',
+    getFreeCode: '🎁 Get your free code',
     referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link: {link}\nYour points: {points}\n🎁 Redeem {requiredPoints} points for a free ChatGPT code!',
     referralEarned: '🎉 You earned 1 referral point! Total points: {points}',
     notEnoughPoints: '❌ You need at least {requiredPoints} points to redeem. You have {points} points.',
@@ -480,6 +481,7 @@ const DEFAULT_TEXTS = {
     merchantDeleted: 'تم حذف التاجر بنجاح.',
     referral: '🤝 دعوة الأصدقاء',
     redeemPoints: '🎁 استبدال النقاط',
+    getFreeCode: '🎁 احصل على كودك المجاني',
     referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك: {link}\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
     referralEarned: '🎉 لقد ربحت نقطة إحالة! إجمالي النقاط: {points}',
     notEnoughPoints: '❌ تحتاج على الأقل {requiredPoints} نقاط للاستبدال. لديك {points} نقطة.',
@@ -956,7 +958,8 @@ const DEFAULT_BUTTONS = {
   discount: true,
   my_purchases: true,
   support: true,
-  chatgpt_code: true
+  chatgpt_code: true,
+  admin_panel: true
 };
 
 const DEFAULT_BUTTON_ORDER = [
@@ -968,7 +971,8 @@ const DEFAULT_BUTTON_ORDER = [
   'discount',
   'my_purchases',
   'support',
-  'chatgpt_code'
+  'chatgpt_code',
+  'admin_panel'
 ];
 
 async function getMenuButtonsVisibility() {
@@ -1037,7 +1041,8 @@ async function getMenuButtonItems(userId) {
     { id: 'discount', name: '🎟️ Discount' },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') }
+    { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
+    { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
 }
 
@@ -1371,18 +1376,16 @@ async function sendMainMenu(userId) {
     discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
-    chatgpt_code: await getText(userId, 'chatgptCode')
+    chatgpt_code: await getText(userId, 'chatgptCode'),
+    admin_panel: await getText(userId, 'adminPanel')
   };
 
   const buttons = [];
   for (const id of order) {
+    if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
-      buttons.push([{ text: buttonLabels[id], callback_data: id }]);
+      buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
-  }
-
-  if (isAdmin(userId)) {
-    buttons.push([{ text: await getText(userId, 'adminPanel'), callback_data: 'admin' }]);
   }
 
   await bot.sendMessage(userId, await getText(userId, 'menu'), {
@@ -2182,11 +2185,17 @@ bot.on('callback_query', async query => {
       const link = await getUserReferralLink(userId);
       const requiredPoints = await getReferralRedeemPoints();
       const info = await getText(userId, 'referralInfo', { link, points: user.referralPoints, requiredPoints });
+      const keyboardRows = [];
+
+      if (!user.freeChatgptReceived) {
+        keyboardRows.push([{ text: await getText(userId, 'getFreeCode'), callback_data: 'referral_free_code' }]);
+      }
+
+      keyboardRows.push([{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }]);
+      keyboardRows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
+
       const keyboard = {
-        inline_keyboard: [
-          [{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }],
-          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-        ]
+        inline_keyboard: keyboardRows
       };
       await bot.sendMessage(userId, info, { reply_markup: keyboard });
       await bot.answerCallbackQuery(query.id);
@@ -2205,6 +2214,29 @@ bot.on('callback_query', async query => {
 
       await setUserState(userId, { action: 'redeem_points_amount' });
       await bot.sendMessage(userId, await getText(userId, 'redeemPointsAskAmount', { requiredPoints }));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'referral_free_code') {
+      const user = await User.findByPk(userId);
+
+      if (user.freeChatgptReceived) {
+        await bot.sendMessage(userId, await getText(userId, 'alreadyGotFree'));
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false });
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (result.success) {
+        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
+      } else {
+        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+      }
+
       await bot.answerCallbackQuery(query.id);
       return;
     }
