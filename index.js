@@ -1795,13 +1795,11 @@ bot.on('callback_query', async query => {
     if (data === 'redeem_points') {
       const user = await User.findByPk(userId);
       const requiredPoints = await getReferralRedeemPoints();
-      if (user.referralPoints >= requiredPoints && !user.freeChatgptReceived) {
+      if (user.referralPoints >= requiredPoints) {
         user.referralPoints -= requiredPoints;
         await user.save();
         await setUserState(userId, { action: 'chatgpt_free_email', fromPoints: true });
         await bot.sendMessage(userId, await getText(userId, 'askEmail'));
-      } else if (user.freeChatgptReceived) {
-        await bot.sendMessage(userId, await getText(userId, 'alreadyGotFree'));
       } else {
         await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
       }
@@ -3045,7 +3043,9 @@ bot.on('message', async msg => {
       }
       const result = await getChatGPTCode(email);
       if (result.success) {
-        await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
+        if (!state.fromPoints) {
+          await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
+        }
         await clearUserState(userId);
         await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
       } else {
