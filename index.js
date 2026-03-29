@@ -150,6 +150,7 @@ const DepositConfig = sequelize.define('DepositConfig', {
 
 const ChannelConfig = sequelize.define('ChannelConfig', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  enabled: { type: DataTypes.BOOLEAN, defaultValue: false },
   link: { type: DataTypes.STRING, allowNull: true },
   messageText: { type: DataTypes.TEXT, allowNull: true },
   chatId: { type: DataTypes.STRING, allowNull: true },
@@ -294,6 +295,15 @@ const DEFAULT_TEXTS = {
     currentChannelMessage: 'Current channel message: {message}',
     enterNewChannelLink: 'Send new channel link (e.g., https://t.me/yourchannel or @yourchannel or -100...):',
     enterNewChannelMessage: 'Send new channel message (text):',
+    verificationStatus: 'Verification status: {status}',
+    verificationEnabled: '✅ Enabled',
+    verificationDisabled: '❌ Disabled',
+    enableVerification: '✅ Enable mandatory verification',
+    disableVerification: '⛔ Disable mandatory verification',
+    verificationToggledOn: '✅ Mandatory verification enabled.',
+    verificationToggledOff: '⛔ Mandatory verification disabled.',
+    verificationNeedsChannel: '❌ Set and resolve the channel first before enabling mandatory verification.',
+    channelHelpText: 'You can send @channelusername, -100 chat id, or forward a post from the channel to save it accurately.',
     channelLinkSet: '✅ Channel link updated!',
     channelMessageSet: '✅ Channel message updated!',
     buttonVisibilityUpdated: '✅ Button visibility updated!',
@@ -442,6 +452,15 @@ const DEFAULT_TEXTS = {
     currentChannelMessage: 'نص الرسالة الحالي: {message}',
     enterNewChannelLink: 'أرسل رابط القناة الجديد (مثال: https://t.me/yourchannel أو @yourchannel أو -100...):',
     enterNewChannelMessage: 'أرسل نص رسالة القناة الجديد:',
+    verificationStatus: 'حالة التحقق الإجباري: {status}',
+    verificationEnabled: '✅ مفعل',
+    verificationDisabled: '❌ متوقف',
+    enableVerification: '✅ تفعيل التحقق الإجباري',
+    disableVerification: '⛔ إيقاف التحقق الإجباري',
+    verificationToggledOn: '✅ تم تفعيل التحقق الإجباري.',
+    verificationToggledOff: '⛔ تم إيقاف التحقق الإجباري.',
+    verificationNeedsChannel: '❌ يجب ضبط القناة وحفظها بشكل صحيح قبل تفعيل التحقق الإجباري.',
+    channelHelpText: 'يمكنك إرسال @channelusername أو معرّف القناة الذي يبدأ بـ -100 أو إعادة توجيه منشور من القناة ليتم حفظها بدقة.',
     channelLinkSet: '✅ تم تحديث رابط القناة!',
     channelMessageSet: '✅ تم تحديث نص الرسالة!',
     buttonVisibilityUpdated: '✅ تم تحديث ظهور الأزرار!',
@@ -547,6 +566,7 @@ async function getChannelConfig() {
   let config = await ChannelConfig.findOne();
   if (!config) {
     config = await ChannelConfig.create({
+      enabled: false,
       link: null,
       messageText: null,
       chatId: null,
@@ -560,6 +580,21 @@ async function getChannelConfig() {
   }
 
   return config;
+}
+
+async function isMandatoryVerificationEnabled() {
+  const config = await getChannelConfig();
+  return Boolean(config.enabled);
+}
+
+async function isVerificationRequiredForUser(userId) {
+  if (isAdmin(userId)) return false;
+
+  const config = await getChannelConfig();
+  if (!config.enabled) return false;
+
+  const hasTarget = Boolean(config.chatId || config.username || parseChannelTarget(config.link));
+  return hasTarget;
 }
 
 function parseChannelTarget(value) {
@@ -642,7 +677,10 @@ async function ensureChannelConfigResolved(config) {
 }
 
 async function checkChannelMembership(userId) {
+  if (isAdmin(userId)) return true;
+
   const config = await getChannelConfig();
+  if (!config.enabled) return true;
   if (!config.link && !config.chatId && !config.username) return true;
 
   const targets = [];
@@ -655,21 +693,28 @@ async function checkChannelMembership(userId) {
   }
 
   if (targets.length === 0) {
-    console.error('❌ Required channel is configured, but no verifiable channel target was found.');
+    console.error('❌ Mandatory verification is enabled, but no verifiable channel target was found.');
     return false;
   }
 
   for (const target of targets) {
     try {
       const chatMember = await bot.getChatMember(target, userId);
+
       if (['member', 'administrator', 'creator'].includes(chatMember.status)) {
         return true;
       }
-      if (['left', 'kicked', 'restricted'].includes(chatMember.status)) {
+
+      if (['left', 'kicked'].includes(chatMember.status)) {
         return false;
       }
+
+      if (chatMember.status === 'restricted') {
+        return true;
+      }
     } catch (err) {
-      console.error(`Error checking channel membership with target ${target}:`, err.response?.body || err.message);
+      const body = err.response?.body || {};
+      console.error(`Error checking channel membership with target ${target}:`, body || err.message);
     }
   }
 
@@ -678,18 +723,31 @@ async function checkChannelMembership(userId) {
 
 async function sendJoinChannelMessage(userId) {
   const config = await getChannelConfig();
-  if (!config.link) return;
+  if (isAdmin(userId) || !config.enabled) return;
 
-  const extraMessage = config.messageText || '';
+  const extraParts = [];
+  if (config.messageText) extraParts.push(config.messageText);
+  if (config.title) extraParts.push(`Channel: ${config.title}`);
+  if (config.username && (!config.link || !config.link.includes('t.me/'))) {
+    extraParts.push(config.username);
+  }
+
+  const extraMessage = extraParts.join('\n');
   const finalMsg = await getText(userId, 'mustJoinChannel', { message: extraMessage });
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'joinChannel'), url: config.link }],
-      [{ text: await getText(userId, 'checkSubscription'), callback_data: 'check_subscription' }]
-    ]
-  };
 
-  await bot.sendMessage(userId, finalMsg, { reply_markup: keyboard });
+  const joinUrl =
+    config.link ||
+    (config.username ? `https://t.me/${config.username.replace(/^@/, '')}` : null);
+
+  const keyboardRows = [];
+  if (joinUrl) {
+    keyboardRows.push([{ text: await getText(userId, 'joinChannel'), url: joinUrl }]);
+  }
+  keyboardRows.push([{ text: await getText(userId, 'checkSubscription'), callback_data: 'check_subscription' }]);
+
+  await bot.sendMessage(userId, finalMsg, {
+    reply_markup: { inline_keyboard: keyboardRows }
+  });
 }
 
 function generateCaptcha() {
@@ -748,6 +806,10 @@ async function ensureUserAccess(userId, options = {}) {
   const { sendJoinPrompt = true, sendCaptchaPrompt = true } = options;
   const user = await User.findByPk(userId);
   if (!user) return false;
+  if (isAdmin(userId)) return true;
+
+  const verificationRequired = await isVerificationRequiredForUser(userId);
+  if (!verificationRequired) return true;
 
   const isMember = await checkChannelMembership(userId);
   if (!isMember) {
@@ -1000,22 +1062,27 @@ async function showAdminPanel(userId) {
 
 async function showChannelConfigAdmin(userId) {
   const config = await getChannelConfig();
-  const msg =
-    `📢 *${await getText(userId, 'manageChannel')}*
+  const statusText = config.enabled
+    ? await getText(userId, 'verificationEnabled')
+    : await getText(userId, 'verificationDisabled');
 
-` +
-    `🔗 ${await getText(userId, 'currentChannelLink', { link: config.link || 'Not set' })}
-` +
-    `🆔 Channel ID: ${config.chatId || 'Not resolved yet'}
-` +
-    `👤 Username: ${config.username || 'Not resolved yet'}
-` +
-    `🏷️ Title: ${config.title || 'Not resolved yet'}
-` +
-    `📝 ${await getText(userId, 'currentChannelMessage', { message: config.messageText || 'Not set' })}`;
+  const msg =
+    `📢 *${await getText(userId, 'manageChannel')}*\n\n` +
+    `⚙️ ${await getText(userId, 'verificationStatus', { status: statusText })}\n` +
+    `🔗 ${await getText(userId, 'currentChannelLink', { link: config.link || 'Not set' })}\n` +
+    `🆔 Channel ID: ${config.chatId || 'Not resolved yet'}\n` +
+    `👤 Username: ${config.username || 'Not resolved yet'}\n` +
+    `🏷️ Title: ${config.title || 'Not resolved yet'}\n` +
+    `📝 ${await getText(userId, 'currentChannelMessage', { message: config.messageText || 'Not set' })}\n\n` +
+    `${await getText(userId, 'channelHelpText')}`;
+
+  const toggleText = config.enabled
+    ? await getText(userId, 'disableVerification')
+    : await getText(userId, 'enableVerification');
 
   const keyboard = {
     inline_keyboard: [
+      [{ text: toggleText, callback_data: 'admin_toggle_verification' }],
       [{ text: await getText(userId, 'setChannelLink'), callback_data: 'admin_set_channel_link' }],
       [{ text: await getText(userId, 'setChannelMessage'), callback_data: 'admin_set_channel_message' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
@@ -1590,6 +1657,26 @@ bot.on('callback_query', async query => {
     if (data === 'admin_manage_channel' && isAdmin(userId)) {
       await showChannelConfigAdmin(userId);
       await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_verification' && isAdmin(userId)) {
+      const config = await getChannelConfig();
+      if (!config.enabled) {
+        const hasTarget = Boolean(config.chatId || config.username || parseChannelTarget(config.link));
+        if (!hasTarget) {
+          await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'verificationNeedsChannel'), show_alert: true });
+          return;
+        }
+      }
+
+      config.enabled = !config.enabled;
+      await config.save();
+
+      await bot.answerCallbackQuery(query.id, {
+        text: await getText(userId, config.enabled ? 'verificationToggledOn' : 'verificationToggledOff')
+      });
+      await showChannelConfigAdmin(userId);
       return;
     }
 
@@ -2215,7 +2302,9 @@ bot.on('message', async msg => {
     if (!user) return;
     let state = safeParseState(user.state);
 
-    if (!user.verified) {
+    const verificationRequired = await isVerificationRequiredForUser(userId);
+
+    if (verificationRequired && !user.verified) {
       const captcha = await Captcha.findByPk(userId);
       if (captcha) {
         const ok = await verifyCaptcha(userId, text || '');
@@ -2240,37 +2329,57 @@ bot.on('message', async msg => {
       return;
     }
 
-    const stillMember = await checkChannelMembership(userId);
-    if (!stillMember) {
-      await sendJoinChannelMessage(userId);
-      return;
+    if (verificationRequired) {
+      const stillMember = await checkChannelMembership(userId);
+      if (!stillMember) {
+        if (user.verified) {
+          user.verified = false;
+          await user.save();
+        }
+        await Captcha.destroy({ where: { userId } });
+        await sendJoinChannelMessage(userId);
+        return;
+      }
     }
 
     if (state && isAdmin(userId)) {
       if (state.action === 'set_channel_link') {
-        const rawInput = String(text || '').trim();
-        const resolved = await resolveChannelTarget(rawInput);
-        if (!resolved.ok) {
-          await bot.sendMessage(userId, `❌ ${resolved.message || 'Invalid channel value.'}`);
+        let resolved = null;
+
+        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+          const forwardedChat = msg.forward_from_chat;
+          resolved = {
+            ok: true,
+            chatId: String(forwardedChat.id),
+            username: forwardedChat.username ? `@${forwardedChat.username}` : null,
+            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
+            link: forwardedChat.username ? `https://t.me/${forwardedChat.username}` : null,
+            type: 'channel'
+          };
+        } else {
+          const rawInput = String(text || '').trim();
+          resolved = await resolveChannelTarget(rawInput);
+        }
+
+        if (!resolved || !resolved.ok) {
+          await bot.sendMessage(userId, `❌ ${resolved?.message || 'Invalid channel value.'}`);
+          return;
+        }
+
+        if (resolved.type && resolved.type !== 'channel') {
+          await bot.sendMessage(userId, '❌ The target must be a Telegram channel, not a group.');
           return;
         }
 
         const config = await getChannelConfig();
-        config.link = resolved.link || rawInput;
+        config.link = resolved.link || config.link || null;
         config.chatId = resolved.chatId;
         config.username = resolved.username;
         config.title = resolved.title;
         await config.save();
 
-        await bot.sendMessage(
-          userId,
-          `${await getText(userId, 'channelLinkSet')}
-
-🆔 ${resolved.chatId}
-👤 ${resolved.username || 'No public username'}
-🏷️ ${resolved.title}`
-        );
-        await clearUserState(userId);
+        await bot.sendMessage(userId, await getText(userId, 'channelLinkSet'));
+        await setUserState(userId, null);
         await showChannelConfigAdmin(userId);
         return;
       }
