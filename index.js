@@ -195,6 +195,9 @@ const DEFAULT_TEXTS = {
     addCodes: '📦 Add Codes',
     stats: '📊 Stats',
     setPrice: '💰 Set Price',
+    setChatgptPrice: '🤖 Set ChatGPT Price',
+    enterChatgptPrice: 'Send new ChatGPT code price (USD):',
+    chatgptPriceUpdated: '✅ ChatGPT code price updated to {price} USD!',
     paymentMethods: '💳 Payment Methods',
     manageBots: '🤖 Manage Bots',
     manageMenuButtons: '🎛️ Manage Menu Buttons',
@@ -358,6 +361,9 @@ const DEFAULT_TEXTS = {
     addCodes: '📦 إضافة أكواد',
     stats: '📊 الإحصائيات',
     setPrice: '💰 تعديل السعر',
+    setChatgptPrice: '🤖 تعديل سعر كود ChatGPT',
+    enterChatgptPrice: 'أرسل سعر كود ChatGPT الجديد بالدولار:',
+    chatgptPriceUpdated: '✅ تم تحديث سعر كود ChatGPT إلى {price} دولار!',
     paymentMethods: '💳 طرق الدفع',
     manageBots: '🤖 إدارة البوتات',
     manageMenuButtons: '🎛️ إدارة الأزرار',
@@ -527,6 +533,15 @@ async function clearUserState(userId) {
 
 function generateReferralCode(userId) {
   return `REF${userId}`;
+}
+
+function generateRandomEmail() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let localPart = '';
+  for (let i = 0; i < 10; i += 1) {
+    localPart += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `${localPart}@gmail.com`;
 }
 
 async function getText(userId, key, replacements = {}) {
@@ -1077,6 +1092,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
       [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
+      [{ text: await getText(userId, 'setChatgptPrice'), callback_data: 'admin_set_chatgpt_price' }],
       [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
       [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
       [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
@@ -1600,6 +1616,66 @@ async function getChatGPTCode(email) {
   }
 }
 
+async function getOrCreateChatGptMerchant() {
+  let merchant = await Merchant.findOne({ where: { nameEn: 'ChatGPT Code' } });
+  if (!merchant) {
+    merchant = await Merchant.create({
+      nameEn: 'ChatGPT Code',
+      nameAr: 'كود ChatGPT',
+      price: 5.00,
+      category: 'AI Services',
+      type: 'single',
+      description: { type: 'text', content: 'Get a ChatGPT GO code via email' }
+    });
+  }
+  return merchant;
+}
+
+async function processAutoChatGptCode(userId, options = {}) {
+  const { isFree = false, fromPoints = false } = options;
+  const email = generateRandomEmail();
+  let merchant = null;
+  let currentBalance = 0;
+  let price = 0;
+
+  if (!isFree) {
+    merchant = await getOrCreateChatGptMerchant();
+    price = parseFloat(merchant.price);
+    const userObj = await User.findByPk(userId);
+    currentBalance = parseFloat(userObj.balance);
+
+    if (currentBalance < price) {
+      return {
+        success: false,
+        reason: 'INSUFFICIENT_BALANCE',
+        balance: currentBalance.toFixed(2),
+        price: price.toFixed(2)
+      };
+    }
+  }
+
+  const result = await getChatGPTCode(email);
+  if (!result.success) {
+    return { success: false, reason: result.reason };
+  }
+
+  if (isFree) {
+    if (!fromPoints) {
+      await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
+    }
+  } else {
+    await User.update({ balance: currentBalance - price }, { where: { id: userId } });
+    await BalanceTransaction.create({ userId, amount: -price, type: 'purchase', status: 'completed' });
+  }
+
+  return {
+    success: true,
+    code: result.code,
+    email,
+    price: price.toFixed(2)
+  };
+}
+
 bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   const userId = msg.chat.id;
   const rawArg = match?.[1] ? match[1].trim() : '';
@@ -1796,10 +1872,17 @@ bot.on('callback_query', async query => {
       const user = await User.findByPk(userId);
       const requiredPoints = await getReferralRedeemPoints();
       if (user.referralPoints >= requiredPoints) {
-        user.referralPoints -= requiredPoints;
-        await user.save();
-        await setUserState(userId, { action: 'chatgpt_free_email', fromPoints: true });
-        await bot.sendMessage(userId, await getText(userId, 'askEmail'));
+        const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+        const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true });
+        await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+        if (result.success) {
+          user.referralPoints -= requiredPoints;
+          await user.save();
+          await bot.sendMessage(userId, `${await getText(userId, 'pointsRedeemed', { code: result.code })}\n\n📧 Email: ${result.email}`);
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
       } else {
         await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
       }
@@ -2101,6 +2184,13 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_set_chatgpt_price' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_price' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptPrice'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_set_price' && isAdmin(userId)) {
       const merchants = await Merchant.findAll();
       const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `set_price_merchant_${m.id}` }]));
@@ -2338,8 +2428,16 @@ bot.on('callback_query', async query => {
     if (data === 'chatgpt_code') {
       const user = await User.findByPk(userId);
       if (!user.freeChatgptReceived) {
-        await setUserState(userId, { action: 'chatgpt_free_email' });
-        await bot.sendMessage(userId, await getText(userId, 'askEmail'));
+        const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+        const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false });
+        await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+        if (result.success) {
+          await bot.sendMessage(userId, `${await getText(userId, 'freeCodeSuccess', { code: result.code })}\n\n📧 Email: ${result.email}`);
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
+        await sendMainMenu(userId);
       } else {
         await setUserState(userId, { action: 'chatgpt_buy_quantity' });
         await bot.sendMessage(userId, await getText(userId, 'askQuantity'));
@@ -2585,6 +2683,21 @@ bot.on('message', async msg => {
           await showAdminPanel(userId);
           return;
         }
+      }
+
+      if (state.action === 'set_chatgpt_price') {
+        const price = parseFloat(text);
+        if (Number.isNaN(price) || price <= 0) {
+          await bot.sendMessage(userId, '❌ Invalid price');
+          return;
+        }
+        const merchant = await getOrCreateChatGptMerchant();
+        merchant.price = price;
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'chatgptPriceUpdated', { price }));
+        await clearUserState(userId);
+        await showAdminPanel(userId);
+        return;
       }
 
       if (state.action === 'set_price') {
@@ -3062,8 +3175,20 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'));
         return;
       }
-      await setUserState(userId, { action: 'chatgpt_buy_email', quantity: qty });
-      await bot.sendMessage(userId, await getText(userId, 'enterEmailForPurchase'));
+
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await processAutoChatGptCode(userId, { isFree: false });
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (result.success) {
+        await bot.sendMessage(userId, `${await getText(userId, 'purchaseSuccess', { code: result.code })}\n\n📧 Email: ${result.email}`);
+      } else if (result.reason === 'INSUFFICIENT_BALANCE') {
+        await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: result.balance, price: result.price }));
+      } else {
+        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
       return;
     }
 
@@ -3171,18 +3296,7 @@ sequelize.sync({ alter: true }).then(async () => {
   await getChannelConfig();
   await refreshChatGPTCookies(false);
 
-  const chatGptMerchant = await Merchant.findOne({ where: { nameEn: 'ChatGPT Code' } });
-  if (!chatGptMerchant) {
-    await Merchant.create({
-      nameEn: 'ChatGPT Code',
-      nameAr: 'كود ChatGPT',
-      price: 5.00,
-      category: 'AI Services',
-      type: 'single',
-      description: { type: 'text', content: 'Get a ChatGPT GO code via email' }
-    });
-    console.log('✅ ChatGPT merchant created with default price 5 USD');
-  }
+  await getOrCreateChatGptMerchant();
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
