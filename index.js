@@ -151,7 +151,10 @@ const DepositConfig = sequelize.define('DepositConfig', {
 const ChannelConfig = sequelize.define('ChannelConfig', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   link: { type: DataTypes.STRING, allowNull: true },
-  messageText: { type: DataTypes.TEXT, allowNull: true }
+  messageText: { type: DataTypes.TEXT, allowNull: true },
+  chatId: { type: DataTypes.STRING, allowNull: true },
+  username: { type: DataTypes.STRING, allowNull: true },
+  title: { type: DataTypes.STRING, allowNull: true }
 });
 
 const Captcha = sequelize.define('Captcha', {
@@ -543,8 +546,19 @@ async function findOrCreateUser(userId) {
 async function getChannelConfig() {
   let config = await ChannelConfig.findOne();
   if (!config) {
-    config = await ChannelConfig.create({ link: null, messageText: null });
+    config = await ChannelConfig.create({
+      link: null,
+      messageText: null,
+      chatId: null,
+      username: null,
+      title: null
+    });
   }
+
+  if (config.link && !config.chatId) {
+    await ensureChannelConfigResolved(config);
+  }
+
   return config;
 }
 
@@ -552,38 +566,114 @@ function parseChannelTarget(value) {
   if (!value) return null;
   let target = String(value).trim();
 
-  if (target.startsWith('https://t.me/')) {
-    target = target.replace('https://t.me/', '').replace('http://t.me/', '');
-  } else if (target.startsWith('t.me/')) {
-    target = target.replace('t.me/', '');
-  }
+  target = target
+    .replace(/^https?:\/\/t\.me\//i, '')
+    .replace(/^t\.me\//i, '')
+    .replace(/^telegram\.me\//i, '');
 
-  target = target.split('/')[0].trim();
+  target = target.split(/[/?#]/)[0].trim();
 
-  if (target.startsWith('+')) return null;
+  if (!target) return null;
+  if (/^(\+|joinchat)/i.test(target)) return null;
   if (/^-100\d+$/.test(target)) return target;
   if (target.startsWith('@')) return target;
   if (/^[A-Za-z0-9_]{5,}$/.test(target)) return `@${target}`;
   return null;
 }
 
-async function checkChannelMembership(userId) {
-  const config = await getChannelConfig();
-  if (!config.link) return true;
+async function resolveChannelTarget(input) {
+  const raw = String(input || '').trim();
+  if (!raw) {
+    return { ok: false, reason: 'empty', message: 'Channel value is empty.' };
+  }
 
-  const target = parseChannelTarget(config.link);
+  if (/t\.me\/(\+|joinchat)/i.test(raw)) {
+    return {
+      ok: false,
+      reason: 'invite_link_not_supported',
+      message: 'Invite links like t.me/+... cannot be checked reliably. Send @channelusername or the numeric chat id that starts with -100.'
+    };
+  }
+
+  const target = parseChannelTarget(raw);
   if (!target) {
-    console.error('❌ Channel link is not verifiable. Use @channelusername or public t.me link or chat id.');
-    return false;
+    return {
+      ok: false,
+      reason: 'invalid_target',
+      message: 'Invalid channel value. Send @channelusername or the numeric chat id that starts with -100.'
+    };
   }
 
   try {
-    const chatMember = await bot.getChatMember(target, userId);
-    return ['member', 'administrator', 'creator'].includes(chatMember.status);
+    const chat = await bot.getChat(target);
+    const username = chat.username ? `@${chat.username}` : (target.startsWith('@') ? target : null);
+    const link = chat.username ? `https://t.me/${chat.username}` : raw;
+
+    return {
+      ok: true,
+      chatId: String(chat.id),
+      username,
+      title: chat.title || username || String(chat.id),
+      link,
+      type: chat.type
+    };
   } catch (err) {
-    console.error('Error checking channel membership:', err.response?.body || err.message);
+    console.error('Error resolving channel target:', err.response?.body || err.message);
+    return {
+      ok: false,
+      reason: 'resolve_failed',
+      message: 'The bot could not access this channel. Make sure the bot is added as an administrator in the channel, then send @channelusername or the chat id again.'
+    };
+  }
+}
+
+async function ensureChannelConfigResolved(config) {
+  if (!config || !config.link || config.chatId) return config;
+
+  const resolved = await resolveChannelTarget(config.link);
+  if (!resolved.ok) return config;
+
+  config.chatId = resolved.chatId;
+  config.username = resolved.username;
+  config.title = resolved.title;
+  config.link = resolved.link || config.link;
+  await config.save();
+  return config;
+}
+
+async function checkChannelMembership(userId) {
+  const config = await getChannelConfig();
+  if (!config.link && !config.chatId && !config.username) return true;
+
+  const targets = [];
+  if (config.chatId) targets.push(String(config.chatId));
+  if (config.username) targets.push(String(config.username));
+
+  const parsedFromLink = parseChannelTarget(config.link);
+  if (parsedFromLink && !targets.includes(parsedFromLink)) {
+    targets.push(parsedFromLink);
+  }
+
+  if (targets.length === 0) {
+    console.error('❌ Required channel is configured, but no verifiable channel target was found.');
     return false;
   }
+
+  for (const target of targets) {
+    try {
+      const chatMember = await bot.getChatMember(target, userId);
+      if (['member', 'administrator', 'creator'].includes(chatMember.status)) {
+        return true;
+      }
+      if (['left', 'kicked', 'restricted'].includes(chatMember.status)) {
+        return false;
+      }
+    } catch (err) {
+      console.error(`Error checking channel membership with target ${target}:`, err.response?.body || err.message);
+    }
+  }
+
+  return false;
 }
 
 async function sendJoinChannelMessage(userId) {
@@ -911,8 +1001,17 @@ async function showAdminPanel(userId) {
 async function showChannelConfigAdmin(userId) {
   const config = await getChannelConfig();
   const msg =
-    `📢 *${await getText(userId, 'manageChannel')}*\n\n` +
-    `🔗 ${await getText(userId, 'currentChannelLink', { link: config.link || 'Not set' })}\n` +
+    `📢 *${await getText(userId, 'manageChannel')}*
+
+` +
+    `🔗 ${await getText(userId, 'currentChannelLink', { link: config.link || 'Not set' })}
+` +
+    `🆔 Channel ID: ${config.chatId || 'Not resolved yet'}
+` +
+    `👤 Username: ${config.username || 'Not resolved yet'}
+` +
+    `🏷️ Title: ${config.title || 'Not resolved yet'}
+` +
     `📝 ${await getText(userId, 'currentChannelMessage', { message: config.messageText || 'Not set' })}`;
 
   const keyboard = {
@@ -2149,10 +2248,28 @@ bot.on('message', async msg => {
 
     if (state && isAdmin(userId)) {
       if (state.action === 'set_channel_link') {
+        const rawInput = String(text || '').trim();
+        const resolved = await resolveChannelTarget(rawInput);
+        if (!resolved.ok) {
+          await bot.sendMessage(userId, `❌ ${resolved.message || 'Invalid channel value.'}`);
+          return;
+        }
+
         const config = await getChannelConfig();
-        config.link = String(text || '').trim();
+        config.link = resolved.link || rawInput;
+        config.chatId = resolved.chatId;
+        config.username = resolved.username;
+        config.title = resolved.title;
         await config.save();
-        await bot.sendMessage(userId, await getText(userId, 'channelLinkSet'));
+
+        await bot.sendMessage(
+          userId,
+          `${await getText(userId, 'channelLinkSet')}
+
+🆔 ${resolved.chatId}
+👤 ${resolved.username || 'No public username'}
+🏷️ ${resolved.title}`
+        );
         await clearUserState(userId);
         await showChannelConfigAdmin(userId);
         return;
