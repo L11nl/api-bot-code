@@ -287,11 +287,11 @@ const DEFAULT_TEXTS = {
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
-    askQuantity: 'How many codes would you like to buy? (Max 1 per purchase)',
+    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.',
     enterEmailForPurchase: 'Enter your email to receive the code:',
-    purchaseSuccess: '✅ Purchase successful! Here is your ChatGPT GO code:\n\n{code}',
+    purchaseSuccess: '✅ Purchase successful! Here are your ChatGPT GO code(s):\n\n{code}',
     insufficientBalance: '❌ Insufficient balance. Your balance: {balance} USD. Price per code: {price} USD.',
-    invalidQuantity: '❌ Invalid quantity. Please send a number (1 only).',
+    invalidQuantity: '❌ Invalid quantity. Please send a valid positive number.',
     mustJoinChannel: '🔒 Please join our channel first\n\n{message}\n\nThen press the check button.',
     joinChannel: '📢 Join Channel',
     checkSubscription: '🔄 Check Subscription',
@@ -453,11 +453,11 @@ const DEFAULT_TEXTS = {
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
-    askQuantity: 'كم عدد الأكواد التي تريد شراءها؟ (واحد فقط)',
+    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.',
     enterEmailForPurchase: 'أدخل بريدك الإلكتروني لاستلام الكود:',
-    purchaseSuccess: '✅ تم الشراء بنجاح! إليك كود ChatGPT GO:\n\n{code}',
+    purchaseSuccess: '✅ تم الشراء بنجاح! إليك كودات ChatGPT GO:\n\n{code}',
     insufficientBalance: '❌ رصيد غير كاف. رصيدك: {balance} دولار. سعر الكود: {price} دولار.',
-    invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقم (1 فقط).',
+    invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقمًا موجبًا صحيحًا.',
     mustJoinChannel: '🔒 يرجى الاشتراك في القناة أولاً\n\n{message}\n\nثم اضغط زر التحقق.',
     joinChannel: '📢 اشترك الآن',
     checkSubscription: '🔄 تحقق من الاشتراك',
@@ -1632,8 +1632,8 @@ async function getOrCreateChatGptMerchant() {
 }
 
 async function processAutoChatGptCode(userId, options = {}) {
-  const { isFree = false, fromPoints = false } = options;
-  const email = generateRandomEmail();
+  const { isFree = false, fromPoints = false, quantity = 1 } = options;
+  const safeQuantity = Math.max(1, parseInt(quantity, 10) || 1);
   let merchant = null;
   let currentBalance = 0;
   let price = 0;
@@ -1644,19 +1644,34 @@ async function processAutoChatGptCode(userId, options = {}) {
     const userObj = await User.findByPk(userId);
     currentBalance = parseFloat(userObj.balance);
 
-    if (currentBalance < price) {
+    const totalCost = price * safeQuantity;
+    if (currentBalance < totalCost) {
       return {
         success: false,
         reason: 'INSUFFICIENT_BALANCE',
         balance: currentBalance.toFixed(2),
-        price: price.toFixed(2)
+        price: price.toFixed(2),
+        totalCost: totalCost.toFixed(2),
+        quantity: safeQuantity
       };
     }
   }
 
-  const result = await getChatGPTCode(email);
-  if (!result.success) {
-    return { success: false, reason: result.reason };
+  const codes = [];
+  for (let i = 0; i < safeQuantity; i += 1) {
+    const email = generateRandomEmail();
+    const result = await getChatGPTCode(email);
+    if (!result.success) {
+      if (codes.length === 0) {
+        return { success: false, reason: result.reason };
+      }
+      break;
+    }
+    codes.push(result.code);
+  }
+
+  if (codes.length === 0) {
+    return { success: false, reason: 'No codes were generated' };
   }
 
   if (isFree) {
@@ -1664,15 +1679,21 @@ async function processAutoChatGptCode(userId, options = {}) {
       await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
     }
   } else {
-    await User.update({ balance: currentBalance - price }, { where: { id: userId } });
-    await BalanceTransaction.create({ userId, amount: -price, type: 'purchase', status: 'completed' });
+    const chargedAmount = price * codes.length;
+    await User.update({ balance: currentBalance - chargedAmount }, { where: { id: userId } });
+    await BalanceTransaction.create({ userId, amount: -chargedAmount, type: 'purchase', status: 'completed' });
   }
 
   return {
     success: true,
-    code: result.code,
-    email,
-    price: price.toFixed(2)
+    code: codes.join('
+'),
+    codes,
+    quantity: codes.length,
+    requestedQuantity: safeQuantity,
+    partial: codes.length !== safeQuantity,
+    price: price.toFixed(2),
+    totalCost: (price * codes.length).toFixed(2)
   };
 }
 
@@ -1879,7 +1900,7 @@ bot.on('callback_query', async query => {
         if (result.success) {
           user.referralPoints -= requiredPoints;
           await user.save();
-          await bot.sendMessage(userId, `${await getText(userId, 'pointsRedeemed', { code: result.code })}\n\n📧 Email: ${result.email}`);
+          await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: result.code }));
         } else {
           await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
         }
@@ -2433,7 +2454,7 @@ bot.on('callback_query', async query => {
         await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
         if (result.success) {
-          await bot.sendMessage(userId, `${await getText(userId, 'freeCodeSuccess', { code: result.code })}\n\n📧 Email: ${result.email}`);
+          await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
         } else {
           await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
         }
@@ -3171,17 +3192,23 @@ bot.on('message', async msg => {
 
     if (state?.action === 'chatgpt_buy_quantity') {
       const qty = parseInt(text, 10);
-      if (Number.isNaN(qty) || qty !== 1) {
+      if (Number.isNaN(qty) || qty <= 0) {
         await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'));
         return;
       }
 
       const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await processAutoChatGptCode(userId, { isFree: false });
+      const result = await processAutoChatGptCode(userId, { isFree: false, quantity: qty });
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
-        await bot.sendMessage(userId, `${await getText(userId, 'purchaseSuccess', { code: result.code })}\n\n📧 Email: ${result.email}`);
+        let successText = await getText(userId, 'purchaseSuccess', { code: result.code });
+        if (result.partial) {
+          successText += `
+
+⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
+        }
+        await bot.sendMessage(userId, successText);
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: result.balance, price: result.price }));
       } else {
@@ -3192,42 +3219,7 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (state?.action === 'chatgpt_buy_email') {
-      const email = String(text || '').trim();
-      if (!email.includes('@') || !email.includes('.')) {
-        await bot.sendMessage(userId, '❌ Invalid email format.');
-        return;
-      }
-      const userObj = await User.findByPk(userId);
-      const merchant = await Merchant.findOne({ where: { nameEn: 'ChatGPT Code' } });
-      if (!merchant) {
-        await bot.sendMessage(userId, '❌ ChatGPT merchant not found. Contact admin.');
-        await clearUserState(userId);
-        await sendMainMenu(userId);
-        return;
-      }
 
-      const price = merchant.price;
-      const currentBalance = parseFloat(userObj.balance);
-      if (currentBalance < price) {
-        await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: currentBalance.toFixed(2), price }));
-        await clearUserState(userId);
-        await sendMainMenu(userId);
-        return;
-      }
-
-      const result = await getChatGPTCode(email);
-      if (result.success) {
-        await User.update({ balance: currentBalance - price }, { where: { id: userId } });
-        await BalanceTransaction.create({ userId, amount: -price, type: 'purchase', status: 'completed' });
-        await bot.sendMessage(userId, await getText(userId, 'purchaseSuccess', { code: result.code }));
-      } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
 
   } catch (err) {
     console.error('Message handler error:', err);
