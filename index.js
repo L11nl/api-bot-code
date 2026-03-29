@@ -145,6 +145,11 @@ const DepositConfig = sequelize.define('DepositConfig', {
   rate: { type: DataTypes.FLOAT, defaultValue: 1500 },
   walletAddress: { type: DataTypes.STRING, allowNull: false },
   instructions: { type: DataTypes.TEXT, allowNull: false },
+  displayNameEn: { type: DataTypes.STRING, allowNull: true },
+  displayNameAr: { type: DataTypes.STRING, allowNull: true },
+  templateEn: { type: DataTypes.TEXT, allowNull: true },
+  templateAr: { type: DataTypes.TEXT, allowNull: true },
+  methods: { type: DataTypes.JSONB, defaultValue: [] },
   isActive: { type: DataTypes.BOOLEAN, defaultValue: true }
 });
 
@@ -210,10 +215,10 @@ const DEFAULT_TEXTS = {
     botAdded: '✅ Bot added!',
     botRemoved: '❌ Bot removed!',
     chooseCurrency: '💱 Choose currency for deposit:',
-    currency_usd_name: 'USDT (Tether)',
-    currency_iqd_name: 'Iraqi Dinar (IQD)',
-    depositInstructionsUSD: '💰 Send {amount} USDT to the following address:\n\n`{address}`\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
-    depositInstructionsIQD: '💰 Send {amountIQD} IQD (≈ {amountUSD} USD at rate {rate} IQD/USD) to the following SuperKey:\n\n`{address}`\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
+    currency_usd_name: 'Binance',
+    currency_iqd_name: 'Iraqi Dinar',
+    depositInstructionsUSD: '💰 Send {amount} USDT to one of the following payment methods:\n\n{methods_block}\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
+    depositInstructionsIQD: '💰 Send {amountIQD} Iraqi Dinar (≈ {amountUSD} USD at rate {rate} IQD/USD) to one of the following payment methods:\n\n{methods_block}\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
     depositProofReceived: '✅ Deposit proof received! Admin will review it shortly.',
     depositSuccess: '✅ Deposit successful! New balance: {balance} USD',
     depositRejected: '❌ Your deposit was rejected.',
@@ -329,6 +334,26 @@ const DEFAULT_TEXTS = {
     enterWalletAddress: 'Send wallet address / SuperKey:',
     enterInstructions: 'Send deposit instructions (text):',
     enterNewCurrencyName: 'Send new currency name:',
+    manageIQDMethods: 'Manage Iraqi Dinar Methods',
+    manageUSDMethods: 'Manage Binance Methods',
+    addDepositMethod: 'Add Payment Method',
+    deleteDepositMethod: 'Delete Payment Method',
+    editDepositTemplates: 'Edit Deposit Messages',
+    editIQDTemplateAr: 'Edit IQD Arabic message',
+    editIQDTemplateEn: 'Edit IQD English message',
+    editUSDTemplateAr: 'Edit Binance Arabic message',
+    editUSDTemplateEn: 'Edit Binance English message',
+    editIQDNameAr: 'Edit IQD Arabic name',
+    editIQDNameEn: 'Edit IQD English name',
+    editUSDNameAr: 'Edit Binance Arabic name',
+    editUSDNameEn: 'Edit Binance English name',
+    enterMethodNameAr: 'Send payment method name in Arabic:',
+    enterMethodNameEn: 'Send payment method name in English:',
+    enterMethodValue: 'Send payment number / address / account:',
+    methodAdded: '✅ Payment method added!',
+    methodDeleted: '✅ Payment method deleted!',
+    noMethods: 'No payment methods added yet.',
+    enterNewTemplate: 'Send the full message template. Use placeholders like {amount}, {amountUSD}, {amountIQD}, {rate}, {methods_block}, {instructions}.',
     currencyNameUpdated: '✅ Currency name updated!',
     walletSet: '✅ Wallet address updated!',
     instructionsSet: '✅ Instructions updated!',
@@ -376,10 +401,10 @@ const DEFAULT_TEXTS = {
     botAdded: '✅ تمت إضافة البوت!',
     botRemoved: '❌ تم حذف البوت!',
     chooseCurrency: '💱 اختر العملة للشحن:',
-    currency_usd_name: 'تيثر USDT',
-    currency_iqd_name: 'دينار عراقي (IQD)',
-    depositInstructionsUSD: '💰 قم بإرسال {amount} USDT إلى العنوان التالي:\n\n`{address}`\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
-    depositInstructionsIQD: '💰 قم بإرسال {amountIQD} دينار عراقي (≈ {amountUSD} دولار بسعر صرف {rate} دينار/دولار) إلى السوبر كي التالي:\n\n`{address}`\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
+    currency_usd_name: 'بايننس',
+    currency_iqd_name: 'دينار عراقي',
+    depositInstructionsUSD: '💰 قم بإرسال {amount} USDT إلى إحدى طرق الدفع التالية:\n\n{methods_block}\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
+    depositInstructionsIQD: '💰 قم بإرسال {amountIQD} دينار عراقي (≈ {amountUSD} دولار بسعر صرف {rate} دينار/دولار) إلى إحدى طرق الدفع التالية:\n\n{methods_block}\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
     depositProofReceived: '✅ تم استلام إثبات الدفع! سيقوم الأدمن بمراجعته قريباً.',
     depositSuccess: '✅ تم الشحن بنجاح! الرصيد الجديد: {balance} دولار',
     depositRejected: '❌ تم رفض عملية الشحن.',
@@ -966,27 +991,82 @@ async function toggleMenuButton(buttonId, action) {
   await setMenuButtonsVisibility(visibility);
 }
 
+
+function getDefaultDepositValues(currency) {
+  if (currency === 'USD') {
+    return {
+      currency: 'USD',
+      rate: 1,
+      walletAddress: 'T...',
+      instructions: 'Send USDT to one of the payment methods above.',
+      displayNameEn: 'Binance',
+      displayNameAr: 'بايننس',
+      templateEn: '💰 Send {amount} USDT to one of the following payment methods:\n\n{methods_block}\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
+      templateAr: '💰 قم بإرسال {amount} USDT إلى إحدى طرق الدفع التالية:\n\n{methods_block}\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
+      methods: [{ nameAr: 'بايننس', nameEn: 'Binance', value: '123456' }]
+    };
+  }
+  return {
+    currency: 'IQD',
+    rate: 1500,
+    walletAddress: 'SuperKey...',
+    instructions: 'Send IQD to one of the payment methods above.',
+    displayNameEn: 'Iraqi Dinar',
+    displayNameAr: 'دينار عراقي',
+    templateEn: '💰 Send {amountIQD} Iraqi Dinar (≈ {amountUSD} USD at rate {rate} IQD/USD) to one of the following payment methods:\n\n{methods_block}\n\nThen send a screenshot of the payment with any message.\n\n{instructions}',
+    templateAr: '💰 قم بإرسال {amountIQD} دينار عراقي (≈ {amountUSD} دولار بسعر صرف {rate} دينار/دولار) إلى إحدى طرق الدفع التالية:\n\n{methods_block}\n\nثم أرسل صورة التحويل مع أي رسالة.\n\n{instructions}',
+    methods: [{ nameAr: 'سوبركي', nameEn: 'SuperKey', value: '123456' }]
+  };
+}
+
+function normalizeDepositMethods(methods) {
+  if (Array.isArray(methods)) return methods.filter(Boolean);
+  if (!methods) return [];
+  try {
+    const parsed = typeof methods === 'string' ? JSON.parse(methods) : methods;
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function getDepositConfig(currency) {
   let config = await DepositConfig.findOne({ where: { currency } });
+  const defaults = getDefaultDepositValues(currency);
+
   if (!config) {
-    if (currency === 'USD') {
-      config = await DepositConfig.create({
-        currency: 'USD',
-        rate: 1,
-        walletAddress: 'T...',
-        instructions: 'Send USDT (TRC20) to the address above.',
-        isActive: true
-      });
-    } else {
-      config = await DepositConfig.create({
-        currency: 'IQD',
-        rate: 1500,
-        walletAddress: 'SuperKey...',
-        instructions: 'Send IQD to the SuperKey above.',
-        isActive: true
-      });
+    config = await DepositConfig.create({ ...defaults, isActive: true });
+  } else {
+    let changed = false;
+
+    for (const [key, value] of Object.entries(defaults)) {
+      const current = config[key];
+      if (
+        current === null ||
+        current === undefined ||
+        current === '' ||
+        (key === 'methods' && (!Array.isArray(current) || current.length === 0))
+      ) {
+        config[key] = value;
+        changed = true;
+      }
     }
+
+    const methods = normalizeDepositMethods(config.methods);
+    if (methods.length === 0 && config.walletAddress) {
+      config.methods = [{
+        nameAr: currency === 'USD' ? 'بايننس' : 'سوبركي',
+        nameEn: currency === 'USD' ? 'Binance' : 'SuperKey',
+        value: config.walletAddress
+      }];
+      changed = true;
+    } else {
+      config.methods = methods;
+    }
+
+    if (changed) await config.save();
   }
+
   return config;
 }
 
@@ -997,22 +1077,76 @@ async function updateDepositConfig(currency, field, value) {
   return config;
 }
 
+async function getDepositDisplayName(userId, currency) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const config = await getDepositConfig(currency);
+  return lang === 'ar' ? (config.displayNameAr || getDefaultDepositValues(currency).displayNameAr) : (config.displayNameEn || getDefaultDepositValues(currency).displayNameEn);
+}
+
+function formatDepositMethodsForMessage(methods, lang) {
+  const list = normalizeDepositMethods(methods);
+  if (list.length === 0) return '`N/A`';
+  return list.map((item) => {
+    const name = lang === 'ar' ? (item.nameAr || item.nameEn || 'طريقة دفع') : (item.nameEn || item.nameAr || 'Payment Method');
+    return `• ${name}: \`${item.value}\``;
+  }).join('\n');
+}
+
+async function renderDepositMessage(userId, currency, amount) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const config = await getDepositConfig(currency);
+  const template = lang === 'ar' ? (config.templateAr || getDefaultDepositValues(currency).templateAr) : (config.templateEn || getDefaultDepositValues(currency).templateEn);
+  const amountIQD = currency === 'IQD' ? amount * config.rate : null;
+  const methodsBlock = formatDepositMethodsForMessage(config.methods, lang);
+
+  let msg = template;
+  const replacements = {
+    amount: amount,
+    amountUSD: amount,
+    amountIQD: amountIQD,
+    rate: config.rate,
+    methods_block: methodsBlock,
+    instructions: config.instructions || '',
+    address: config.walletAddress || ''
+  };
+
+  for (const [k, v] of Object.entries(replacements)) {
+    msg = msg.replace(new RegExp(`\\{${k}\\}`, 'g'), v === null || v === undefined ? '' : String(v));
+  }
+
+  return msg;
+}
+
 async function showDepositSettingsAdmin(userId) {
   const usdConfig = await getDepositConfig('USD');
   const iqdConfig = await getDepositConfig('IQD');
 
+  const formatMethods = (methods, lang) => {
+    const list = normalizeDepositMethods(methods);
+    if (list.length === 0) return lang === 'ar' ? 'لا توجد طرق دفع' : 'No methods';
+    return list.map((m, i) => {
+      const name = lang === 'ar' ? (m.nameAr || m.nameEn) : (m.nameEn || m.nameAr);
+      return `${i + 1}. ${name}: ${m.value}`;
+    }).join('\n');
+  };
+
   const msg =
     `💱 *${await getText(userId, 'manageDepositSettings')}*\n\n` +
-    `${await getText(userId, 'currency_usd_name')}:\nAddress: \`${usdConfig.walletAddress}\`\nInstructions: ${usdConfig.instructions}\n\n` +
-    `${await getText(userId, 'currency_iqd_name')}:\nRate: ${iqdConfig.rate} IQD/USD\nSuperKey: \`${iqdConfig.walletAddress}\`\nInstructions: ${iqdConfig.instructions}`;
+    `• ${iqdConfig.displayNameAr} / ${iqdConfig.displayNameEn}\n` +
+    `Rate: ${iqdConfig.rate} IQD/USD\n` +
+    `${formatMethods(iqdConfig.methods, 'ar')}\n\n` +
+    `• ${usdConfig.displayNameAr} / ${usdConfig.displayNameEn}\n` +
+    `${formatMethods(usdConfig.methods, 'ar')}`;
 
   const keyboard = {
     inline_keyboard: [
       [{ text: await getText(userId, 'setIQDRate'), callback_data: 'admin_set_iqd_rate' }],
-      [{ text: await getText(userId, 'setUSDTWallet'), callback_data: 'admin_set_usdt_wallet' }],
-      [{ text: await getText(userId, 'setIQDWallet'), callback_data: 'admin_set_iqd_wallet' }],
       [{ text: await getText(userId, 'editCurrencyNames'), callback_data: 'admin_edit_currency_names' }],
-      [{ text: await getText(userId, 'editDepositInstructions'), callback_data: 'admin_edit_deposit_instructions' }],
+      [{ text: await getText(userId, 'editDepositTemplates'), callback_data: 'admin_edit_deposit_instructions' }],
+      [{ text: await getText(userId, 'manageIQDMethods'), callback_data: 'admin_manage_iqd_methods' }],
+      [{ text: await getText(userId, 'manageUSDMethods'), callback_data: 'admin_manage_usd_methods' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
@@ -1021,14 +1155,19 @@ async function showDepositSettingsAdmin(userId) {
 }
 
 async function showCurrencyNamesEdit(userId) {
+  const usd = await getDepositConfig('USD');
+  const iqd = await getDepositConfig('IQD');
   const msg =
     `✏️ *${await getText(userId, 'editCurrencyNames')}*\n\n` +
-    `${await getText(userId, 'currency_usd_name')}\n${await getText(userId, 'currency_iqd_name')}`;
+    `IQD: ${iqd.displayNameAr} / ${iqd.displayNameEn}\n` +
+    `USD: ${usd.displayNameAr} / ${usd.displayNameEn}`;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'editUSDName'), callback_data: 'admin_edit_usd_name' }],
-      [{ text: await getText(userId, 'editIQDName'), callback_data: 'admin_edit_iqd_name' }],
+      [{ text: await getText(userId, 'editIQDNameAr'), callback_data: 'admin_edit_name_IQD_ar' }],
+      [{ text: await getText(userId, 'editIQDNameEn'), callback_data: 'admin_edit_name_IQD_en' }],
+      [{ text: await getText(userId, 'editUSDNameAr'), callback_data: 'admin_edit_name_USD_ar' }],
+      [{ text: await getText(userId, 'editUSDNameEn'), callback_data: 'admin_edit_name_USD_en' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_manage_deposit_settings' }]
     ]
   };
@@ -1039,14 +1178,87 @@ async function showCurrencyNamesEdit(userId) {
 async function showDepositInstructionsEdit(userId) {
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'editUSDInstructions'), callback_data: 'admin_edit_usd_instructions' }],
-      [{ text: await getText(userId, 'editIQDInstructions'), callback_data: 'admin_edit_iqd_instructions' }],
+      [{ text: await getText(userId, 'editIQDTemplateAr'), callback_data: 'admin_edit_template_IQD_ar' }],
+      [{ text: await getText(userId, 'editIQDTemplateEn'), callback_data: 'admin_edit_template_IQD_en' }],
+      [{ text: await getText(userId, 'editUSDTemplateAr'), callback_data: 'admin_edit_template_USD_ar' }],
+      [{ text: await getText(userId, 'editUSDTemplateEn'), callback_data: 'admin_edit_template_USD_en' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_manage_deposit_settings' }]
     ]
   };
 
-  await bot.sendMessage(userId, await getText(userId, 'editDepositInstructions'), { reply_markup: keyboard });
+  await bot.sendMessage(userId, await getText(userId, 'editDepositTemplates'), { reply_markup: keyboard });
 }
+
+async function showDepositMethodsAdmin(userId, currency) {
+  const config = await getDepositConfig(currency);
+  const methods = normalizeDepositMethods(config.methods);
+  const title = currency === 'IQD' ? await getText(userId, 'manageIQDMethods') : await getText(userId, 'manageUSDMethods');
+
+  let msg = `💳 *${title}*\n\n`;
+  if (methods.length === 0) {
+    msg += await getText(userId, 'noMethods');
+  } else {
+    msg += methods.map((m, i) => `${i + 1}. ${m.nameAr || m.nameEn} / ${m.nameEn || m.nameAr}\n\`${m.value}\``).join('\n\n');
+  }
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'addDepositMethod'), callback_data: `admin_add_deposit_method_${currency}` }],
+      [{ text: await getText(userId, 'deleteDepositMethod'), callback_data: `admin_delete_deposit_method_menu_${currency}` }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin_manage_deposit_settings' }]
+    ]
+  };
+
+  await bot.sendMessage(userId, msg, { parse_mode: 'Markdown', reply_markup: keyboard });
+}
+
+async function showDeleteDepositMethodsMenu(userId, currency) {
+  const config = await getDepositConfig(currency);
+  const methods = normalizeDepositMethods(config.methods);
+  const buttons = methods.map((m, i) => [{ text: `${m.nameAr || m.nameEn} / ${m.nameEn || m.nameAr}`, callback_data: `admin_delete_deposit_method_${currency}_${i}` }]);
+  buttons.push([{ text: await getText(userId, 'back'), callback_data: currency === 'IQD' ? 'admin_manage_iqd_methods' : 'admin_manage_usd_methods' }]);
+  await bot.sendMessage(userId, await getText(userId, 'deleteDepositMethod'), { reply_markup: { inline_keyboard: buttons } });
+}
+
+async function addDepositMethod(currency, methodData) {
+  const config = await getDepositConfig(currency);
+  const methods = normalizeDepositMethods(config.methods);
+  methods.push(methodData);
+  config.methods = methods;
+  if (!config.walletAddress) config.walletAddress = methodData.value;
+  await config.save();
+  return config;
+}
+
+async function deleteDepositMethod(currency, index) {
+  const config = await getDepositConfig(currency);
+  const methods = normalizeDepositMethods(config.methods);
+  if (index >= 0 && index < methods.length) {
+    methods.splice(index, 1);
+    config.methods = methods;
+    await config.save();
+  }
+  return config;
+}
+
+async function showCurrencyOptions(userId) {
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }],
+      [{ text: await getDepositDisplayName(userId, 'USD'), callback_data: 'deposit_currency_usd' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await bot.sendMessage(userId, await getText(userId, 'chooseCurrency'), { reply_markup: keyboard });
+}
+
+async function showPaymentMethodsForDeposit(userId, amount, currency) {
+  const msg = await renderDepositMessage(userId, currency, amount);
+  await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
+  await setUserState(userId, { action: 'deposit_awaiting_proof', amount, currency });
+}
+
 
 async function sendMainMenu(userId) {
   const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
@@ -1159,17 +1371,7 @@ async function showChannelConfigAdmin(userId) {
   await bot.sendMessage(userId, msg, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
-async function showCurrencyOptions(userId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'currency_iqd_name'), callback_data: 'deposit_currency_iqd' }],
-      [{ text: await getText(userId, 'currency_usd_name'), callback_data: 'deposit_currency_usd' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-    ]
-  };
 
-  await bot.sendMessage(userId, await getText(userId, 'chooseCurrency'), { reply_markup: keyboard });
-}
 
 async function showMerchantsForBuy(userId) {
   const merchants = await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] });
@@ -1206,27 +1408,7 @@ async function showMerchantsForBuy(userId) {
   });
 }
 
-async function showPaymentMethodsForDeposit(userId, amount, currency) {
-  const config = await getDepositConfig(currency);
-  if (currency === 'USD') {
-    await bot.sendMessage(userId, await getText(userId, 'depositInstructionsUSD', {
-      amount,
-      address: config.walletAddress,
-      instructions: config.instructions
-    }), { parse_mode: 'Markdown' });
-  } else {
-    const amountIQD = amount * config.rate;
-    await bot.sendMessage(userId, await getText(userId, 'depositInstructionsIQD', {
-      amountUSD: amount,
-      amountIQD,
-      rate: config.rate,
-      address: config.walletAddress,
-      instructions: config.instructions
-    }), { parse_mode: 'Markdown' });
-  }
 
-  await setUserState(userId, { action: 'deposit_awaiting_proof', amount, currency });
-}
 
 async function showBotsList(userId) {
   const bots = await BotService.findAll();
@@ -2124,20 +2306,6 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'admin_set_usdt_wallet' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'set_usdt_wallet' });
-      await bot.sendMessage(userId, await getText(userId, 'enterWalletAddress'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_set_iqd_wallet' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'set_iqd_wallet' });
-      await bot.sendMessage(userId, await getText(userId, 'enterWalletAddress'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
     if (data === 'admin_edit_deposit_instructions' && isAdmin(userId)) {
       await showDepositInstructionsEdit(userId);
       await bot.answerCallbackQuery(query.id);
@@ -2150,30 +2318,57 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'admin_edit_usd_name' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_currency_name', currency: 'USD' });
+    if ((data === 'admin_manage_iqd_methods' || data === 'admin_manage_usd_methods') && isAdmin(userId)) {
+      const currency = data.includes('iqd') ? 'IQD' : 'USD';
+      await showDepositMethodsAdmin(userId, currency);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if ((data === 'admin_add_deposit_method_IQD' || data === 'admin_add_deposit_method_USD') && isAdmin(userId)) {
+      const currency = data.endsWith('IQD') ? 'IQD' : 'USD';
+      await setUserState(userId, { action: 'add_deposit_method', currency, step: 'nameAr' });
+      await bot.sendMessage(userId, await getText(userId, 'enterMethodNameAr'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if ((data === 'admin_delete_deposit_method_menu_IQD' || data === 'admin_delete_deposit_method_menu_USD') && isAdmin(userId)) {
+      const currency = data.endsWith('IQD') ? 'IQD' : 'USD';
+      await showDeleteDepositMethodsMenu(userId, currency);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_delete_deposit_method_') && isAdmin(userId)) {
+      const parts = data.split('_');
+      const currency = parts[4];
+      const index = parseInt(parts[5], 10);
+      if (!Number.isNaN(index)) {
+        await deleteDepositMethod(currency, index);
+        await bot.sendMessage(userId, await getText(userId, 'methodDeleted'));
+        await showDepositMethodsAdmin(userId, currency);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_edit_name_') && isAdmin(userId)) {
+      const parts = data.split('_');
+      const currency = parts[3];
+      const langCode = parts[4];
+      await setUserState(userId, { action: 'edit_currency_name', currency, langCode });
       await bot.sendMessage(userId, await getText(userId, 'enterNewCurrencyName'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
-    if (data === 'admin_edit_iqd_name' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_currency_name', currency: 'IQD' });
-      await bot.sendMessage(userId, await getText(userId, 'enterNewCurrencyName'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_edit_usd_instructions' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_deposit_instructions', currency: 'USD' });
-      await bot.sendMessage(userId, await getText(userId, 'enterInstructions'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_edit_iqd_instructions' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_deposit_instructions', currency: 'IQD' });
-      await bot.sendMessage(userId, await getText(userId, 'enterInstructions'));
+    if (data.startsWith('admin_edit_template_') && isAdmin(userId)) {
+      const parts = data.split('_');
+      const currency = parts[3];
+      const langCode = parts[4];
+      await setUserState(userId, { action: 'edit_deposit_template', currency, langCode });
+      await bot.sendMessage(userId, await getText(userId, 'enterNewTemplate'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3003,29 +3198,42 @@ bot.on('message', async msg => {
         return;
       }
 
-      if (state.action === 'set_usdt_wallet') {
-        await updateDepositConfig('USD', 'walletAddress', text);
-        await bot.sendMessage(userId, await getText(userId, 'walletSet'));
-        await clearUserState(userId);
-        await showDepositSettingsAdmin(userId);
-        return;
-      }
-
-      if (state.action === 'set_iqd_wallet') {
-        await updateDepositConfig('IQD', 'walletAddress', text);
-        await bot.sendMessage(userId, await getText(userId, 'walletSet'));
-        await clearUserState(userId);
-        await showDepositSettingsAdmin(userId);
-        return;
-      }
-
       if (state.action === 'edit_currency_name') {
-        const key = state.currency === 'USD' ? 'currency_usd_name' : 'currency_iqd_name';
-        await Setting.upsert({ key, lang: user.lang, value: text });
+        const field = state.langCode === 'ar' ? 'displayNameAr' : 'displayNameEn';
+        await updateDepositConfig(state.currency, field, text);
         await bot.sendMessage(userId, await getText(userId, 'currencyNameUpdated'));
         await clearUserState(userId);
         await showDepositSettingsAdmin(userId);
         return;
+      }
+
+      if (state.action === 'edit_deposit_template') {
+        const field = state.langCode === 'ar' ? 'templateAr' : 'templateEn';
+        await updateDepositConfig(state.currency, field, text);
+        await bot.sendMessage(userId, await getText(userId, 'instructionsSet'));
+        await clearUserState(userId);
+        await showDepositSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'add_deposit_method') {
+        if (state.step === 'nameAr') {
+          await setUserState(userId, { ...state, nameAr: text, step: 'nameEn' });
+          await bot.sendMessage(userId, await getText(userId, 'enterMethodNameEn'));
+          return;
+        }
+        if (state.step === 'nameEn') {
+          await setUserState(userId, { ...state, nameEn: text, step: 'value' });
+          await bot.sendMessage(userId, await getText(userId, 'enterMethodValue'));
+          return;
+        }
+        if (state.step === 'value') {
+          await addDepositMethod(state.currency, { nameAr: state.nameAr, nameEn: state.nameEn, value: text });
+          await bot.sendMessage(userId, await getText(userId, 'methodAdded'));
+          await clearUserState(userId);
+          await showDepositMethodsAdmin(userId, state.currency);
+          return;
+        }
       }
 
       if (state.action === 'edit_deposit_instructions') {
