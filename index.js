@@ -282,6 +282,9 @@ const DEFAULT_TEXTS = {
     referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link: {link}\nYour points: {points}\n🎁 Redeem {requiredPoints} points for a free ChatGPT code!',
     referralEarned: '🎉 You earned 1 referral point! Total points: {points}',
     notEnoughPoints: '❌ You need at least {requiredPoints} points to redeem. You have {points} points.',
+    redeemPointsAskAmount: 'Send the number of points you want to redeem. Each {requiredPoints} points = 1 ChatGPT code.',
+    redeemPointsInvalidAmount: '❌ Invalid points amount. Send a positive number that is a multiple of {requiredPoints}.',
+    pointsRedeemed: '✅ Points redeemed successfully! Here are your ChatGPT GO code(s):\n\n{code}',
     setRedeemPoints: '🎁 Set Redeem Points',
     enterRedeemPoints: 'Enter required points for a free ChatGPT code:',
     redeemPointsUpdated: '✅ Redeem points updated to {points}.',
@@ -474,6 +477,9 @@ const DEFAULT_TEXTS = {
     referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك: {link}\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
     referralEarned: '🎉 لقد ربحت نقطة إحالة! إجمالي النقاط: {points}',
     notEnoughPoints: '❌ تحتاج على الأقل {requiredPoints} نقاط للاستبدال. لديك {points} نقطة.',
+    redeemPointsAskAmount: 'أرسل عدد النقاط التي تريد استبدالها. كل {requiredPoints} نقاط = كود ChatGPT واحد.',
+    redeemPointsInvalidAmount: '❌ عدد النقاط غير صالح. أرسل رقمًا موجبًا ويكون من مضاعفات {requiredPoints}.',
+    pointsRedeemed: '✅ تم استبدال النقاط بنجاح! إليك كودات ChatGPT GO:\n\n{code}',
     setRedeemPoints: '🎁 تعيين نقاط الاستبدال',
     enterRedeemPoints: 'أدخل عدد النقاط المطلوبة للحصول على كود ChatGPT مجاني:',
     redeemPointsUpdated: '✅ تم تحديث نقاط الاستبدال إلى {points}.',
@@ -2090,21 +2096,15 @@ bot.on('callback_query', async query => {
     if (data === 'redeem_points') {
       const user = await User.findByPk(userId);
       const requiredPoints = await getReferralRedeemPoints();
-      if (user.referralPoints >= requiredPoints) {
-        const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-        const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true });
-        await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
-        if (result.success) {
-          user.referralPoints -= requiredPoints;
-          await user.save();
-          await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: result.code }));
-        } else {
-          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-        }
-      } else {
+      if (user.referralPoints < requiredPoints) {
         await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
+        await bot.answerCallbackQuery(query.id);
+        return;
       }
+
+      await setUserState(userId, { action: 'redeem_points_amount' });
+      await bot.sendMessage(userId, await getText(userId, 'redeemPointsAskAmount', { requiredPoints }));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3481,6 +3481,41 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
         await clearUserState(userId);
       }
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'redeem_points_amount') {
+      const requiredPoints = await getReferralRedeemPoints();
+      const requestedPoints = parseInt(String(text || '').trim(), 10);
+
+      if (Number.isNaN(requestedPoints) || requestedPoints <= 0 || requestedPoints % requiredPoints !== 0) {
+        await bot.sendMessage(userId, await getText(userId, 'redeemPointsInvalidAmount', { requiredPoints }));
+        return;
+      }
+
+      const freshUser = await User.findByPk(userId);
+      if (freshUser.referralPoints < requestedPoints) {
+        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: freshUser.referralPoints, requiredPoints }));
+        await clearUserState(userId);
+        return;
+      }
+
+      const quantity = Math.floor(requestedPoints / requiredPoints);
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity });
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (result.success) {
+        const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
+        freshUser.referralPoints = Math.max(0, freshUser.referralPoints - usedPoints);
+        await freshUser.save();
+        await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: result.code }));
+      } else {
+        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+      }
+
+      await clearUserState(userId);
       await sendMainMenu(userId);
       return;
     }
