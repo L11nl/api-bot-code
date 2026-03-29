@@ -1686,7 +1686,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   return {
     success: true,
-    code: codes.join('\n'),
+    code: codes.join('\n\n'),
     codes,
     quantity: codes.length,
     requestedQuantity: safeQuantity,
