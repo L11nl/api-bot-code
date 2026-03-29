@@ -285,6 +285,12 @@ const DEFAULT_TEXTS = {
     setRedeemPoints: '🎁 Set Redeem Points',
     enterRedeemPoints: 'Enter required points for a free ChatGPT code:',
     redeemPointsUpdated: '✅ Redeem points updated to {points}.',
+    grantPoints: '🎁 Grant Points',
+    enterGrantPointsUserId: 'Send the Telegram user ID of the user:',
+    enterGrantPointsAmount: 'Send the number of points to grant:',
+    grantPointsUserNotFound: '❌ User not found.',
+    grantPointsDone: '✅ Added {points} points to user {userId}. New total: {total}',
+    pointsGrantedNotification: '🎁 You received {points} referral points from admin. Your total points: {total}',
     currentRedeemPoints: 'Current required points: {points}',
     currentReferralPercent: 'Current referral reward percentage: {percent}%',
     manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}',
@@ -471,6 +477,12 @@ const DEFAULT_TEXTS = {
     setRedeemPoints: '🎁 تعيين نقاط الاستبدال',
     enterRedeemPoints: 'أدخل عدد النقاط المطلوبة للحصول على كود ChatGPT مجاني:',
     redeemPointsUpdated: '✅ تم تحديث نقاط الاستبدال إلى {points}.',
+    grantPoints: '🎁 منح نقاط',
+    enterGrantPointsUserId: 'أرسل آيدي المستخدم في تيليجرام:',
+    enterGrantPointsAmount: 'أرسل عدد النقاط المراد منحها:',
+    grantPointsUserNotFound: '❌ المستخدم غير موجود.',
+    grantPointsDone: '✅ تم إضافة {points} نقطة للمستخدم {userId}. المجموع الجديد: {total}',
+    pointsGrantedNotification: '🎁 لقد حصلت على {points} نقطة إحالة من الأدمن. مجموع نقاطك الآن: {total}',
     currentRedeemPoints: 'عدد النقاط المطلوبة حالياً: {points}',
     currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
     manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}',
@@ -1098,7 +1110,11 @@ async function renderDepositMessage(userId, currency, amount) {
   const lang = user?.lang || 'en';
   const config = await getDepositConfig(currency);
   const template = lang === 'ar' ? (config.templateAr || getDefaultDepositValues(currency).templateAr) : (config.templateEn || getDefaultDepositValues(currency).templateEn);
-  const amountIQD = currency === 'IQD' ? amount * config.rate : null;
+  const amountIQDRaw = currency === 'IQD' ? amount * config.rate : null;
+  const amountIQD = amountIQDRaw === null ? null : Number(amountIQDRaw).toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  });
   const methodsBlock = formatDepositMethodsForMessage(config.methods, lang);
 
   let msg = template;
@@ -1328,6 +1344,7 @@ async function showReferralSettingsAdmin(userId) {
     inline_keyboard: [
       [{ text: await getText(userId, 'setReferralPercent'), callback_data: 'admin_set_referral_percent' }],
       [{ text: await getText(userId, 'setRedeemPoints'), callback_data: 'admin_set_redeem_points' }],
+      [{ text: await getText(userId, 'grantPoints'), callback_data: 'admin_grant_points' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
@@ -2460,6 +2477,13 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_grant_points' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'grant_points', step: 'user_id' });
+      await bot.sendMessage(userId, await getText(userId, 'enterGrantPointsUserId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_manage_redeem_services' && isAdmin(userId)) {
       await showRedeemServicesAdmin(userId);
       await bot.answerCallbackQuery(query.id);
@@ -3102,6 +3126,70 @@ bot.on('message', async msg => {
         await clearUserState(userId);
         await showReferralSettingsAdmin(userId);
         return;
+      }
+
+      if (state.action === 'grant_points') {
+        if (state.step === 'user_id') {
+          const targetUserId = parseInt(text, 10);
+          if (!Number.isInteger(targetUserId)) {
+            await bot.sendMessage(userId, await getText(userId, 'enterGrantPointsUserId'));
+            return;
+          }
+
+          const targetUser = await User.findByPk(targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'grantPointsUserNotFound'));
+            return;
+          }
+
+          await setUserState(userId, { action: 'grant_points', step: 'points', targetUserId });
+          await bot.sendMessage(userId, await getText(userId, 'enterGrantPointsAmount'));
+          return;
+        }
+
+        if (state.step === 'points') {
+          const points = parseInt(text, 10);
+          if (!Number.isInteger(points) || points <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'enterGrantPointsAmount'));
+            return;
+          }
+
+          const targetUser = await User.findByPk(state.targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'grantPointsUserNotFound'));
+            await clearUserState(userId);
+            await showReferralSettingsAdmin(userId);
+            return;
+          }
+
+          targetUser.referralPoints = (targetUser.referralPoints || 0) + points;
+          await targetUser.save();
+
+          await bot.sendMessage(
+            userId,
+            await getText(userId, 'grantPointsDone', {
+              userId: targetUser.id,
+              points,
+              total: targetUser.referralPoints
+            })
+          );
+
+          try {
+            await bot.sendMessage(
+              targetUser.id,
+              await getText(targetUser.id, 'pointsGrantedNotification', {
+                points,
+                total: targetUser.referralPoints
+              })
+            );
+          } catch (notifyErr) {
+            console.error('Grant points notify error:', notifyErr.message);
+          }
+
+          await clearUserState(userId);
+          await showReferralSettingsAdmin(userId);
+          return;
+        }
       }
 
       if (state.action === 'add_redeem_service') {
