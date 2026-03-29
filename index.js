@@ -1,5 +1,5 @@
 // ========================
-// index.js - البوت المتكامل مع ChatGPT (نسخة كاملة)
+// index.js - البوت المتكامل مع ChatGPT، طرق دفع مرنة، اشتراك إجباري، وإحالات متطورة
 // ========================
 require('dotenv').config();
 const express = require('express');
@@ -9,13 +9,15 @@ const { Sequelize, DataTypes, Op } = require('sequelize');
 const FormData = require('form-data');
 
 // ========================
-// 1. إعدادات البيئة
+// 1. إعدادات البيئة (ضعها في ملف .env)
 // ========================
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const DATABASE_URL = process.env.DATABASE_URL;
+const REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL;      // مثلاً: @channel_username أو معرف القناة (بدون @)
+const REFERRAL_REQUIRED = parseInt(process.env.REFERRAL_REQUIRED) || 10;  // عدد الإحالات المطلوبة للحصول على كود مجاني
 
-if (!TOKEN || !ADMIN_ID || !DATABASE_URL) {
+if (!TOKEN || !ADMIN_ID || !DATABASE_URL || !REQUIRED_CHANNEL) {
   console.error('❌ Missing required environment variables');
   process.exit(1);
 }
@@ -25,7 +27,7 @@ const app = express();
 app.use(express.json());
 
 // ========================
-// 2. قاعدة البيانات
+// 2. قاعدة البيانات (نفس النماذج مع إضافة حقل referralCount)
 // ========================
 const sequelize = new Sequelize(DATABASE_URL, {
   dialect: 'postgres',
@@ -34,7 +36,6 @@ const sequelize = new Sequelize(DATABASE_URL, {
   pool: { max: 10, min: 0, acquire: 30000, idle: 10000 }
 });
 
-// النماذج (Models)
 const User = sequelize.define('User', {
   id: { type: DataTypes.BIGINT, primaryKey: true },
   lang: { type: DataTypes.STRING(2), defaultValue: 'en' },
@@ -42,8 +43,9 @@ const User = sequelize.define('User', {
   state: { type: DataTypes.TEXT, allowNull: true },
   referralCode: { type: DataTypes.STRING, unique: true },
   referredBy: { type: DataTypes.BIGINT, allowNull: true },
-  totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 },
-  freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false }
+  referralCount: { type: DataTypes.INTEGER, defaultValue: 0 },       // عدد الإحالات الناجحة
+  freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
+  totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 }
 });
 
 const Setting = sequelize.define('Setting', {
@@ -99,20 +101,21 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
-const BotService = sequelize.define('BotService', {
+const DepositConfig = sequelize.define('DepositConfig', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-  token: { type: DataTypes.STRING, unique: true, allowNull: false },
-  name: { type: DataTypes.STRING, allowNull: false },
-  allowedActions: { type: DataTypes.JSONB, defaultValue: [] },
-  ownerId: { type: DataTypes.BIGINT, allowNull: true },
+  currency: { type: DataTypes.STRING, allowNull: false, unique: true },
+  rate: { type: DataTypes.FLOAT, defaultValue: 1500 },
+  walletAddress: { type: DataTypes.STRING, allowNull: false },
+  instructions: { type: DataTypes.TEXT, allowNull: false },
   isActive: { type: DataTypes.BOOLEAN, defaultValue: true }
 });
 
-const BotStat = sequelize.define('BotStat', {
-  botId: { type: DataTypes.INTEGER, references: { model: BotService, key: 'id' } },
-  action: { type: DataTypes.STRING },
-  count: { type: DataTypes.INTEGER, defaultValue: 0 },
-  lastUsed: { type: DataTypes.DATE }
+const ReferralReward = sequelize.define('ReferralReward', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  referrerId: { type: DataTypes.BIGINT, allowNull: false },
+  referredId: { type: DataTypes.BIGINT, allowNull: false },
+  amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+  status: { type: DataTypes.STRING, defaultValue: 'pending' }
 });
 
 const DiscountCode = sequelize.define('DiscountCode', {
@@ -125,44 +128,17 @@ const DiscountCode = sequelize.define('DiscountCode', {
   createdBy: { type: DataTypes.BIGINT, allowNull: false }
 });
 
-const ReferralReward = sequelize.define('ReferralReward', {
-  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-  referrerId: { type: DataTypes.BIGINT, allowNull: false },
-  referredId: { type: DataTypes.BIGINT, allowNull: false },
-  amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
-  status: { type: DataTypes.STRING, defaultValue: 'pending' }
-});
-
-const RedeemService = sequelize.define('RedeemService', {
-  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-  nameEn: { type: DataTypes.STRING, allowNull: false },
-  nameAr: { type: DataTypes.STRING, allowNull: false },
-  merchantDictId: { type: DataTypes.STRING, allowNull: false },
-  platformId: { type: DataTypes.STRING, defaultValue: '1' }
-});
-
-const DepositConfig = sequelize.define('DepositConfig', {
-  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-  currency: { type: DataTypes.STRING, allowNull: false, unique: true },
-  rate: { type: DataTypes.FLOAT, defaultValue: 1500 },
-  walletAddress: { type: DataTypes.STRING, allowNull: false },
-  instructions: { type: DataTypes.TEXT, allowNull: false },
-  isActive: { type: DataTypes.BOOLEAN, defaultValue: true }
-});
-
 // العلاقات
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant);
 BalanceTransaction.belongsTo(User, { foreignKey: 'userId' });
 BalanceTransaction.belongsTo(PaymentMethod);
-BotService.hasMany(BotStat, { foreignKey: 'botId' });
-BotStat.belongsTo(BotService);
 User.hasMany(ReferralReward, { as: 'Referrer', foreignKey: 'referrerId' });
 User.hasMany(ReferralReward, { as: 'Referred', foreignKey: 'referredId' });
 DiscountCode.belongsTo(User, { as: 'creator', foreignKey: 'createdBy' });
 
 // ========================
-// 3. دوال مساعدة
+// 3. دوال مساعدة أساسية
 // ========================
 async function getText(userId, key, replacements = {}) {
   try {
@@ -199,13 +175,62 @@ async function getUserReferralLink(userId) {
   return `https://t.me/${botInfo.username}?start=ref_${user.referralCode}`;
 }
 
+// التحقق من عضوية القناة
+async function checkChannelMembership(userId) {
+  try {
+    const chatMember = await bot.getChatMember(REQUIRED_CHANNEL, userId);
+    return chatMember.status === 'member' || chatMember.status === 'administrator' || chatMember.status === 'creator';
+  } catch (err) {
+    console.error('Error checking channel membership:', err);
+    return false; // إذا فشل التحقق (ربما البوت ليس مشتركًا في القناة)
+  }
+}
+
+// إرسال رسالة اشتراك إجباري
+async function sendJoinChannelMessage(userId) {
+  const text = `🔒 *يرجى الاشتراك في القناة أولاً*\n\nللاستمرار في استخدام البوت، اشترك في القناة التالية:\n[${REQUIRED_CHANNEL}](https://t.me/${REQUIRED_CHANNEL.replace('@', '')})\n\nثم أعد تشغيل البوت.`;
+  const opts = {
+    parse_mode: 'Markdown',
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📢 اشترك الآن', url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }],
+        [{ text: '🔄 تحقق من الاشتراك', callback_data: 'check_subscription' }]
+      ]
+    }
+  };
+  await bot.sendMessage(userId, text, opts);
+}
+
+// معالجة الإحالة
 async function handleReferral(userId, referralCode) {
   const referrer = await User.findOne({ where: { referralCode } });
   if (!referrer || referrer.id === userId) return false;
   await User.update({ referredBy: referrer.id }, { where: { id: userId } });
+  // زيادة عدد إحالات المحيل
+  referrer.referralCount += 1;
+  await referrer.save();
+
+  // التحقق من تحقيق الهدف
+  if (referrer.referralCount >= REFERRAL_REQUIRED && !referrer.freeChatgptReceived) {
+    // منح كود ChatGPT مجاني
+    await giveFreeChatGPTCode(referrer.id);
+  }
   return true;
 }
 
+// منح كود ChatGPT مجاني للمستخدم
+async function giveFreeChatGPTCode(userId) {
+  const user = await User.findByPk(userId);
+  if (!user || user.freeChatgptReceived) return false;
+
+  // نطلب من المستخدم إدخال بريده الإلكتروني
+  await User.update({ state: JSON.stringify({ action: 'chatgpt_free_email', fromReferral: true }) }, { where: { id: userId } });
+  await bot.sendMessage(userId, await getText(userId, 'askEmail'));
+  return true;
+}
+
+// تطبيق كود الخصم
 async function applyDiscount(userId, discountCode, totalAmount) {
   const discount = await DiscountCode.findOne({
     where: {
@@ -221,9 +246,11 @@ async function applyDiscount(userId, discountCode, totalAmount) {
   return { success: true, newTotal, discountPercent: discount.discountPercent };
 }
 
+// الحصول على إعدادات الإيداع للعملة
 async function getDepositConfig(currency) {
   let config = await DepositConfig.findOne({ where: { currency } });
   if (!config) {
+    // إنشاء إعدادات افتراضية إذا لم توجد
     if (currency === 'USD') {
       config = await DepositConfig.create({
         currency: 'USD',
@@ -310,7 +337,7 @@ async function getChatGPTCode(email) {
 }
 
 // ========================
-// 5. النصوص الافتراضية (مدمجة بالكامل)
+// 5. النصوص الافتراضية (محدثة)
 // ========================
 const DEFAULT_TEXTS = {
   en: {
@@ -390,7 +417,7 @@ const DEFAULT_TEXTS = {
     redeemFailed: '❌ Failed to redeem card: {reason}',
     sendCode: '✍️ Send the card code:',
     referral: '🤝 Invite Friends',
-    referralInfo: 'Share your referral link with friends and earn {percent}% of their deposits!\n\nYour referral code: `{code}`\nLink: {link}',
+    referralInfo: 'Share your referral link with friends and earn {percent}% of their deposits!\n\nYour referral code: `{code}`\nLink: {link}\n\n🎁 *Bonus:* Invite {required} friends and get a free ChatGPT code!',
     referralEarned: '🎉 You earned {amount} USD from a referral!',
     discount: '🎟️ Apply Discount Code',
     enterDiscountCode: 'Send your discount code:',
@@ -566,7 +593,7 @@ const DEFAULT_TEXTS = {
     redeemFailed: '❌ فشل استرداد البطاقة: {reason}',
     sendCode: '✍️ أرسل كود البطاقة:',
     referral: '🤝 دعوة الأصدقاء',
-    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح {percent}% من إيداعاتهم!\n\nكود الإحالة الخاص بك: `{code}`\nالرابط: {link}',
+    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح {percent}% من إيداعاتهم!\n\nكود الإحالة الخاص بك: `{code}`\nالرابط: {link}\n\n🎁 *مكافأة:* ادعُ {required} من أصدقائك واحصل على كود ChatGPT مجانًا!',
     referralEarned: '🎉 لقد ربحت {amount} دولار من إحالة صديق!',
     discount: '🎟️ تطبيق كود خصم',
     enterDiscountCode: 'أرسل كود الخصم الخاص بك:',
@@ -668,7 +695,7 @@ const DEFAULT_TEXTS = {
 };
 
 // ========================
-// 6. دوال إدارة الأزرار
+// 6. دوال إدارة الأزرار (نفس الكود الأصلي مع تعديلات)
 // ========================
 const DEFAULT_BUTTONS = {
   redeem: true,
@@ -701,6 +728,13 @@ async function setMenuButtonsVisibility(visibility) {
 }
 
 async function sendMainMenu(userId) {
+  // التحقق من الاشتراك في القناة أولاً
+  const isMember = await checkChannelMembership(userId);
+  if (!isMember) {
+    await sendJoinChannelMessage(userId);
+    return;
+  }
+
   const menuText = await getText(userId, 'menu');
   const visibility = await getMenuButtonsVisibility();
   const buttons = [];
@@ -729,14 +763,13 @@ async function sendMainMenu(userId) {
 }
 
 // ========================
-// 7. دوال أخرى (الأدمن، الشراء، الإيداع)
+// 7. دوال الإدارة والإيداع والشراء (محدثة)
 // ========================
 async function showAdminPanel(userId) {
   if (!isAdmin(userId)) return;
   const panelText = await getText(userId, 'adminPanel');
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
@@ -933,6 +966,28 @@ bot.on('callback_query', async (query) => {
   try {
     await User.findOrCreate({ where: { id: userId }, defaults: { lang: 'en', balance: 0, referralCode: generateReferralCode(userId) } });
 
+    // التحقق من الاشتراك في القناة لجميع الأزرار باستثناء بداية اللغة وتفقد الاشتراك
+    if (!data.startsWith('lang_') && data !== 'check_subscription') {
+      const isMember = await checkChannelMembership(userId);
+      if (!isMember) {
+        await sendJoinChannelMessage(userId);
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+    }
+
+    if (data === 'check_subscription') {
+      const isMember = await checkChannelMembership(userId);
+      if (isMember) {
+        await sendMainMenu(userId);
+        await bot.answerCallbackQuery(query.id, { text: '✅ اشتراكك مؤكد! مرحباً بك.' });
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: '❌ لم تشترك بعد. يرجى الاشتراك أولاً.' });
+        await sendJoinChannelMessage(userId);
+      }
+      return;
+    }
+
     if (data.startsWith('lang_')) {
       const newLang = data.split('_')[1];
       await User.update({ lang: newLang }, { where: { id: userId } });
@@ -1017,6 +1072,15 @@ bot.on('message', async (msg) => {
   try {
     const user = await User.findByPk(userId);
     if (!user) return;
+
+    // التحقق من الاشتراك في القناة قبل معالجة أي رسالة (باستثناء بداية اللغة)
+    if (!text || (!text.startsWith('/start') && !text.startsWith('lang_'))) {
+      const isMember = await checkChannelMembership(userId);
+      if (!isMember) {
+        await sendJoinChannelMessage(userId);
+        return;
+      }
+    }
 
     let state = user.state ? JSON.parse(user.state) : null;
 
@@ -1174,14 +1238,14 @@ bot.on('message', async (msg) => {
 });
 
 // ========================
-// 9. API للبوتات الأخرى
+// 9. API للبوتات الأخرى (اختياري)
 // ========================
 app.post('/api/code', async (req, res) => {
   res.json({ error: 'Not implemented' });
 });
 
 // ========================
-// 10. جدولة المهام
+// 10. جدولة المهام (تنظيف الأكواد منتهية الصلاحية)
 // ========================
 setInterval(async () => {
   try {
