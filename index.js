@@ -9,15 +9,25 @@ const { Sequelize, DataTypes, Op } = require('sequelize');
 const FormData = require('form-data');
 
 // ========================
-// 1. إعدادات البيئة (ضعها في ملف .env)
+// 1. إعدادات البيئة
 // ========================
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const DATABASE_URL = process.env.DATABASE_URL;
-const REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL;      // مثلاً: @channel_username أو معرف القناة (بدون @)
-const REFERRAL_REQUIRED = parseInt(process.env.REFERRAL_REQUIRED) || 10;  // عدد الإحالات المطلوبة للحصول على كود مجاني
+let REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL;
+const REFERRAL_REQUIRED = parseInt(process.env.REFERRAL_REQUIRED) || 10;
 
-if (!TOKEN || !ADMIN_ID || !DATABASE_URL || !REQUIRED_CHANNEL) {
+// التحقق من صحة متغير القناة
+const isChannelValid = REQUIRED_CHANNEL && 
+                      REQUIRED_CHANNEL !== '@channel_username' && 
+                      REQUIRED_CHANNEL !== 'your_channel_username' &&
+                      REQUIRED_CHANNEL.trim() !== '';
+if (!isChannelValid) {
+  console.warn('⚠️ REQUIRED_CHANNEL غير معرف أو غير صالح. سيتم تعطيل الاشتراك الإجباري.');
+  REQUIRED_CHANNEL = null;
+}
+
+if (!TOKEN || !ADMIN_ID || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
   process.exit(1);
 }
@@ -27,7 +37,7 @@ const app = express();
 app.use(express.json());
 
 // ========================
-// 2. قاعدة البيانات (نفس النماذج مع إضافة حقل referralCount)
+// 2. قاعدة البيانات (نفس النماذج السابقة)
 // ========================
 const sequelize = new Sequelize(DATABASE_URL, {
   dialect: 'postgres',
@@ -43,7 +53,7 @@ const User = sequelize.define('User', {
   state: { type: DataTypes.TEXT, allowNull: true },
   referralCode: { type: DataTypes.STRING, unique: true },
   referredBy: { type: DataTypes.BIGINT, allowNull: true },
-  referralCount: { type: DataTypes.INTEGER, defaultValue: 0 },       // عدد الإحالات الناجحة
+  referralCount: { type: DataTypes.INTEGER, defaultValue: 0 },
   freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
   totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 }
 });
@@ -138,7 +148,7 @@ User.hasMany(ReferralReward, { as: 'Referred', foreignKey: 'referredId' });
 DiscountCode.belongsTo(User, { as: 'creator', foreignKey: 'createdBy' });
 
 // ========================
-// 3. دوال مساعدة أساسية
+// 3. دوال مساعدة
 // ========================
 async function getText(userId, key, replacements = {}) {
   try {
@@ -175,19 +185,24 @@ async function getUserReferralLink(userId) {
   return `https://t.me/${botInfo.username}?start=ref_${user.referralCode}`;
 }
 
-// التحقق من عضوية القناة
+// التحقق من عضوية القناة مع استثناء الأدمن
 async function checkChannelMembership(userId) {
+  // إذا كانت القناة غير مفعلة، نعتبر المستخدم عضوًا دائمًا
+  if (!REQUIRED_CHANNEL) return true;
+  // استثناء الأدمن
+  if (isAdmin(userId)) return true;
   try {
     const chatMember = await bot.getChatMember(REQUIRED_CHANNEL, userId);
     return chatMember.status === 'member' || chatMember.status === 'administrator' || chatMember.status === 'creator';
   } catch (err) {
     console.error('Error checking channel membership:', err);
-    return false; // إذا فشل التحقق (ربما البوت ليس مشتركًا في القناة)
+    return false; // إذا فشل التحقق (البوت ليس في القناة)
   }
 }
 
 // إرسال رسالة اشتراك إجباري
 async function sendJoinChannelMessage(userId) {
+  if (!REQUIRED_CHANNEL) return;
   const text = `🔒 *يرجى الاشتراك في القناة أولاً*\n\nللاستمرار في استخدام البوت، اشترك في القناة التالية:\n[${REQUIRED_CHANNEL}](https://t.me/${REQUIRED_CHANNEL.replace('@', '')})\n\nثم أعد تشغيل البوت.`;
   const opts = {
     parse_mode: 'Markdown',
@@ -207,30 +222,23 @@ async function handleReferral(userId, referralCode) {
   const referrer = await User.findOne({ where: { referralCode } });
   if (!referrer || referrer.id === userId) return false;
   await User.update({ referredBy: referrer.id }, { where: { id: userId } });
-  // زيادة عدد إحالات المحيل
   referrer.referralCount += 1;
   await referrer.save();
 
-  // التحقق من تحقيق الهدف
   if (referrer.referralCount >= REFERRAL_REQUIRED && !referrer.freeChatgptReceived) {
-    // منح كود ChatGPT مجاني
     await giveFreeChatGPTCode(referrer.id);
   }
   return true;
 }
 
-// منح كود ChatGPT مجاني للمستخدم
 async function giveFreeChatGPTCode(userId) {
   const user = await User.findByPk(userId);
   if (!user || user.freeChatgptReceived) return false;
-
-  // نطلب من المستخدم إدخال بريده الإلكتروني
   await User.update({ state: JSON.stringify({ action: 'chatgpt_free_email', fromReferral: true }) }, { where: { id: userId } });
   await bot.sendMessage(userId, await getText(userId, 'askEmail'));
   return true;
 }
 
-// تطبيق كود الخصم
 async function applyDiscount(userId, discountCode, totalAmount) {
   const discount = await DiscountCode.findOne({
     where: {
@@ -246,11 +254,9 @@ async function applyDiscount(userId, discountCode, totalAmount) {
   return { success: true, newTotal, discountPercent: discount.discountPercent };
 }
 
-// الحصول على إعدادات الإيداع للعملة
 async function getDepositConfig(currency) {
   let config = await DepositConfig.findOne({ where: { currency } });
   if (!config) {
-    // إنشاء إعدادات افتراضية إذا لم توجد
     if (currency === 'USD') {
       config = await DepositConfig.create({
         currency: 'USD',
@@ -273,7 +279,7 @@ async function getDepositConfig(currency) {
 }
 
 // ========================
-// 4. دوال ChatGPT (جلب الكوكيز تلقائياً)
+// 4. دوال ChatGPT (نفس الكود)
 // ========================
 async function getCookiesForChatGPT() {
   try {
@@ -337,7 +343,7 @@ async function getChatGPTCode(email) {
 }
 
 // ========================
-// 5. النصوص الافتراضية (محدثة)
+// 5. النصوص الافتراضية (نفس الكود السابق)
 // ========================
 const DEFAULT_TEXTS = {
   en: {
@@ -695,7 +701,7 @@ const DEFAULT_TEXTS = {
 };
 
 // ========================
-// 6. دوال إدارة الأزرار (نفس الكود الأصلي مع تعديلات)
+// 6. دوال إدارة الأزرار (محدثة)
 // ========================
 const DEFAULT_BUTTONS = {
   redeem: true,
@@ -728,7 +734,7 @@ async function setMenuButtonsVisibility(visibility) {
 }
 
 async function sendMainMenu(userId) {
-  // التحقق من الاشتراك في القناة أولاً
+  // التحقق من الاشتراك في القناة (يستثنى الأدمن)
   const isMember = await checkChannelMembership(userId);
   if (!isMember) {
     await sendJoinChannelMessage(userId);
@@ -763,7 +769,7 @@ async function sendMainMenu(userId) {
 }
 
 // ========================
-// 7. دوال الإدارة والإيداع والشراء (محدثة)
+// 7. دوال الإدارة والإيداع والشراء (نفس الكود السابق)
 // ========================
 async function showAdminPanel(userId) {
   if (!isAdmin(userId)) return;
@@ -928,7 +934,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
 }
 
 // ========================
-// 8. معالجة الأوامر والـ callbacks
+// 8. معالجة الأوامر والـ callbacks (محدثة)
 // ========================
 bot.onText(/\/start/, async (msg) => {
   const userId = msg.chat.id;
@@ -966,8 +972,9 @@ bot.on('callback_query', async (query) => {
   try {
     await User.findOrCreate({ where: { id: userId }, defaults: { lang: 'en', balance: 0, referralCode: generateReferralCode(userId) } });
 
-    // التحقق من الاشتراك في القناة لجميع الأزرار باستثناء بداية اللغة وتفقد الاشتراك
-    if (!data.startsWith('lang_') && data !== 'check_subscription') {
+    // استثناء التحقق من القناة للمستخدمين الأدمن أو عند اختيار اللغة أو عند التحقق من الاشتراك نفسه
+    const skipCheck = data.startsWith('lang_') || data === 'check_subscription' || isAdmin(userId);
+    if (!skipCheck && REQUIRED_CHANNEL) {
       const isMember = await checkChannelMembership(userId);
       if (!isMember) {
         await sendJoinChannelMessage(userId);
@@ -1073,12 +1080,14 @@ bot.on('message', async (msg) => {
     const user = await User.findByPk(userId);
     if (!user) return;
 
-    // التحقق من الاشتراك في القناة قبل معالجة أي رسالة (باستثناء بداية اللغة)
-    if (!text || (!text.startsWith('/start') && !text.startsWith('lang_'))) {
-      const isMember = await checkChannelMembership(userId);
-      if (!isMember) {
-        await sendJoinChannelMessage(userId);
-        return;
+    // استثناء التحقق من القناة للأدمن أو للرسائل التي تبدأ بـ /start أو التي تتعلق باللغة
+    if (!text || (!text.startsWith('/start') && !text.startsWith('lang_') && !isAdmin(userId))) {
+      if (REQUIRED_CHANNEL) {
+        const isMember = await checkChannelMembership(userId);
+        if (!isMember) {
+          await sendJoinChannelMessage(userId);
+          return;
+        }
       }
     }
 
@@ -1238,14 +1247,14 @@ bot.on('message', async (msg) => {
 });
 
 // ========================
-// 9. API للبوتات الأخرى (اختياري)
+// 9. API (اختياري)
 // ========================
 app.post('/api/code', async (req, res) => {
   res.json({ error: 'Not implemented' });
 });
 
 // ========================
-// 10. جدولة المهام (تنظيف الأكواد منتهية الصلاحية)
+// 10. جدولة المهام
 // ========================
 setInterval(async () => {
   try {
@@ -1263,7 +1272,7 @@ setInterval(async () => {
 }, 24 * 60 * 60 * 1000);
 
 // ========================
-// 11. تشغيل الخادم ومزامنة قاعدة البيانات
+// 11. تشغيل الخادم
 // ========================
 sequelize.sync({ alter: true }).then(async () => {
   console.log('✅ Database synced');
