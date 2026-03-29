@@ -271,9 +271,15 @@ const DEFAULT_TEXTS = {
     merchantDeleted: 'Merchant deleted successfully.',
     referral: '🤝 Invite Friends',
     redeemPoints: '🎁 Redeem Points',
-    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link: {link}\nYour points: {points}\n🎁 Redeem 10 points for a free ChatGPT code!',
+    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link: {link}\nYour points: {points}\n🎁 Redeem {requiredPoints} points for a free ChatGPT code!',
     referralEarned: '🎉 You earned 1 referral point! Total points: {points}',
-    notEnoughPoints: '❌ You need at least 10 points to redeem. You have {points} points.',
+    notEnoughPoints: '❌ You need at least {requiredPoints} points to redeem. You have {points} points.',
+    setRedeemPoints: '🎁 Set Redeem Points',
+    enterRedeemPoints: 'Enter required points for a free ChatGPT code:',
+    redeemPointsUpdated: '✅ Redeem points updated to {points}.',
+    currentRedeemPoints: 'Current required points: {points}',
+    currentReferralPercent: 'Current referral reward percentage: {percent}%',
+    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}',
     chatgptCode: '🤖 ChatGPT Code',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
@@ -428,9 +434,15 @@ const DEFAULT_TEXTS = {
     merchantDeleted: 'تم حذف التاجر بنجاح.',
     referral: '🤝 دعوة الأصدقاء',
     redeemPoints: '🎁 استبدال النقاط',
-    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك: {link}\nنقاطك: {points}\n🎁 استبدل 10 نقاط للحصول على كود ChatGPT مجاناً!',
+    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك: {link}\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
     referralEarned: '🎉 لقد ربحت نقطة إحالة! إجمالي النقاط: {points}',
-    notEnoughPoints: '❌ تحتاج على الأقل 10 نقاط للاستبدال. لديك {points} نقطة.',
+    notEnoughPoints: '❌ تحتاج على الأقل {requiredPoints} نقاط للاستبدال. لديك {points} نقطة.',
+    setRedeemPoints: '🎁 تعيين نقاط الاستبدال',
+    enterRedeemPoints: 'أدخل عدد النقاط المطلوبة للحصول على كود ChatGPT مجاني:',
+    redeemPointsUpdated: '✅ تم تحديث نقاط الاستبدال إلى {points}.',
+    currentRedeemPoints: 'عدد النقاط المطلوبة حالياً: {points}',
+    currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
+    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}',
     chatgptCode: '🤖 كود ChatGPT',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
@@ -536,6 +548,24 @@ async function getText(userId, key, replacements = {}) {
     console.error('Error in getText:', err);
     return DEFAULT_TEXTS.en?.[key] || key;
   }
+}
+
+async function getGlobalSetting(key, defaultValue) {
+  const setting = await Setting.findOne({ where: { key, lang: 'global' } });
+  if (!setting) return defaultValue;
+  return setting.value;
+}
+
+async function getReferralPercent() {
+  const rawValue = await getGlobalSetting('referral_percent', process.env.REFERRAL_PERCENT || '10');
+  const value = parseFloat(rawValue);
+  return Number.isFinite(value) && value >= 0 ? value : 10;
+}
+
+async function getReferralRedeemPoints() {
+  const rawValue = await getGlobalSetting('referral_redeem_points', '10');
+  const value = parseInt(rawValue, 10);
+  return Number.isInteger(value) && value > 0 ? value : 10;
 }
 
 async function getUserReferralLink(userId) {
@@ -1058,6 +1088,27 @@ async function showAdminPanel(userId) {
   };
 
   await bot.sendMessage(userId, await getText(userId, 'adminPanel'), { reply_markup: keyboard });
+}
+
+async function showReferralSettingsAdmin(userId) {
+  const percent = await getReferralPercent();
+  const redeemPoints = await getReferralRedeemPoints();
+  const percentLine = await getText(userId, 'currentReferralPercent', { percent });
+  const pointsLine = await getText(userId, 'currentRedeemPoints', { points: redeemPoints });
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'setReferralPercent'), callback_data: 'admin_set_referral_percent' }],
+      [{ text: await getText(userId, 'setRedeemPoints'), callback_data: 'admin_set_redeem_points' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+    ]
+  };
+
+  await bot.sendMessage(
+    userId,
+    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine }),
+    { reply_markup: keyboard }
+  );
 }
 
 async function showChannelConfigAdmin(userId) {
@@ -1728,7 +1779,8 @@ bot.on('callback_query', async query => {
     if (data === 'referral') {
       const user = await User.findByPk(userId);
       const link = await getUserReferralLink(userId);
-      const info = await getText(userId, 'referralInfo', { link, points: user.referralPoints });
+      const requiredPoints = await getReferralRedeemPoints();
+      const info = await getText(userId, 'referralInfo', { link, points: user.referralPoints, requiredPoints });
       const keyboard = {
         inline_keyboard: [
           [{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }],
@@ -1742,15 +1794,16 @@ bot.on('callback_query', async query => {
 
     if (data === 'redeem_points') {
       const user = await User.findByPk(userId);
-      if (user.referralPoints >= 10 && !user.freeChatgptReceived) {
-        user.referralPoints -= 10;
+      const requiredPoints = await getReferralRedeemPoints();
+      if (user.referralPoints >= requiredPoints && !user.freeChatgptReceived) {
+        user.referralPoints -= requiredPoints;
         await user.save();
         await setUserState(userId, { action: 'chatgpt_free_email', fromPoints: true });
         await bot.sendMessage(userId, await getText(userId, 'askEmail'));
       } else if (user.freeChatgptReceived) {
         await bot.sendMessage(userId, await getText(userId, 'alreadyGotFree'));
       } else {
-        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints }));
+        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -2085,8 +2138,21 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'admin_referral_settings' && isAdmin(userId)) {
+      await showReferralSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_referral_percent' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_referral_percent' });
       await bot.sendMessage(userId, await getText(userId, 'setReferralPercent'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_redeem_points' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_redeem_points' });
+      await bot.sendMessage(userId, await getText(userId, 'enterRedeemPoints'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -2695,7 +2761,20 @@ bot.on('message', async msg => {
         process.env.REFERRAL_PERCENT = String(percent);
         await bot.sendMessage(userId, await getText(userId, 'referralPercentUpdated', { percent }));
         await clearUserState(userId);
-        await showAdminPanel(userId);
+        await showReferralSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_redeem_points') {
+        const points = parseInt(text, 10);
+        if (!Number.isInteger(points) || points <= 0) {
+          await bot.sendMessage(userId, 'Invalid points number');
+          return;
+        }
+        await Setting.upsert({ key: 'referral_redeem_points', lang: 'global', value: String(points) });
+        await bot.sendMessage(userId, await getText(userId, 'redeemPointsUpdated', { points }));
+        await clearUserState(userId);
+        await showReferralSettingsAdmin(userId);
         return;
       }
 
