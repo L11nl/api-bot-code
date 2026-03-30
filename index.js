@@ -2152,6 +2152,9 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   const rawArg = match?.[1] ? match[1].trim() : '';
 
   try {
+    const existedBeforeStart = await User.findByPk(userId);
+    const isActuallyNewUser = !existedBeforeStart;
+
     const currentUser = await findOrCreateUser(userId);
     const tgUser = msg.from || {};
     const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
@@ -2159,6 +2162,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
     let fromReferrerName = null;
     let fromReferrerCount = null;
+    let fromReferrerUsername = 'لا يوجد';
+    let fromReferrerId = null;
     let shouldNotifyReferrer = false;
     let actualReferrerId = null;
 
@@ -2184,12 +2189,14 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
           const refIdentity = await getTelegramIdentityById(referrerId);
           fromReferrerName = refIdentity.fullName;
+          fromReferrerUsername = refIdentity.usernameText;
+          fromReferrerId = referrerId;
           fromReferrerCount = await User.count({ where: { referredBy: referrerId } });
         }
       }
     }
 
-    if (userId !== ADMIN_ID) {
+    if (userId !== ADMIN_ID && isActuallyNewUser) {
       let adminNotice =
         `مستخدم جديد\n` +
         `معرفه: ${usernameText}\n` +
@@ -2198,7 +2205,9 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
       if (fromReferrerName) {
         adminNotice += `\n\nمن طرف: ${fromReferrerName}`;
-        adminNotice += `\nعدد الاحالات من ${fromReferrerName}: ${fromReferrerCount}`;
+        adminNotice += `\nعدد الاحالات: ${fromReferrerCount}`;
+        adminNotice += `\nمعرفه: ${fromReferrerUsername}`;
+        adminNotice += `\nايديه: ${fromReferrerId}`;
       }
 
       await bot.sendMessage(ADMIN_ID, adminNotice).catch(() => {});
