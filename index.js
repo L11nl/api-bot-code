@@ -733,6 +733,21 @@ async function findOrCreateUser(userId) {
   return user;
 }
 
+async function getTelegramIdentityById(targetUserId) {
+  try {
+    const chat = await bot.getChat(targetUserId);
+    return {
+      usernameText: chat?.username ? `@${chat.username}` : 'لا يوجد',
+      fullName: [chat?.first_name, chat?.last_name].filter(Boolean).join(' ').trim() || chat?.title || String(targetUserId)
+    };
+  } catch {
+    return {
+      usernameText: 'لا يوجد',
+      fullName: String(targetUserId)
+    };
+  }
+}
+
 async function getChannelConfig() {
   let config = await ChannelConfig.findOne();
   if (!config) {
@@ -2137,21 +2152,15 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   const rawArg = match?.[1] ? match[1].trim() : '';
 
   try {
-    await findOrCreateUser(userId);
+    const currentUser = await findOrCreateUser(userId);
+    const tgUser = msg.from || {};
+    const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
+    const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
 
-    if (userId !== ADMIN_ID) {
-      const tgUser = msg.from || {};
-      const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
-      const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
-
-      const adminNotice =
-        `مستخدم جديد\n` +
-        `معرفه: ${usernameText}\n` +
-        `اسمه: ${fullName}\n` +
-        `ايديه: ${userId}`;
-
-      await bot.sendMessage(ADMIN_ID, adminNotice).catch(() => {});
-    }
+    let fromReferrerName = null;
+    let fromReferrerCount = null;
+    let shouldNotifyReferrer = false;
+    let actualReferrerId = null;
 
     if (rawArg) {
       let referrerId = null;
@@ -2166,9 +2175,44 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       if (referrerId && referrerId !== Number(userId)) {
         const referrer = await User.findByPk(referrerId);
         if (referrer) {
-          await User.update({ referredBy: referrerId }, { where: { id: userId } });
+          actualReferrerId = referrerId;
+
+          if (!currentUser.referredBy) {
+            await User.update({ referredBy: referrerId }, { where: { id: userId } });
+            shouldNotifyReferrer = true;
+          }
+
+          const refIdentity = await getTelegramIdentityById(referrerId);
+          fromReferrerName = refIdentity.fullName;
+          fromReferrerCount = await User.count({ where: { referredBy: referrerId } });
         }
       }
+    }
+
+    if (userId !== ADMIN_ID) {
+      let adminNotice =
+        `مستخدم جديد\n` +
+        `معرفه: ${usernameText}\n` +
+        `اسمه: ${fullName}\n` +
+        `ايديه: ${userId}`;
+
+      if (fromReferrerName) {
+        adminNotice += `\n\nمن طرف: ${fromReferrerName}`;
+        adminNotice += `\nعدد الاحالات من ${fromReferrerName}: ${fromReferrerCount}`;
+      }
+
+      await bot.sendMessage(ADMIN_ID, adminNotice).catch(() => {});
+    }
+
+    if (shouldNotifyReferrer && actualReferrerId) {
+      const refCountNow = await User.count({ where: { referredBy: actualReferrerId } });
+      const referrerNotice =
+        `🎉 دخل مستخدم جديد من رابط إحالتك\n` +
+        `المعرف: ${usernameText}\n` +
+        `الاسم: ${fullName}\n` +
+        `الايدي: ${userId}\n\n` +
+        `إجمالي الإحالات من رابطك: ${refCountNow}`;
+      await bot.sendMessage(actualReferrerId, referrerNotice).catch(() => {});
     }
 
     await tryAwardReferralIfEligible(userId);
@@ -2186,7 +2230,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/admin/, async msg => {
+bot.onText(/\/admin/bot.onText(/\/admin/, async msg => {
   const userId = msg.chat.id;
   if (!isAdmin(userId)) return;
   await showAdminPanel(userId);
