@@ -960,7 +960,7 @@ async function awardReferralPoints(referredUserId) {
   const referrer = await User.findByPk(referred.referredBy);
   if (!referrer) return false;
 
-  referrer.referralPoints += 1;
+  referrer.referralPoints = Number(referrer.referralPoints || 0) + 1;
   await referrer.save();
 
   referred.referralRewarded = true;
@@ -971,6 +971,16 @@ async function awardReferralPoints(referredUserId) {
   }));
 
   return true;
+}
+
+async function tryAwardReferralIfEligible(userId) {
+  const user = await User.findByPk(userId);
+  if (!user || !user.referredBy || user.referralRewarded) return false;
+
+  const verificationRequired = await isVerificationRequiredForUser(userId);
+  if (verificationRequired && !user.verified) return false;
+
+  return awardReferralPoints(userId);
 }
 
 async function ensureUserAccess(userId, options = {}) {
@@ -1017,9 +1027,7 @@ async function handleVerificationSuccess(userId) {
 
   await bot.sendMessage(userId, await getText(userId, 'captchaSuccess'));
 
-  if (user.referredBy && !user.referralRewarded) {
-    await awardReferralPoints(userId);
-  }
+  await tryAwardReferralIfEligible(userId);
 
   await sendMainMenu(userId);
 }
@@ -2120,10 +2128,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       }
     }
 
-    const verificationRequired = await isVerificationRequiredForUser(userId);
-    if (!verificationRequired) {
-      await awardReferralPoints(userId);
-    }
+    await tryAwardReferralIfEligible(userId);
 
     await bot.sendMessage(userId, await getText(userId, 'start'), {
       reply_markup: {
@@ -2155,14 +2160,20 @@ bot.on('callback_query', async query => {
       const newLang = data.split('_')[1];
       await User.update({ lang: newLang }, { where: { id: userId } });
       const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
-      if (canUse) await sendMainMenu(userId);
+      if (canUse) {
+        await tryAwardReferralIfEligible(userId);
+        await sendMainMenu(userId);
+      }
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'check_subscription') {
       const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
-      if (canUse) await sendMainMenu(userId);
+      if (canUse) {
+        await tryAwardReferralIfEligible(userId);
+        await sendMainMenu(userId);
+      }
       await bot.answerCallbackQuery(query.id);
       return;
     }
