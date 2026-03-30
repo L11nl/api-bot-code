@@ -216,6 +216,15 @@ const DEFAULT_TEXTS = {
     referralSettings: '👥 Referral Settings',
     manageRedeemServices: '🔄 Manage Redeem Services',
     manageDiscountCodes: '🎟️ Manage Discount Codes',
+    sendAnnouncement: '📢 Send Announcement',
+    editCodeDeliveryMessage: '✏️ Edit Code Delivery Message',
+    chooseCodeMessageLanguage: 'Choose the language of the code message:',
+    codeMessageArabic: '🇮🇶 Arabic Code Message',
+    codeMessageEnglish: '🇺🇸 English Code Message',
+    enterAnnouncementText: 'Send the announcement/notice text to broadcast to bot users:',
+    announcementSent: '✅ Announcement sent. Delivered: {sent} | Failed: {failed}',
+    enterCodeDeliveryMessage: 'Send the text you want to appear before the code. Send /empty to clear it.',
+    codeDeliveryMessageUpdated: '✅ Code delivery message updated.',
     enterBotToken: 'Send bot token:',
     botAdded: '✅ Bot added!',
     botRemoved: '❌ Bot removed!',
@@ -427,6 +436,15 @@ const DEFAULT_TEXTS = {
     referralSettings: '👥 إعدادات الإحالة',
     manageRedeemServices: '🔄 إدارة خدمات الاسترداد',
     manageDiscountCodes: '🎟️ إدارة كودات الخصم',
+    sendAnnouncement: '📢 إرسال إعلان',
+    editCodeDeliveryMessage: '✏️ تعديل رسالة تسليم الكود',
+    chooseCodeMessageLanguage: 'اختر لغة رسالة الكود:',
+    codeMessageArabic: '🇮🇶 رسالة الكود بالعربية',
+    codeMessageEnglish: '🇺🇸 رسالة الكود بالإنجليزية',
+    enterAnnouncementText: 'أرسل نص الإعلان/التنويه الذي تريد نشره لمستخدمي البوت:',
+    announcementSent: '✅ تم إرسال الإعلان. نجح: {sent} | فشل: {failed}',
+    enterCodeDeliveryMessage: 'أرسل النص الذي تريد ظهوره قبل الكود. أرسل /empty للحذف.',
+    codeDeliveryMessageUpdated: '✅ تم تحديث رسالة تسليم الكود.',
     enterBotToken: 'أرسل توكن البوت:',
     botAdded: '✅ تمت إضافة البوت!',
     botRemoved: '❌ تم حذف البوت!',
@@ -646,6 +664,36 @@ async function getGlobalSetting(key, defaultValue) {
   const setting = await Setting.findOne({ where: { key, lang: 'global' } });
   if (!setting) return defaultValue;
   return setting.value;
+}
+
+async function getCodeDeliveryMessage(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const setting = await Setting.findOne({ where: { key: 'code_delivery_message', lang } });
+  return setting?.value || '';
+}
+
+async function getCodeDeliveryPrefixHtml(userId) {
+  const customMessage = String(await getCodeDeliveryMessage(userId) || '').trim();
+  if (!customMessage) return '';
+  return `${escapeHtml(customMessage)}\n\n`;
+}
+
+async function broadcastAnnouncement(messageText) {
+  const users = await User.findAll({ attributes: ['id'] });
+  let sent = 0;
+  let failed = 0;
+
+  for (const u of users) {
+    try {
+      await bot.sendMessage(u.id, messageText);
+      sent += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  return { sent, failed };
 }
 
 async function getReferralPercent() {
@@ -1559,6 +1607,8 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
       [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
       [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
+      [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
+      [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
     ]
   };
@@ -2444,7 +2494,10 @@ bot.on('callback_query', async query => {
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
-        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) }), { parse_mode: 'HTML' });
+        {
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+      }
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -2876,6 +2929,41 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_manage_discount_codes' && isAdmin(userId)) {
       await showDiscountCodesAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_send_announcement' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'broadcast_announcement' });
+      await bot.sendMessage(userId, await getText(userId, 'enterAnnouncementText'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_edit_code_delivery_message' && isAdmin(userId)) {
+      await bot.sendMessage(userId, await getText(userId, 'chooseCodeMessageLanguage'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'codeMessageArabic'), callback_data: 'admin_edit_code_message_ar' }],
+            [{ text: await getText(userId, 'codeMessageEnglish'), callback_data: 'admin_edit_code_message_en' }],
+            [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_edit_code_message_ar' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'edit_code_delivery_message', targetLang: 'ar' });
+      await bot.sendMessage(userId, await getText(userId, 'enterCodeDeliveryMessage'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_edit_code_message_en' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'edit_code_delivery_message', targetLang: 'en' });
+      await bot.sendMessage(userId, await getText(userId, 'enterCodeDeliveryMessage'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3446,6 +3534,31 @@ bot.on('message', async msg => {
         }
       }
 
+
+      if (state.action === 'broadcast_announcement') {
+        const messageText = String(text || '').trim();
+        if (!messageText) {
+          await bot.sendMessage(userId, await getText(userId, 'enterAnnouncementText'));
+          return;
+        }
+
+        const stats = await broadcastAnnouncement(messageText);
+        await bot.sendMessage(userId, await getText(userId, 'announcementSent', stats));
+        await clearUserState(userId);
+        await showAdminPanel(userId);
+        return;
+      }
+
+      if (state.action === 'edit_code_delivery_message') {
+        const targetLang = state.targetLang === 'ar' ? 'ar' : 'en';
+        const value = String(text || '').trim() === '/empty' ? '' : String(text || '');
+        await Setting.upsert({ key: 'code_delivery_message', lang: targetLang, value });
+        await bot.sendMessage(userId, await getText(userId, 'codeDeliveryMessageUpdated'));
+        await clearUserState(userId);
+        await showAdminPanel(userId);
+        return;
+      }
+
       if (state.action === 'set_referral_percent') {
         const percent = parseFloat(text);
         if (Number.isNaN(percent)) {
@@ -3807,7 +3920,10 @@ bot.on('message', async msg => {
         let msgText = await getText(userId, 'success');
         if (result.discountApplied) msgText += `\n🎟️ Discount applied: ${result.discountApplied}%`;
         msgText += `\n\n${formatCodesForHtml(result.codes)}`;
-        await bot.sendMessage(userId, msgText, { parse_mode: 'HTML' });
+        {
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${msgText}`, { parse_mode: 'HTML' });
+      }
 
         const userObj = await User.findByPk(userId);
         if (userObj.referredBy) {
@@ -3933,7 +4049,10 @@ bot.on('message', async msg => {
         const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
         freshUser.referralPoints = Math.max(0, freshUser.referralPoints - usedPoints);
         await freshUser.save();
-        await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) }), { parse_mode: 'HTML' });
+        {
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+      }
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -3961,7 +4080,10 @@ bot.on('message', async msg => {
 
 ⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
         }
-        await bot.sendMessage(userId, successText, { parse_mode: 'HTML' });
+        {
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
+      }
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: result.balance, price: result.price }));
       } else {
