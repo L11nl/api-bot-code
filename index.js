@@ -2120,6 +2120,11 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       }
     }
 
+    const verificationRequired = await isVerificationRequiredForUser(userId);
+    if (!verificationRequired) {
+      await awardReferralPoints(userId);
+    }
+
     await bot.sendMessage(userId, await getText(userId, 'start'), {
       reply_markup: {
         inline_keyboard: [
