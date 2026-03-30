@@ -954,23 +954,66 @@ async function verifyCaptcha(userId, answerText) {
 }
 
 async function awardReferralPoints(referredUserId) {
-  const referred = await User.findByPk(referredUserId);
-  if (!referred || !referred.referredBy || referred.referralRewarded) return false;
+  const t = await sequelize.transaction();
+  try {
+    const referred = await User.findByPk(referredUserId, {
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
 
-  const referrer = await User.findByPk(referred.referredBy);
-  if (!referrer) return false;
+    if (!referred || !referred.referredBy || referred.referralRewarded) {
+      await t.rollback();
+      return false;
+    }
 
-  referrer.referralPoints = Number(referrer.referralPoints || 0) + 1;
-  await referrer.save();
+    const referrer = await User.findByPk(referred.referredBy, {
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
 
-  referred.referralRewarded = true;
-  await referred.save();
+    if (!referrer) {
+      await t.rollback();
+      return false;
+    }
 
-  await bot.sendMessage(referrer.id, await getText(referrer.id, 'referralEarned', {
-    points: referrer.referralPoints
-  }));
+    const [updatedCount] = await User.update(
+      { referralRewarded: true },
+      {
+        where: {
+          id: referredUserId,
+          referredBy: referred.referredBy,
+          referralRewarded: false
+        },
+        transaction: t
+      }
+    );
 
-  return true;
+    if (updatedCount !== 1) {
+      await t.rollback();
+      return false;
+    }
+
+    await User.increment(
+      { referralPoints: 1 },
+      {
+        where: { id: referrer.id },
+        transaction: t
+      }
+    );
+
+    await t.commit();
+
+    const updatedReferrer = await User.findByPk(referrer.id);
+    await bot.sendMessage(referrer.id, await getText(referrer.id, 'referralEarned', {
+      points: Number(updatedReferrer?.referralPoints || 0)
+    }));
+
+    return true;
+  } catch (err) {
+    await t.rollback().catch(() => {});
+    console.error('awardReferralPoints error:', err);
+    return false;
+  }
 }
 
 async function tryAwardReferralIfEligible(userId) {
