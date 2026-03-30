@@ -37,6 +37,8 @@ const User = sequelize.define('User', {
   referredBy: { type: DataTypes.BIGINT, allowNull: true },
   referralPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
   freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
+  lastFreeCodeClaimAt: { type: DataTypes.DATE, allowNull: true },
+  creatorDiscountPercent: { type: DataTypes.INTEGER, defaultValue: 0 },
   totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 },
   verified: { type: DataTypes.BOOLEAN, defaultValue: false },
   referralRewarded: { type: DataTypes.BOOLEAN, defaultValue: false }
@@ -283,7 +285,8 @@ const DEFAULT_TEXTS = {
     referral: '🤝 Invite Friends',
     redeemPoints: '🎁 Redeem Points',
     getFreeCode: '🎁 Get your free code',
-    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link: {link}\nYour points: {points}\n🎁 Redeem {requiredPoints} points for a free ChatGPT code!',
+    freeCodeMenu: '🎁 Get your free code',
+    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link:\n{link}\n\nYour points: {points}\n🎁 Redeem {requiredPoints} points for a free ChatGPT code!',
     referralEarned: '🎉 You earned 1 referral point! Total points: {points}',
     notEnoughPoints: '❌ You need at least {requiredPoints} points to redeem. You have {points} points.',
     redeemPointsAskAmount: 'Send the number of points you want to redeem. Each {requiredPoints} points = 1 ChatGPT code.',
@@ -298,9 +301,20 @@ const DEFAULT_TEXTS = {
     grantPointsUserNotFound: '❌ User not found.',
     grantPointsDone: '✅ Added {points} points to user {userId}. New total: {total}',
     pointsGrantedNotification: '🎁 You received {points} referral points from admin. Your total points: {total}',
+    setFreeCodeDays: '⏳ Set Free Code Cooldown',
+    enterFreeCodeDays: 'Send the number of days before the free-code button appears again:',
+    freeCodeDaysUpdated: '✅ Free-code cooldown updated to {days} day(s).',
     currentRedeemPoints: 'Current required points: {points}',
     currentReferralPercent: 'Current referral reward percentage: {percent}%',
-    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}',
+    currentFreeCodeDays: 'Free-code cooldown: {days} day(s)',
+    grantCreatorDiscount: '🎟️ Grant Creator Discount',
+    enterCreatorDiscountUserId: 'Send the Telegram user ID of the creator:',
+    enterCreatorDiscountPercent: 'Send the discount percent for referral redemption (0-100):',
+    creatorDiscountUserNotFound: '❌ User not found.',
+    creatorDiscountUpdated: '✅ Creator discount for user {userId} updated to {percent}%. Effective required points: {requiredPoints}.',
+    creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
+    currentCreatorDiscount: 'Your creator discount: {percent}%',
+    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}',
     chatgptCode: '🤖 ChatGPT Code',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
@@ -482,7 +496,8 @@ const DEFAULT_TEXTS = {
     referral: '🤝 دعوة الأصدقاء',
     redeemPoints: '🎁 استبدال النقاط',
     getFreeCode: '🎁 احصل على كودك المجاني',
-    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك: {link}\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
+    freeCodeMenu: '🎁 احصل على كودك المجاني',
+    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك:\n{link}\n\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
     referralEarned: '🎉 لقد ربحت نقطة إحالة! إجمالي النقاط: {points}',
     notEnoughPoints: '❌ تحتاج على الأقل {requiredPoints} نقاط للاستبدال. لديك {points} نقطة.',
     redeemPointsAskAmount: 'أرسل عدد النقاط التي تريد استبدالها. كل {requiredPoints} نقاط = كود ChatGPT واحد.',
@@ -497,9 +512,20 @@ const DEFAULT_TEXTS = {
     grantPointsUserNotFound: '❌ المستخدم غير موجود.',
     grantPointsDone: '✅ تم إضافة {points} نقطة للمستخدم {userId}. المجموع الجديد: {total}',
     pointsGrantedNotification: '🎁 لقد حصلت على {points} نقطة إحالة من الأدمن. مجموع نقاطك الآن: {total}',
+    setFreeCodeDays: '⏳ تعيين مدة ظهور الكود المجاني',
+    enterFreeCodeDays: 'أرسل عدد الأيام التي بعدها يظهر زر الكود المجاني مرة أخرى:',
+    freeCodeDaysUpdated: '✅ تم تحديث مدة ظهور الكود المجاني إلى {days} يوم.',
     currentRedeemPoints: 'عدد النقاط المطلوبة حالياً: {points}',
     currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
-    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}',
+    currentFreeCodeDays: 'مدة ظهور الكود المجاني: {days} يوم',
+    grantCreatorDiscount: '🎟️ منح خصم لصانع محتوى',
+    enterCreatorDiscountUserId: 'أرسل آيدي صانع المحتوى:',
+    enterCreatorDiscountPercent: 'أرسل نسبة الخصم لاستبدال النقاط (من 0 إلى 100):',
+    creatorDiscountUserNotFound: '❌ المستخدم غير موجود.',
+    creatorDiscountUpdated: '✅ تم تحديث خصم المستخدم {userId} إلى {percent}%. عدد النقاط المطلوب الآن لكل كود: {requiredPoints}.',
+    creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
+    currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
+    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}',
     chatgptCode: '🤖 كود ChatGPT',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
@@ -632,6 +658,55 @@ async function getReferralRedeemPoints() {
   const rawValue = await getGlobalSetting('referral_redeem_points', '10');
   const value = parseInt(rawValue, 10);
   return Number.isInteger(value) && value > 0 ? value : 10;
+}
+
+async function getFreeCodeCooldownDays() {
+  const rawValue = await getGlobalSetting('free_code_cooldown_days', '5');
+  const value = parseInt(rawValue, 10);
+  return Number.isInteger(value) && value > 0 ? value : 5;
+}
+
+async function getEffectiveRedeemPointsForUser(userId) {
+  const basePoints = await getReferralRedeemPoints();
+  const user = await User.findByPk(userId);
+  const discountPercent = Math.max(0, Math.min(100, parseInt(user?.creatorDiscountPercent || 0, 10) || 0));
+  if (discountPercent <= 0) return basePoints;
+  return Math.max(1, Math.ceil(basePoints * (100 - discountPercent) / 100));
+}
+
+async function canUserClaimFreeCode(userId) {
+  const user = await User.findByPk(userId);
+  if (!user) return false;
+  if (!user.lastFreeCodeClaimAt) return true;
+  const cooldownDays = await getFreeCodeCooldownDays();
+  const nextAllowedAt = new Date(new Date(user.lastFreeCodeClaimAt).getTime() + (cooldownDays * 24 * 60 * 60 * 1000));
+  return Date.now() >= nextAllowedAt.getTime();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatCodesForHtml(codeTextOrArray) {
+  const codes = Array.isArray(codeTextOrArray)
+    ? codeTextOrArray
+    : String(codeTextOrArray || '').split(/\n\n+/).filter(Boolean);
+  return codes.map(code => `<code>${escapeHtml(code)}</code>`).join('\n\n');
+}
+
+function formatDateParts(date) {
+  const d = new Date(date);
+  return {
+    year: d.getFullYear(),
+    month: String(d.getMonth() + 1).padStart(2, '0'),
+    day: String(d.getDate()).padStart(2, '0'),
+    hour: String(d.getHours()).padStart(2, '0'),
+    minute: String(d.getMinutes()).padStart(2, '0'),
+    second: String(d.getSeconds()).padStart(2, '0')
+  };
 }
 
 async function getUserReferralLink(userId) {
@@ -959,6 +1034,7 @@ const DEFAULT_BUTTONS = {
   my_purchases: true,
   support: true,
   chatgpt_code: true,
+  free_code: true,
   admin_panel: true
 };
 
@@ -972,6 +1048,7 @@ const DEFAULT_BUTTON_ORDER = [
   'my_purchases',
   'support',
   'chatgpt_code',
+  'free_code',
   'admin_panel'
 ];
 
@@ -1042,6 +1119,7 @@ async function getMenuButtonItems(userId) {
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
     { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
+    { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
 }
@@ -1367,6 +1445,7 @@ async function sendMainMenu(userId) {
 
   const visibility = await getMenuButtonsVisibility();
   const order = await getMenuButtonsOrder();
+  const canClaimFreeCode = await canUserClaimFreeCode(userId);
   const buttonLabels = {
     redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
@@ -1377,12 +1456,14 @@ async function sendMainMenu(userId) {
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
     chatgpt_code: await getText(userId, 'chatgptCode'),
+    free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
   const buttons = [];
   for (const id of order) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
+    if (id === 'free_code' && !canClaimFreeCode) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
@@ -1422,21 +1503,25 @@ async function showAdminPanel(userId) {
 async function showReferralSettingsAdmin(userId) {
   const percent = await getReferralPercent();
   const redeemPoints = await getReferralRedeemPoints();
+  const freeCodeDays = await getFreeCodeCooldownDays();
   const percentLine = await getText(userId, 'currentReferralPercent', { percent });
   const pointsLine = await getText(userId, 'currentRedeemPoints', { points: redeemPoints });
+  const freeCodeDaysLine = await getText(userId, 'currentFreeCodeDays', { days: freeCodeDays });
 
   const keyboard = {
     inline_keyboard: [
       [{ text: await getText(userId, 'setReferralPercent'), callback_data: 'admin_set_referral_percent' }],
       [{ text: await getText(userId, 'setRedeemPoints'), callback_data: 'admin_set_redeem_points' }],
+      [{ text: await getText(userId, 'setFreeCodeDays'), callback_data: 'admin_set_free_code_days' }],
       [{ text: await getText(userId, 'grantPoints'), callback_data: 'admin_grant_points' }],
+      [{ text: await getText(userId, 'grantCreatorDiscount'), callback_data: 'admin_grant_creator_discount' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
 
   await bot.sendMessage(
     userId,
-    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine }),
+    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine, freeCodeDaysLine }),
     { reply_markup: keyboard }
   );
 }
@@ -1714,7 +1799,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
   }
 }
 
-async function requestDeposit(userId, amount, currency, message, imageFileId = null) {
+async function requestDeposit(userId, amount, currency, message, imageFileId = null, tgUser = null) {
   const deposit = await BalanceTransaction.create({
     userId,
     amount,
@@ -1725,13 +1810,29 @@ async function requestDeposit(userId, amount, currency, message, imageFileId = n
     txid: currency
   });
 
-  const notifText = await getText(ADMIN_ID, 'depositNotification', {
-    userId,
-    amount,
-    currency: currency === 'USD' ? 'USDT' : 'IQD',
-    method: currency === 'USD' ? 'USDT' : 'IQD',
-    message: message || 'No message'
-  });
+  const config = await getDepositConfig(currency);
+  const parts = formatDateParts(new Date());
+  const usernameText = tgUser?.username ? `@${tgUser.username}` : 'لا يوجد';
+  const fullName = [tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
+  const amountUSD = Number(amount).toFixed(2);
+  const amountIQD = Number(amount * config.rate).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const currencyDisplay = currency === 'USD'
+    ? `${config.displayNameAr || 'بايننس'} / ${config.displayNameEn || 'Binance'}`
+    : `${config.displayNameAr || 'دينار عراقي'} / ${config.displayNameEn || 'Iraqi Dinar'}`;
+
+  const notifText =
+    `💳 طلب شحن جديد\n\n` +
+    `المعرف: ${usernameText}\n` +
+    `الاسم: ${fullName}\n` +
+    `الايدي: ${userId}\n\n` +
+    `العملة المختارة: ${currencyDisplay}\n` +
+    `المبلغ بالدولار: ${amountUSD} USD\n` +
+    `المبلغ بالدينار: ${amountIQD} IQD\n\n` +
+    `الرسالة: ${String(message || '').trim() || 'No message'}\n\n` +
+    `السنة: ${parts.year}\n` +
+    `الشهر: ${parts.month}\n` +
+    `اليوم: ${parts.day}\n` +
+    `الساعة: ${parts.hour}:${parts.minute}:${parts.second}`;
 
   if (imageFileId) {
     await bot.sendPhoto(ADMIN_ID, imageFileId, { caption: notifText });
@@ -1960,7 +2061,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   if (isFree) {
     if (!fromPoints) {
-      await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
+      await User.update({ freeChatgptReceived: true, lastFreeCodeClaimAt: new Date() }, { where: { id: userId } });
     }
   } else {
     const chargedAmount = price * codes.length;
@@ -2183,28 +2284,27 @@ bot.on('callback_query', async query => {
     if (data === 'referral') {
       const user = await User.findByPk(userId);
       const link = await getUserReferralLink(userId);
-      const requiredPoints = await getReferralRedeemPoints();
-      const info = await getText(userId, 'referralInfo', { link, points: user.referralPoints, requiredPoints });
-      const keyboardRows = [];
-
-      if (!user.freeChatgptReceived) {
-        keyboardRows.push([{ text: await getText(userId, 'getFreeCode'), callback_data: 'referral_free_code' }]);
-      }
-
-      keyboardRows.push([{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }]);
-      keyboardRows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
+      const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
+      const info = await getText(userId, 'referralInfo', {
+        link: `<code>${escapeHtml(link)}</code>`,
+        points: user.referralPoints,
+        requiredPoints
+      });
 
       const keyboard = {
-        inline_keyboard: keyboardRows
+        inline_keyboard: [
+          [{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }],
+          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+        ]
       };
-      await bot.sendMessage(userId, info, { reply_markup: keyboard });
+      await bot.sendMessage(userId, info, { reply_markup: keyboard, parse_mode: 'HTML' });
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'redeem_points') {
       const user = await User.findByPk(userId);
-      const requiredPoints = await getReferralRedeemPoints();
+      const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
 
       if (user.referralPoints < requiredPoints) {
         await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
@@ -2218,11 +2318,11 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'referral_free_code') {
-      const user = await User.findByPk(userId);
+    if (data === 'referral_free_code' || data === 'free_code') {
+      const canClaim = await canUserClaimFreeCode(userId);
 
-      if (user.freeChatgptReceived) {
-        await bot.sendMessage(userId, await getText(userId, 'alreadyGotFree'));
+      if (!canClaim) {
+        await sendMainMenu(userId);
         await bot.answerCallbackQuery(query.id);
         return;
       }
@@ -2232,11 +2332,12 @@ bot.on('callback_query', async query => {
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
-        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
+        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) }), { parse_mode: 'HTML' });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
 
+      await sendMainMenu(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -2609,6 +2710,20 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_set_free_code_days' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_free_code_days' });
+      await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeDays'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_grant_creator_discount' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'grant_creator_discount', step: 'user_id' });
+      await bot.sendMessage(userId, await getText(userId, 'enterCreatorDiscountUserId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_grant_points' && isAdmin(userId)) {
       await setUserState(userId, { action: 'grant_points', step: 'user_id' });
       await bot.sendMessage(userId, await getText(userId, 'enterGrantPointsUserId'));
@@ -2797,22 +2912,8 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'chatgpt_code') {
-      const user = await User.findByPk(userId);
-      if (!user.freeChatgptReceived) {
-        const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-        const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false });
-        await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-
-        if (result.success) {
-          await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
-        } else {
-          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-        }
-        await sendMainMenu(userId);
-      } else {
-        await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-        await bot.sendMessage(userId, await getText(userId, 'askQuantity'));
-      }
+      await setUserState(userId, { action: 'chatgpt_buy_quantity' });
+      await bot.sendMessage(userId, await getText(userId, 'askQuantity'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3260,6 +3361,19 @@ bot.on('message', async msg => {
         return;
       }
 
+      if (state.action === 'set_free_code_days') {
+        const days = parseInt(text, 10);
+        if (!Number.isInteger(days) || days <= 0) {
+          await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeDays'));
+          return;
+        }
+        await Setting.upsert({ key: 'free_code_cooldown_days', lang: 'global', value: String(days) });
+        await bot.sendMessage(userId, await getText(userId, 'freeCodeDaysUpdated', { days }));
+        await clearUserState(userId);
+        await showReferralSettingsAdmin(userId);
+        return;
+      }
+
       if (state.action === 'grant_points') {
         if (state.step === 'user_id') {
           const targetUserId = parseInt(text, 10);
@@ -3316,6 +3430,71 @@ bot.on('message', async msg => {
             );
           } catch (notifyErr) {
             console.error('Grant points notify error:', notifyErr.message);
+          }
+
+          await clearUserState(userId);
+          await showReferralSettingsAdmin(userId);
+          return;
+        }
+      }
+
+      if (state.action === 'grant_creator_discount') {
+        if (state.step === 'user_id') {
+          const targetUserId = parseInt(text, 10);
+          if (!Number.isInteger(targetUserId)) {
+            await bot.sendMessage(userId, await getText(userId, 'enterCreatorDiscountUserId'));
+            return;
+          }
+
+          const targetUser = await User.findByPk(targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'creatorDiscountUserNotFound'));
+            return;
+          }
+
+          await setUserState(userId, { action: 'grant_creator_discount', step: 'percent', targetUserId });
+          await bot.sendMessage(userId, await getText(userId, 'enterCreatorDiscountPercent'));
+          return;
+        }
+
+        if (state.step === 'percent') {
+          const percent = parseInt(text, 10);
+          if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+            await bot.sendMessage(userId, await getText(userId, 'enterCreatorDiscountPercent'));
+            return;
+          }
+
+          const targetUser = await User.findByPk(state.targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'creatorDiscountUserNotFound'));
+            await clearUserState(userId);
+            await showReferralSettingsAdmin(userId);
+            return;
+          }
+
+          targetUser.creatorDiscountPercent = percent;
+          await targetUser.save();
+          const requiredPoints = await getEffectiveRedeemPointsForUser(targetUser.id);
+
+          await bot.sendMessage(
+            userId,
+            await getText(userId, 'creatorDiscountUpdated', {
+              userId: targetUser.id,
+              percent,
+              requiredPoints
+            })
+          );
+
+          try {
+            await bot.sendMessage(
+              targetUser.id,
+              await getText(targetUser.id, 'creatorDiscountGrantedNotification', {
+                percent,
+                requiredPoints
+              })
+            );
+          } catch (notifyErr) {
+            console.error('Creator discount notify error:', notifyErr.message);
           }
 
           await clearUserState(userId);
@@ -3515,8 +3694,8 @@ bot.on('message', async msg => {
       if (result.success) {
         let msgText = await getText(userId, 'success');
         if (result.discountApplied) msgText += `\n🎟️ Discount applied: ${result.discountApplied}%`;
-        msgText += `\n\n${result.codes}`;
-        await bot.sendMessage(userId, msgText);
+        msgText += `\n\n${formatCodesForHtml(result.codes)}`;
+        await bot.sendMessage(userId, msgText, { parse_mode: 'HTML' });
 
         const userObj = await User.findByPk(userId);
         if (userObj.referredBy) {
@@ -3549,9 +3728,9 @@ bot.on('message', async msg => {
 
     if (state?.action === 'deposit_awaiting_proof') {
       const imageFileId = photo ? photo[photo.length - 1].file_id : null;
-      const caption = text || '';
+      const caption = String(msg.caption || text || '').trim();
       if (!imageFileId) return;
-      await requestDeposit(userId, state.amount, state.currency, caption, imageFileId);
+      await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
       await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
       await clearUserState(userId);
       await sendMainMenu(userId);
@@ -3608,7 +3787,7 @@ bot.on('message', async msg => {
           await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
         }
         await clearUserState(userId);
-        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: result.code }));
+        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes || [result.code]) }), { parse_mode: 'HTML' });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
         await clearUserState(userId);
@@ -3618,7 +3797,7 @@ bot.on('message', async msg => {
     }
 
     if (state?.action === 'redeem_points_amount') {
-      const requiredPoints = await getReferralRedeemPoints();
+      const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
       const requestedPoints = parseInt(String(text || '').trim(), 10);
 
       if (Number.isNaN(requestedPoints) || requestedPoints <= 0 || requestedPoints % requiredPoints !== 0) {
@@ -3642,7 +3821,7 @@ bot.on('message', async msg => {
         const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
         freshUser.referralPoints = Math.max(0, freshUser.referralPoints - usedPoints);
         await freshUser.save();
-        await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: result.code }));
+        await bot.sendMessage(userId, await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) }), { parse_mode: 'HTML' });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -3664,13 +3843,13 @@ bot.on('message', async msg => {
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
-        let successText = await getText(userId, 'purchaseSuccess', { code: result.code });
+        let successText = await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(result.codes) });
         if (result.partial) {
           successText += `
 
 ⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
         }
-        await bot.sendMessage(userId, successText);
+        await bot.sendMessage(userId, successText, { parse_mode: 'HTML' });
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: result.balance, price: result.price }));
       } else {
