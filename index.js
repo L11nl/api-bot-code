@@ -40,6 +40,8 @@ const User = sequelize.define('User', {
   lastFreeCodeClaimAt: { type: DataTypes.DATE, allowNull: true },
   creatorDiscountPercent: { type: DataTypes.INTEGER, defaultValue: 0 },
   adminGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
+  referralMilestoneGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
+  referralStockClaimedCodes: { type: DataTypes.INTEGER, defaultValue: 0 },
   totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 },
   verified: { type: DataTypes.BOOLEAN, defaultValue: false },
   referralRewarded: { type: DataTypes.BOOLEAN, defaultValue: false }
@@ -326,9 +328,12 @@ const DEFAULT_TEXTS = {
     referralEligibleUsers: '🎁 Eligible Referral Users',
     deductReferralPoints: '➖ Deduct Points',
     referralStockSettings: '📦 Referral ChatGPT Stock',
-    referralStockClaim: '🎁 Claim Referral Codes',
-    noReferralEligibleUsers: 'No users currently have 5+ referrals and unclaimed referral gift balance.',
+    referralStockClaim: '🎁 Referral Compensation',
+    noReferralEligibleUsers: 'No users currently have referral history with redeemable referral compensation.',
     referralEligibleUsersTitle: 'Eligible referral users:',
+    referralEligibleUserLine: 'Name: {name}\nUsername: {username}\nID: {id}\nTotal points: {points}\nGranted by admin: {adminGranted}\nReferral count: {referrals}\nMilestone rewards: {milestoneRewards}\nClaimed codes before: {claimedCodes}\nAvailable now: {redeemableCodes}',
+    referralClaimAdminNotice: '🎁 Referral compensation claimed\nBy: {name}\nUsername: {username}\nID: {id}\nClaimed now: {claimedNow}\nClaimed before: {claimedBefore}\nTotal claimed after this: {claimedAfter}\nStill eligible now: {eligibleNow}\nCurrent referral points: {points}\nGranted by admin: {adminGranted}\nReferral count: {referrals}\nMilestone rewards: {milestoneRewards}',
+    referralStockAccessDenied: '❌ This stock is only for users who have previous successful referrals.',
     enterDeductPointsUserId: 'Send the Telegram user ID whose points you want to deduct:',
     enterDeductPointsAmount: 'Send the number of points to deduct:',
     deductPointsDone: '✅ Points deducted. User {userId} now has {points} points.',
@@ -600,9 +605,12 @@ const DEFAULT_TEXTS = {
     referralEligibleUsers: '🎁 المؤهلون لهدية الإحالة',
     deductReferralPoints: '➖ خصم نقاط',
     referralStockSettings: '📦 مخزون ChatGPT الإحالات',
-    referralStockClaim: '🎁 استلام كودات الإحالات',
-    noReferralEligibleUsers: 'لا يوجد حاليًا مستخدمون لديهم 5 إحالات فأكثر ورصيد هدية إحالات غير مستلم.',
+    referralStockClaim: '🎁 تعويض الإحالات',
+    noReferralEligibleUsers: 'لا يوجد حاليًا مستخدمون لديهم إحالات سابقة ورصيد قابل لتعويض الإحالات.',
     referralEligibleUsersTitle: 'المستخدمون المؤهلون:',
+    referralEligibleUserLine: 'الاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nإجمالي النقاط: {points}\nتم منحه من الأدمن: {adminGranted}\nعدد الإحالات: {referrals}\nجوائز الإحالات المرحلية: {milestoneRewards}\nتم سحب كودات سابقًا: {claimedCodes}\nالمتاح الآن: {redeemableCodes}',
+    referralClaimAdminNotice: '🎁 تم سحب كود من تعويض الإحالات\nبواسطة: {name}\nالمعرف: {username}\nالايدي: {id}\nسحب الآن: {claimedNow}\nسحب سابقًا: {claimedBefore}\nإجمالي ما سحبه بعد العملية: {claimedAfter}\nالمستحق الآن بعد السحب: {eligibleNow}\nنقاطه الحالية: {points}\nتم منحه من الأدمن: {adminGranted}\nعدد إحالاته: {referrals}\nجوائز الإحالات المرحلية: {milestoneRewards}',
+    referralStockAccessDenied: '❌ هذا المخزون مخصص فقط للأشخاص الذين لديهم إحالات ناجحة سابقة.',
     enterDeductPointsUserId: 'أرسل آيدي المستخدم الذي تريد خصم نقاطه:',
     enterDeductPointsAmount: 'أرسل عدد النقاط المراد خصمها:',
     deductPointsDone: '✅ تم خصم النقاط. المستخدم {userId} لديه الآن {points} نقطة.',
@@ -863,25 +871,35 @@ async function getReferralStockMerchant() {
   return merchant;
 }
 
+async function getSuccessfulReferralCount(userId) {
+  return await User.count({ where: { referredBy: userId, referralRewarded: true } });
+}
+
 async function getRedeemableReferralCodesCount(userId) {
   const user = await User.findByPk(userId);
   if (!user) return 0;
+  const referralCount = await getSuccessfulReferralCount(userId);
+  if (referralCount <= 0) return 0;
   const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
   return Math.floor(Number(user.referralPoints || 0) / requiredPoints);
 }
 
-async function getEligibleReferralUsers(minReferrals = 5) {
-  const requiredPoints = await getReferralRedeemPoints();
-  const users = await User.findAll({
-    where: { referredBy: { [Op.ne]: null } },
-    order: [['referralPoints', 'DESC'], ['id', 'ASC']]
-  });
+async function getEligibleReferralUsers(minReferrals = 1) {
   const result = [];
   for (const user of await User.findAll({ order: [['referralPoints', 'DESC'], ['id', 'ASC']] })) {
-    const referralCount = await User.count({ where: { referredBy: user.id, referralRewarded: true } });
-    const redeemableCodes = Math.floor(Number(user.referralPoints || 0) / requiredPoints);
+    const referralCount = await getSuccessfulReferralCount(user.id);
+    const requiredPoints = await getEffectiveRedeemPointsForUser(user.id);
+    const redeemableCodes = referralCount > 0 ? Math.floor(Number(user.referralPoints || 0) / requiredPoints) : 0;
     if (referralCount >= minReferrals && redeemableCodes > 0) {
-      result.push({ user, referralCount, redeemableCodes });
+      result.push({
+        user,
+        referralCount,
+        redeemableCodes,
+        adminGranted: Number(user.adminGrantedPoints || 0),
+        totalPoints: Number(user.referralPoints || 0),
+        milestoneRewards: Number(user.referralMilestoneGrantedPoints || 0),
+        claimedCodes: Number(user.referralStockClaimedCodes || 0)
+      });
     }
   }
   return result;
@@ -890,6 +908,12 @@ async function getEligibleReferralUsers(minReferrals = 5) {
 async function claimReferralStockCodes(userId, requestedCodes) {
   const user = await User.findByPk(userId);
   if (!user) return { success: false, reason: 'User not found' };
+
+  const referralCount = await getSuccessfulReferralCount(userId);
+  if (referralCount <= 0) {
+    return { success: false, reason: 'no_referrals' };
+  }
+
   const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
   const maxCodes = Math.floor(Number(user.referralPoints || 0) / requiredPoints);
   const count = parseInt(requestedCodes, 10);
@@ -897,6 +921,7 @@ async function claimReferralStockCodes(userId, requestedCodes) {
     return { success: false, reason: 'invalid_count', maxCodes };
   }
 
+  const claimedBefore = Number(user.referralStockClaimedCodes || 0);
   const merchant = await getReferralStockMerchant();
   const codes = await Code.findAll({
     where: { merchantId: merchant.id, isUsed: false },
@@ -915,11 +940,23 @@ async function claimReferralStockCodes(userId, requestedCodes) {
       { where: { id: codes.map(c => c.id) }, transaction: t }
     );
     user.referralPoints = Number(user.referralPoints || 0) - (count * requiredPoints);
+    user.referralStockClaimedCodes = claimedBefore + count;
     await user.save({ transaction: t });
     await t.commit();
 
     const codeText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
-    return { success: true, codes: codeText, count };
+    return {
+      success: true,
+      codes: codeText,
+      count,
+      claimedBefore,
+      claimedAfter: Number(user.referralStockClaimedCodes || 0),
+      eligibleNow: Math.floor(Number(user.referralPoints || 0) / requiredPoints),
+      points: Number(user.referralPoints || 0),
+      adminGranted: Number(user.adminGrantedPoints || 0),
+      referralCount,
+      milestoneRewards: Number(user.referralMilestoneGrantedPoints || 0)
+    };
   } catch (err) {
     await t.rollback();
     console.error('claimReferralStockCodes error:', err);
@@ -1353,7 +1390,7 @@ async function awardReferralPoints(referredUserId) {
     const milestoneBonus = await getReferralMilestoneBonus(rewardedReferralCount);
     if (milestoneBonus > 0) {
       await User.increment(
-        { referralPoints: milestoneBonus },
+        { referralPoints: milestoneBonus, referralMilestoneGrantedPoints: milestoneBonus },
         {
           where: { id: referrer.id },
           transaction: t
@@ -2845,22 +2882,30 @@ bot.on('callback_query', async query => {
     if (data === 'referral') {
       const user = await User.findByPk(userId);
       const link = await getUserReferralLink(userId);
+      const points = Number(user?.referralPoints || 0);
       const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
-      const redeemableCodes = Math.floor(Number(user.referralPoints || 0) / requiredPoints);
-      const info = await getText(userId, 'referralInfo', {
-        link: `<code>${escapeHtml(link)}</code>`,
-        points: user.referralPoints,
-        requiredPoints,
-        redeemableCodes
-      });
+      const redeemableCodes = await getRedeemableReferralCodesCount(userId);
+      const info = await getText(userId, 'referralInfo', { link, points, requiredPoints, redeemableCodes });
+
+      const freeCodeButtonRow = (await canUserClaimFreeCode(userId)) && !user?.freeChatgptReceived
+        ? [[{ text: await getText(userId, 'getFreeCode'), callback_data: 'get_free_code' }]]
+        : [];
+
+      const referralCount = await getSuccessfulReferralCount(userId);
+      const compensationRow = (referralCount > 0 && redeemableCodes > 0)
+        ? [[{ text: await getText(userId, 'referralStockClaim'), callback_data: 'referral_stock_claim' }]]
+        : [];
 
       const keyboard = {
         inline_keyboard: [
           [{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }],
+          ...compensationRow,
+          ...freeCodeButtonRow,
           [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
         ]
       };
-      await bot.sendMessage(userId, info, { reply_markup: keyboard, parse_mode: 'HTML' });
+
+      await bot.sendMessage(userId, info, { parse_mode: 'Markdown', reply_markup: keyboard });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3263,14 +3308,25 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'admin_referral_eligible_users' && isAdmin(userId)) {
-      const eligible = await getEligibleReferralUsers(5);
+      const eligible = await getEligibleReferralUsers(1);
       if (!eligible.length) {
         await bot.sendMessage(userId, await getText(userId, 'noReferralEligibleUsers'));
       } else {
         let msgText = `${await getText(userId, 'referralEligibleUsersTitle')}\n\n`;
         for (const item of eligible.slice(0, 100)) {
           const identity = await getTelegramIdentityById(item.user.id);
-          msgText += `- ${identity.fullName} | ${identity.usernameText} | ID: ${item.user.id}\n  إحالات: ${item.referralCount} | أكواد مستحقة تقريبًا: ${item.redeemableCodes}\n\n`;
+          msgText += await getText(userId, 'referralEligibleUserLine', {
+            name: identity.fullName,
+            username: identity.usernameText,
+            id: item.user.id,
+            points: item.totalPoints,
+            adminGranted: item.adminGranted,
+            referrals: item.referralCount,
+            milestoneRewards: item.milestoneRewards,
+            claimedCodes: item.claimedCodes,
+            redeemableCodes: item.redeemableCodes
+          });
+          msgText += `\n\n`;
         }
         await bot.sendMessage(userId, msgText);
       }
@@ -3323,15 +3379,20 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'referral_stock_claim') {
-      const maxCodes = await getRedeemableReferralCodesCount(userId);
-      if (maxCodes <= 0) {
-        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', {
-          points: (await User.findByPk(userId))?.referralPoints || 0,
-          requiredPoints: await getEffectiveRedeemPointsForUser(userId)
-        }));
+      const referralCount = await getSuccessfulReferralCount(userId);
+      if (referralCount <= 0) {
+        await bot.sendMessage(userId, await getText(userId, 'referralStockAccessDenied'));
       } else {
-        await setUserState(userId, { action: 'claim_referral_stock' });
-        await bot.sendMessage(userId, await getText(userId, 'referralClaimAskCount', { maxCodes }));
+        const maxCodes = await getRedeemableReferralCodesCount(userId);
+        if (maxCodes <= 0) {
+          await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', {
+            points: (await User.findByPk(userId))?.referralPoints || 0,
+            requiredPoints: await getEffectiveRedeemPointsForUser(userId)
+          }));
+        } else {
+          await setUserState(userId, { action: 'claim_referral_stock' });
+          await bot.sendMessage(userId, await getText(userId, 'referralClaimAskCount', { maxCodes }));
+        }
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -4258,6 +4319,9 @@ bot.on('message', async msg => {
           } else if (result.reason === 'not_enough_stock') {
             await bot.sendMessage(userId, await getText(userId, 'referralStockNotEnough'));
             await clearUserState(userId);
+          } else if (result.reason === 'no_referrals') {
+            await bot.sendMessage(userId, await getText(userId, 'referralStockAccessDenied'));
+            await clearUserState(userId);
           } else {
             await bot.sendMessage(userId, await getText(userId, 'error'));
           }
@@ -4265,6 +4329,22 @@ bot.on('message', async msg => {
         }
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+
+        const identity = await getTelegramIdentityById(userId);
+        await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'referralClaimAdminNotice', {
+          name: identity.fullName,
+          username: identity.usernameText,
+          id: userId,
+          claimedNow: result.count,
+          claimedBefore: result.claimedBefore,
+          claimedAfter: result.claimedAfter,
+          eligibleNow: result.eligibleNow,
+          points: result.points,
+          adminGranted: result.adminGranted,
+          referrals: result.referralCount,
+          milestoneRewards: result.milestoneRewards
+        })).catch(() => {});
+
         await clearUserState(userId);
         await sendMainMenu(userId);
         return;
