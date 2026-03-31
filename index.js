@@ -328,7 +328,7 @@ const DEFAULT_TEXTS = {
     referralEligibleUsers: '🎁 Eligible Referral Users',
     deductReferralPoints: '➖ Deduct Points',
     referralStockSettings: '📦 Referral ChatGPT Stock',
-    referralStockClaim: '🎁 Referral Compensation',
+    referralStockClaim: '🎁 Referral Prize',
     noReferralEligibleUsers: 'No users currently have referral history with redeemable referral compensation.',
     referralEligibleUsersTitle: 'Eligible referral users:',
     referralEligibleUserLine: 'Name: {name}\nUsername: {username}\nID: {id}\nTotal points: {points}\nGranted by admin: {adminGranted}\nReferral count: {referrals}\nMilestone rewards: {milestoneRewards}\nClaimed codes before: {claimedCodes}\nAvailable now: {redeemableCodes}',
@@ -352,6 +352,21 @@ const DEFAULT_TEXTS = {
     referralStockNoCodesAvailable: '❌ No referral ChatGPT stock available right now.',
     referralClaimAskCount: 'Send the number of referral-stock codes you want to claim. Available by your points: {maxCodes}.',
     botAllowedUsers: '👤 Allowed Users While Bot Stopped',
+    balanceManagement: '💰 Balance Management',
+    usersWithBalance: '👥 Users With Balance',
+    addBalanceAdmin: '➕ Add Balance',
+    deductBalanceAdmin: '➖ Deduct Balance',
+    enterBalanceUserId: 'Send the Telegram user ID:',
+    enterBalanceAmount: 'Send the balance amount in USD:',
+    usersWithBalanceTitle: 'Users with balance:',
+    noUsersWithBalance: 'No users currently have a balance greater than 0.',
+    balanceUserLine: 'Name: {name}\nUsername: {username}\nID: {id}\nBalance: {balance} USD',
+    balanceUserNotFound: '❌ User not found.',
+    balanceAmountInvalid: '❌ Invalid balance amount.',
+    balanceAddedDone: '✅ Added {amount} USD to user {userId}. New balance: {balance} USD',
+    balanceDeductedDone: '✅ Deducted {amount} USD from user {userId}. New balance: {balance} USD',
+    balanceReceivedNotification: '💰 {amount} USD has been added to your balance. New balance: {balance} USD',
+    balanceDeductedNotification: '💰 {amount} USD has been deducted from your balance. New balance: {balance} USD',
     enterAllowedUsers: 'Send allowed Telegram user IDs separated by commas, spaces, or new lines. Send /empty to clear.',
     allowedUsersUpdated: '✅ Allowed users updated.',
     currentAllowedUsers: 'Current allowed IDs: {ids}',
@@ -605,7 +620,7 @@ const DEFAULT_TEXTS = {
     referralEligibleUsers: '🎁 المؤهلون لهدية الإحالة',
     deductReferralPoints: '➖ خصم نقاط',
     referralStockSettings: '📦 مخزون ChatGPT الإحالات',
-    referralStockClaim: '🎁 تعويض الإحالات',
+    referralStockClaim: '🎁 جائزة الإحالات',
     noReferralEligibleUsers: 'لا يوجد حاليًا مستخدمون لديهم إحالات سابقة ورصيد قابل لتعويض الإحالات.',
     referralEligibleUsersTitle: 'المستخدمون المؤهلون:',
     referralEligibleUserLine: 'الاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nإجمالي النقاط: {points}\nتم منحه من الأدمن: {adminGranted}\nعدد الإحالات: {referrals}\nجوائز الإحالات المرحلية: {milestoneRewards}\nتم سحب كودات سابقًا: {claimedCodes}\nالمتاح الآن: {redeemableCodes}',
@@ -629,6 +644,21 @@ const DEFAULT_TEXTS = {
     referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
     referralClaimAskCount: 'أرسل عدد كودات مخزون الإحالات التي تريد استلامها. المتاح حسب نقاطك: {maxCodes}.',
     botAllowedUsers: '👤 المستخدمون المسموح لهم أثناء إيقاف البوت',
+    balanceManagement: '💰 إدارة الرصيد',
+    usersWithBalance: '👥 أصحاب الرصيد',
+    addBalanceAdmin: '➕ إضافة رصيد',
+    deductBalanceAdmin: '➖ سحب رصيد',
+    enterBalanceUserId: 'أرسل آيدي المستخدم:',
+    enterBalanceAmount: 'أرسل مبلغ الرصيد بالدولار:',
+    usersWithBalanceTitle: 'المستخدمون الذين لديهم رصيد:',
+    noUsersWithBalance: 'لا يوجد حاليًا مستخدمون لديهم رصيد أكبر من 0.',
+    balanceUserLine: 'الاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالرصيد: {balance} دولار',
+    balanceUserNotFound: '❌ المستخدم غير موجود.',
+    balanceAmountInvalid: '❌ مبلغ الرصيد غير صالح.',
+    balanceAddedDone: '✅ تمت إضافة {amount} دولار إلى المستخدم {userId}. الرصيد الجديد: {balance} دولار',
+    balanceDeductedDone: '✅ تم سحب {amount} دولار من المستخدم {userId}. الرصيد الجديد: {balance} دولار',
+    balanceReceivedNotification: '💰 تمت إضافة {amount} دولار إلى رصيدك. الرصيد الجديد: {balance} دولار',
+    balanceDeductedNotification: '💰 تم سحب {amount} دولار من رصيدك. الرصيد الجديد: {balance} دولار',
     enterAllowedUsers: 'أرسل آيديات تيليجرام المسموح لهم مفصولة بفواصل أو مسافات أو أسطر. أرسل /empty للحذف.',
     allowedUsersUpdated: '✅ تم تحديث المستخدمين المسموح لهم.',
     currentAllowedUsers: 'الآيديات المسموح لها حاليًا: {ids}',
@@ -1601,6 +1631,7 @@ async function getMenuButtonItems(userId) {
     { id: 'my_balance', name: await getText(userId, 'myBalance') },
     { id: 'deposit', name: await getText(userId, 'deposit') },
     { id: 'referral', name: await getText(userId, 'referral') },
+    { id: 'referral_prize', name: await getText(userId, 'referralStockClaim') },
     { id: 'discount', name: '🎟️ Discount' },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
@@ -1931,25 +1962,25 @@ async function sendMainMenu(userId) {
 
   const visibility = await getMenuButtonsVisibility();
   const order = await getMenuButtonsOrder();
-  const canClaimFreeCode = await canUserClaimFreeCode(userId);
+  const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const buttonLabels = {
     redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
     my_balance: await getText(userId, 'myBalance'),
     deposit: await getText(userId, 'deposit'),
     referral: await getText(userId, 'referral'),
+    referral_prize: await getText(userId, 'referralStockClaim'),
     discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
     chatgpt_code: await getText(userId, 'chatgptCode'),
-    free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
   const buttons = [];
   for (const id of order) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
-    if (id === 'free_code' && !canClaimFreeCode) continue;
+    if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
@@ -2075,6 +2106,18 @@ async function showBotControlAdmin(userId) {
     `${await getText(userId, 'botStatusLine', { status })}\n${await getText(userId, 'currentAllowedUsers', { ids: idsText })}`,
     { reply_markup: keyboard }
   );
+}
+
+async function showBalanceManagementAdmin(userId) {
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'usersWithBalance'), callback_data: 'admin_users_with_balance' }],
+      [{ text: await getText(userId, 'addBalanceAdmin'), callback_data: 'admin_add_balance' }],
+      [{ text: await getText(userId, 'deductBalanceAdmin'), callback_data: 'admin_deduct_balance' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+    ]
+  };
+  await bot.sendMessage(userId, await getText(userId, 'balanceManagement'), { reply_markup: keyboard });
 }
 
 
@@ -2926,15 +2969,9 @@ bot.on('callback_query', async query => {
         ? [[{ text: await getText(userId, 'getFreeCode'), callback_data: 'get_free_code' }]]
         : [];
 
-      const referralCount = await getSuccessfulReferralCount(userId);
-      const compensationRow = (referralCount > 0 && redeemableCodes > 0)
-        ? [[{ text: await getText(userId, 'referralStockClaim'), callback_data: 'referral_stock_claim' }]]
-        : [];
-
       const keyboard = {
         inline_keyboard: [
           [{ text: await getText(userId, 'redeemPoints'), callback_data: 'redeem_points' }],
-          ...compensationRow,
           ...freeCodeButtonRow,
           [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
         ]
@@ -3413,7 +3450,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'referral_stock_claim') {
+    if (data === 'referral_prize' || data === 'referral_stock_claim') {
       const referralCount = await getSuccessfulReferralCount(userId);
       if (referralCount <= 0) {
         await bot.sendMessage(userId, await getText(userId, 'referralStockAccessDenied'));
@@ -3483,6 +3520,52 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_bot_control' && isAdmin(userId)) {
       await showBotControlAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_balance_management' && isAdmin(userId)) {
+      await showBalanceManagementAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_users_with_balance' && isAdmin(userId)) {
+      const users = await User.findAll({
+        where: { balance: { [Op.gt]: 0 } },
+        order: [['balance', 'DESC']],
+        limit: 100
+      });
+      if (!users.length) {
+        await bot.sendMessage(userId, await getText(userId, 'noUsersWithBalance'));
+      } else {
+        let msgText = `${await getText(userId, 'usersWithBalanceTitle')}\n\n`;
+        for (const u of users) {
+          const identity = await getTelegramIdentityById(u.id);
+          msgText += await getText(userId, 'balanceUserLine', {
+            name: identity.fullName,
+            username: identity.usernameText,
+            id: u.id,
+            balance: Number(u.balance || 0).toFixed(2)
+          });
+          msgText += `\n\n`;
+        }
+        await bot.sendMessage(userId, msgText);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_add_balance' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'admin_add_balance', step: 'user_id' });
+      await bot.sendMessage(userId, await getText(userId, 'enterBalanceUserId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_deduct_balance' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'admin_deduct_balance', step: 'user_id' });
+      await bot.sendMessage(userId, await getText(userId, 'enterBalanceUserId'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -4383,6 +4466,115 @@ bot.on('message', async msg => {
         await clearUserState(userId);
         await sendMainMenu(userId);
         return;
+      }
+
+
+      if (state.action === 'admin_add_balance') {
+        if (state.step === 'user_id') {
+          const targetUserId = parseInt(text, 10);
+          if (!Number.isInteger(targetUserId)) {
+            await bot.sendMessage(userId, await getText(userId, 'enterBalanceUserId'));
+            return;
+          }
+          const targetUser = await User.findByPk(targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceUserNotFound'));
+            return;
+          }
+          await setUserState(userId, { action: 'admin_add_balance', step: 'amount', targetUserId });
+          await bot.sendMessage(userId, await getText(userId, 'enterBalanceAmount'));
+          return;
+        }
+
+        if (state.step === 'amount') {
+          const amount = parseFloat(text);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceAmountInvalid'));
+            return;
+          }
+          const targetUser = await User.findByPk(state.targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceUserNotFound'));
+            await clearUserState(userId);
+            await showBalanceManagementAdmin(userId);
+            return;
+          }
+          const newBalance = Number(targetUser.balance || 0) + amount;
+          await User.update({ balance: newBalance }, { where: { id: targetUser.id } });
+          await BalanceTransaction.create({
+            userId: targetUser.id,
+            amount,
+            type: 'admin_balance_add',
+            status: 'completed'
+          });
+          await bot.sendMessage(userId, await getText(userId, 'balanceAddedDone', {
+            amount: amount.toFixed(2),
+            userId: targetUser.id,
+            balance: newBalance.toFixed(2)
+          }));
+          await bot.sendMessage(targetUser.id, await getText(targetUser.id, 'balanceReceivedNotification', {
+            amount: amount.toFixed(2),
+            balance: newBalance.toFixed(2)
+          })).catch(() => {});
+          await clearUserState(userId);
+          await showBalanceManagementAdmin(userId);
+          return;
+        }
+      }
+
+      if (state.action === 'admin_deduct_balance') {
+        if (state.step === 'user_id') {
+          const targetUserId = parseInt(text, 10);
+          if (!Number.isInteger(targetUserId)) {
+            await bot.sendMessage(userId, await getText(userId, 'enterBalanceUserId'));
+            return;
+          }
+          const targetUser = await User.findByPk(targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceUserNotFound'));
+            return;
+          }
+          await setUserState(userId, { action: 'admin_deduct_balance', step: 'amount', targetUserId });
+          await bot.sendMessage(userId, await getText(userId, 'enterBalanceAmount'));
+          return;
+        }
+
+        if (state.step === 'amount') {
+          const amount = parseFloat(text);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceAmountInvalid'));
+            return;
+          }
+          const targetUser = await User.findByPk(state.targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'balanceUserNotFound'));
+            await clearUserState(userId);
+            await showBalanceManagementAdmin(userId);
+            return;
+          }
+          const currentBalance = Number(targetUser.balance || 0);
+          const deductAmount = Math.min(currentBalance, amount);
+          const newBalance = Math.max(0, currentBalance - deductAmount);
+          await User.update({ balance: newBalance }, { where: { id: targetUser.id } });
+          await BalanceTransaction.create({
+            userId: targetUser.id,
+            amount: -deductAmount,
+            type: 'admin_balance_deduct',
+            status: 'completed'
+          });
+          await bot.sendMessage(userId, await getText(userId, 'balanceDeductedDone', {
+            amount: deductAmount.toFixed(2),
+            userId: targetUser.id,
+            balance: newBalance.toFixed(2)
+          }));
+          await bot.sendMessage(targetUser.id, await getText(targetUser.id, 'balanceDeductedNotification', {
+            amount: deductAmount.toFixed(2),
+            balance: newBalance.toFixed(2)
+          })).catch(() => {});
+          await clearUserState(userId);
+          await showBalanceManagementAdmin(userId);
+          return;
+        }
       }
 
       if (state.action === 'grant_points') {
