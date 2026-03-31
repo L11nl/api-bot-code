@@ -367,6 +367,8 @@ const DEFAULT_TEXTS = {
     balanceDeductedDone: '✅ Deducted {amount} USD from user {userId}. New balance: {balance} USD',
     balanceReceivedNotification: '💰 {amount} USD has been added to your balance. New balance: {balance} USD',
     balanceDeductedNotification: '💰 {amount} USD has been deducted from your balance. New balance: {balance} USD',
+    stockClaimAdminShort: '📦 Stock withdrawal\nUser: {name}\nUsername: {username}\nID: {id}\nCount: {count}',
+    balancePurchaseAdminNotice: '💳 Purchase by balance\nUser: {name}\nUsername: {username}\nID: {id}\nMerchant: {merchant}\nQuantity: {qty}\nTotal: {total} USD',
     enterAllowedUsers: 'Send allowed Telegram user IDs separated by commas, spaces, or new lines. Send /empty to clear.',
     allowedUsersUpdated: '✅ Allowed users updated.',
     currentAllowedUsers: 'Current allowed IDs: {ids}',
@@ -659,6 +661,8 @@ const DEFAULT_TEXTS = {
     balanceDeductedDone: '✅ تم سحب {amount} دولار من المستخدم {userId}. الرصيد الجديد: {balance} دولار',
     balanceReceivedNotification: '💰 تمت إضافة {amount} دولار إلى رصيدك. الرصيد الجديد: {balance} دولار',
     balanceDeductedNotification: '💰 تم سحب {amount} دولار من رصيدك. الرصيد الجديد: {balance} دولار',
+    stockClaimAdminShort: '📦 تم السحب من المخزون\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}',
+    balancePurchaseAdminNotice: '💳 شراء بواسطة الرصيد\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالتاجر: {merchant}\nالكمية: {qty}\nالإجمالي: {total} دولار',
     enterAllowedUsers: 'أرسل آيديات تيليجرام المسموح لهم مفصولة بفواصل أو مسافات أو أسطر. أرسل /empty للحذف.',
     allowedUsersUpdated: '✅ تم تحديث المستخدمين المسموح لهم.',
     currentAllowedUsers: 'الآيديات المسموح لها حاليًا: {ids}',
@@ -2012,6 +2016,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
       [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
       [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
+      [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
       [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
       [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
@@ -4461,6 +4466,13 @@ bot.on('message', async msg => {
           adminGranted: result.adminGranted,
           referrals: result.referralCount,
           milestoneRewards: result.milestoneRewards
+        })).catch(() => {});
+
+        await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'stockClaimAdminShort', {
+          name: identity.fullName,
+          username: identity.usernameText,
+          id: userId,
+          count: result.count
         })).catch(() => {});
 
         await clearUserState(userId);
