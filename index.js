@@ -39,6 +39,7 @@ const User = sequelize.define('User', {
   freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
   lastFreeCodeClaimAt: { type: DataTypes.DATE, allowNull: true },
   creatorDiscountPercent: { type: DataTypes.INTEGER, defaultValue: 0 },
+  adminGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
   totalPurchases: { type: DataTypes.INTEGER, defaultValue: 0 },
   verified: { type: DataTypes.BOOLEAN, defaultValue: false },
   referralRewarded: { type: DataTypes.BOOLEAN, defaultValue: false }
@@ -96,6 +97,7 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   caption: { type: DataTypes.TEXT, allowNull: true },
   status: { type: DataTypes.STRING, defaultValue: 'pending' },
   adminMessageId: { type: DataTypes.BIGINT, allowNull: true },
+  lastReminderAt: { type: DataTypes.DATE, allowNull: true },
   createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
@@ -317,23 +319,47 @@ const DEFAULT_TEXTS = {
     currentReferralPercent: 'Current referral reward percentage: {percent}%',
     currentFreeCodeDays: 'Free-code cooldown: {days} day(s)',
     grantCreatorDiscount: '🎟️ Grant Creator Discount',
+    editReferralMilestones: '🎯 Edit Referral Milestone Rewards',
+    enterReferralMilestones: 'Send milestone rewards in this format:\n15:5,40:5,80:10,150:30',
+    referralMilestonesUpdated: '✅ Referral milestone rewards updated.',
+    currentReferralMilestones: 'Current milestone rewards: {milestones}',
+    quantityDiscountSettings: '💸 Quantity Discount Settings',
+    setBulkDiscountThreshold: '📦 Set Discount Quantity',
+    setBulkDiscountPrice: '💵 Set Price After Discount',
+    enterBulkDiscountThreshold: 'Send the quantity at which the discount starts:',
+    enterBulkDiscountPrice: 'Send the new per-code price after discount (USD):',
+    currentBulkDiscountThreshold: 'Discount starts from quantity: {threshold}',
+    currentBulkDiscountPrice: 'Price after discount: {price} USD per code',
+    quantityDiscountSettingsText: '💸 Quantity Discount Settings\n\n{thresholdLine}\n{priceLine}',
+    bulkDiscountSettingsUpdated: '✅ Quantity discount settings updated.',
+    botControl: '🤖 Bot Control',
+    botStatusLine: 'Current bot status: {status}',
+    botEnabledStatus: '✅ Running',
+    botDisabledStatus: '⛔ Stopped',
+    enableBot: '✅ Turn Bot On',
+    disableBot: '⛔ Turn Bot Off',
+    botTurnedOn: '✅ Bot enabled for users.',
+    botTurnedOff: '⛔ Bot stopped for users.',
+    botPausedMessage: '⛔ The bot is temporarily stopped. Please try again later.',
+    depositReminderPending: '⏰ Pending deposit reminder\nUser ID: {userId}\nAmount: {amount} {currency}',
+    grantPointsDoneDetailed: '✅ Points granted successfully.\n\nUser ID: {userId}\nUsername: {username}\nName: {name}\nGranted now: {points}\nTotal points: {total}\nAdmin-granted points: {adminGranted}\nReferral count: {referrals}\nReferral rewards points: {milestoneRewards}',
     enterCreatorDiscountUserId: 'Send the Telegram user ID of the creator:',
     enterCreatorDiscountPercent: 'Send the discount percent for referral redemption (0-100):',
     creatorDiscountUserNotFound: '❌ User not found.',
     creatorDiscountUpdated: '✅ Creator discount for user {userId} updated to {percent}%. Effective required points: {requiredPoints}.',
     creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
     currentCreatorDiscount: 'Your creator discount: {percent}%',
-    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}',
+    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}',
     chatgptCode: '🤖 ChatGPT Code',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
-    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.\n\n🔥 Quantity discount: if you buy 50 codes or more, the price becomes 1 USD per code.',
+    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.',
     enterEmailForPurchase: 'Enter your email to receive the code:',
     purchaseSuccess: '✅ Purchase successful! Here are your ChatGPT GO code(s):\n\n{code}',
     insufficientBalance: '❌ Insufficient balance. Your balance: {balance} USD. Price per code: {price} USD\n\nYou need: {needed} USD to get this quantity of codes.',
     depositNow: '💳 Deposit Balance',
-    bulkDiscountInfo: '🔥 Quantity discount: if you buy 50 codes or more, the price becomes 1 USD per code.',
+    bulkDiscountInfo: '🔥 Quantity discount: if you buy {threshold} codes or more, the price becomes {price} USD per code.',
     referralMilestoneBonus: '🎁 Referral milestone reached! You received {bonus} bonus points. Total points: {points}',
     invalidQuantity: '❌ Invalid quantity. Please send a valid positive number.',
     mustJoinChannel: '🔒 Please join our channel first\n\n{message}\n\nThen press the check button.',
@@ -402,7 +428,7 @@ const DEFAULT_TEXTS = {
     pendingDeposits: '⏳ Pending deposits: {count}',
     sendReply: 'Send your message:',
     supportMessageSent: '📨 Your message has been sent to support. You will receive a reply soon.',
-    supportNotification: '📩 New support message from user {userId}:\n\n{message}',
+    supportNotification: '📩 New support message\n\nUsername: {username}\nName: {name}\nUser ID: {userId}\n\nMessage: {message}',
     replyToSupport: 'Reply to this user:',
     replyMessage: 'Your reply from support:'
   },
@@ -540,23 +566,47 @@ const DEFAULT_TEXTS = {
     currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
     currentFreeCodeDays: 'مدة ظهور الكود المجاني: {days} يوم',
     grantCreatorDiscount: '🎟️ منح خصم لصانع محتوى',
+    editReferralMilestones: '🎯 تعديل مكافآت الإحالة المرحلية',
+    enterReferralMilestones: 'أرسل مكافآت الإحالة بهذا الشكل:\n15:5,40:5,80:10,150:30',
+    referralMilestonesUpdated: '✅ تم تحديث مكافآت الإحالة المرحلية.',
+    currentReferralMilestones: 'مكافآت الإحالة المرحلية الحالية: {milestones}',
+    quantityDiscountSettings: '💸 إعدادات خصم الكمية',
+    setBulkDiscountThreshold: '📦 تعيين كمية الخصم',
+    setBulkDiscountPrice: '💵 تعيين السعر بعد الخصم',
+    enterBulkDiscountThreshold: 'أرسل الكمية التي يبدأ عندها الخصم:',
+    enterBulkDiscountPrice: 'أرسل سعر الكود بعد الخصم بالدولار:',
+    currentBulkDiscountThreshold: 'يبدأ الخصم من كمية: {threshold}',
+    currentBulkDiscountPrice: 'السعر بعد الخصم: {price} دولار لكل كود',
+    quantityDiscountSettingsText: '💸 إعدادات خصم الكمية\n\n{thresholdLine}\n{priceLine}',
+    bulkDiscountSettingsUpdated: '✅ تم تحديث إعدادات خصم الكمية.',
+    botControl: '🤖 التحكم بالبوت',
+    botStatusLine: 'حالة البوت الحالية: {status}',
+    botEnabledStatus: '✅ يعمل',
+    botDisabledStatus: '⛔ متوقف',
+    enableBot: '✅ تشغيل البوت',
+    disableBot: '⛔ إيقاف البوت',
+    botTurnedOn: '✅ تم تشغيل البوت للمستخدمين.',
+    botTurnedOff: '⛔ تم إيقاف البوت للمستخدمين.',
+    botPausedMessage: '⛔ البوت متوقف مؤقتًا. حاول لاحقًا.',
+    depositReminderPending: '⏰ تذكير بوجود طلب شحن معلق\nايدي المستخدم: {userId}\nالمبلغ: {amount} {currency}',
+    grantPointsDoneDetailed: '✅ تم منح النقاط بنجاح.\n\nايدي المستخدم: {userId}\nالمعرف: {username}\nالاسم: {name}\nتم منحه الآن: {points}\nإجمالي نقاطه: {total}\nإجمالي ما منحه الأدمن: {adminGranted}\nعدد إحالاته: {referrals}\nنقاط جوائز الإحالات: {milestoneRewards}',
     enterCreatorDiscountUserId: 'أرسل آيدي صانع المحتوى:',
     enterCreatorDiscountPercent: 'أرسل نسبة الخصم لاستبدال النقاط (من 0 إلى 100):',
     creatorDiscountUserNotFound: '❌ المستخدم غير موجود.',
     creatorDiscountUpdated: '✅ تم تحديث خصم المستخدم {userId} إلى {percent}%. عدد النقاط المطلوب الآن لكل كود: {requiredPoints}.',
     creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
-    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}',
+    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}',
     chatgptCode: '🤖 كود ChatGPT',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
-    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.\n\n🔥 خصم على الكمية: إذا اشتريت 50 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
+    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.',
     enterEmailForPurchase: 'أدخل بريدك الإلكتروني لاستلام الكود:',
     purchaseSuccess: '✅ تم الشراء بنجاح! إليك كودات ChatGPT GO:\n\n{code}',
     insufficientBalance: '❌ رصيد غير كاف. رصيدك: {balance} دولار. سعر الكود: {price} دولار\n\nتحتاج إلى: {needed} دولار كي يمكنك الحصول على هذا العدد من الكودات',
     depositNow: '💳 شحن الرصيد',
-    bulkDiscountInfo: '🔥 خصم على الكمية: إذا اشتريت 50 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
+    bulkDiscountInfo: '🔥 خصم على الكمية: إذا اشتريت {threshold} كودًا أو أكثر يصبح سعر الكود الواحد {price} دولار.',
     referralMilestoneBonus: '🎁 تم تحقيق مستوى إحالة جديد! حصلت على {bonus} نقاط إضافية. مجموع نقاطك الآن: {points}',
     invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقمًا موجبًا صحيحًا.',
     mustJoinChannel: '🔒 يرجى الاشتراك في القناة أولاً\n\n{message}\n\nثم اضغط زر التحقق.',
@@ -605,7 +655,7 @@ const DEFAULT_TEXTS = {
     pendingDeposits: '⏳ شحنات معلقة: {count}',
     sendReply: 'أرسل رسالتك:',
     supportMessageSent: '📨 تم إرسال رسالتك إلى الدعم الفني. ستتلقى رداً قريباً.',
-    supportNotification: '📩 رسالة دعم جديدة من المستخدم {userId}:\n\n{message}',
+    supportNotification: '📩 رسالة دعم جديدة\n\nالمعرف: {username}\nالاسم: {name}\nايدي المستخدم: {userId}\n\nالرسالة: {message}',
     replyToSupport: 'رد على هذا المستخدم:',
     replyMessage: 'ردك من الدعم الفني:'
   }
@@ -720,6 +770,66 @@ async function getFreeCodeCooldownDays() {
   return Number.isInteger(value) && value > 0 ? value : 5;
 }
 
+async function getBotEnabled() {
+  const rawValue = await getGlobalSetting('bot_enabled', 'true');
+  return String(rawValue).toLowerCase() !== 'false';
+}
+
+async function getBulkDiscountThreshold() {
+  const rawValue = await getGlobalSetting('bulk_discount_threshold', '50');
+  const value = parseInt(rawValue, 10);
+  return Number.isInteger(value) && value > 0 ? value : 50;
+}
+
+async function getBulkDiscountPrice() {
+  const rawValue = await getGlobalSetting('bulk_discount_price', '1');
+  const value = parseFloat(rawValue);
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+async function getBulkDiscountInfoText(userId) {
+  const threshold = await getBulkDiscountThreshold();
+  const price = await getBulkDiscountPrice();
+  return getText(userId, 'bulkDiscountInfo', { threshold, price });
+}
+
+async function getReferralMilestones() {
+  const rawValue = await getGlobalSetting('referral_milestones', '15:5,40:5,80:10,150:30');
+  const parsed = {};
+  for (const part of String(rawValue).split(',')) {
+    const [referralsStr, pointsStr] = part.split(':').map(v => String(v || '').trim());
+    const referrals = parseInt(referralsStr, 10);
+    const points = parseInt(pointsStr, 10);
+    if (Number.isInteger(referrals) && referrals > 0 && Number.isInteger(points) && points > 0) {
+      parsed[referrals] = points;
+    }
+  }
+  if (!Object.keys(parsed).length) {
+    return { 15: 5, 40: 5, 80: 10, 150: 30 };
+  }
+  return parsed;
+}
+
+async function getReferralMilestonesText() {
+  const milestones = await getReferralMilestones();
+  return Object.entries(milestones)
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([count, bonus]) => `${count}:${bonus}`)
+    .join(', ');
+}
+
+async function getReferralMilestoneBonus(referralCount) {
+  const milestones = await getReferralMilestones();
+  return Number(milestones[String(referralCount)] || 0);
+}
+
+async function getCumulativeReferralMilestonePoints(referralCount) {
+  const milestones = await getReferralMilestones();
+  return Object.entries(milestones)
+    .filter(([count]) => Number(referralCount) >= Number(count))
+    .reduce((sum, [, bonus]) => sum + Number(bonus || 0), 0);
+}
+
 async function getEffectiveRedeemPointsForUser(userId) {
   const basePoints = await getReferralRedeemPoints();
   const user = await User.findByPk(userId);
@@ -751,22 +861,15 @@ function formatCodesForHtml(codeTextOrArray) {
   return codes.map(code => `<code>${escapeHtml(code)}</code>`).join('\n\n');
 }
 
-function getPerCodePriceForQuantity(basePrice, quantity) {
+async function getPerCodePriceForQuantity(basePrice, quantity) {
   const safeBasePrice = parseFloat(basePrice) || 0;
   const safeQty = parseInt(quantity, 10) || 0;
-  if (safeQty >= 50 && safeBasePrice > 1) return 1;
+  const threshold = await getBulkDiscountThreshold();
+  const discountPrice = await getBulkDiscountPrice();
+  if (safeQty >= threshold && safeBasePrice > discountPrice) return discountPrice;
   return safeBasePrice;
 }
 
-function getReferralMilestoneBonus(referralCount) {
-  const milestones = {
-    15: 5,
-    40: 5,
-    80: 10,
-    150: 30
-  };
-  return milestones[referralCount] || 0;
-}
 
 function formatDateParts(date) {
   const d = new Date(date);
@@ -1095,7 +1198,7 @@ async function awardReferralPoints(referredUserId) {
       transaction: t
     });
 
-    const milestoneBonus = getReferralMilestoneBonus(rewardedReferralCount);
+    const milestoneBonus = await getReferralMilestoneBonus(rewardedReferralCount);
     if (milestoneBonus > 0) {
       await User.increment(
         { referralPoints: milestoneBonus },
@@ -1658,6 +1761,8 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
       [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
       [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
+      [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
+      [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
       [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
       [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
@@ -1671,15 +1776,18 @@ async function showReferralSettingsAdmin(userId) {
   const percent = await getReferralPercent();
   const redeemPoints = await getReferralRedeemPoints();
   const freeCodeDays = await getFreeCodeCooldownDays();
+  const milestonesText = await getReferralMilestonesText();
   const percentLine = await getText(userId, 'currentReferralPercent', { percent });
   const pointsLine = await getText(userId, 'currentRedeemPoints', { points: redeemPoints });
   const freeCodeDaysLine = await getText(userId, 'currentFreeCodeDays', { days: freeCodeDays });
+  const milestonesLine = await getText(userId, 'currentReferralMilestones', { milestones: milestonesText });
 
   const keyboard = {
     inline_keyboard: [
       [{ text: await getText(userId, 'setReferralPercent'), callback_data: 'admin_set_referral_percent' }],
       [{ text: await getText(userId, 'setRedeemPoints'), callback_data: 'admin_set_redeem_points' }],
       [{ text: await getText(userId, 'setFreeCodeDays'), callback_data: 'admin_set_free_code_days' }],
+      [{ text: await getText(userId, 'editReferralMilestones'), callback_data: 'admin_edit_referral_milestones' }],
       [{ text: await getText(userId, 'grantPoints'), callback_data: 'admin_grant_points' }],
       [{ text: await getText(userId, 'grantCreatorDiscount'), callback_data: 'admin_grant_creator_discount' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
@@ -1688,10 +1796,43 @@ async function showReferralSettingsAdmin(userId) {
 
   await bot.sendMessage(
     userId,
-    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine, freeCodeDaysLine }),
+    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine, freeCodeDaysLine, milestonesLine }),
     { reply_markup: keyboard }
   );
 }
+
+
+async function showQuantityDiscountSettingsAdmin(userId) {
+  const threshold = await getBulkDiscountThreshold();
+  const price = await getBulkDiscountPrice();
+  const thresholdLine = await getText(userId, 'currentBulkDiscountThreshold', { threshold });
+  const priceLine = await getText(userId, 'currentBulkDiscountPrice', { price });
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'setBulkDiscountThreshold'), callback_data: 'admin_set_bulk_discount_threshold' }],
+      [{ text: await getText(userId, 'setBulkDiscountPrice'), callback_data: 'admin_set_bulk_discount_price' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+    ]
+  };
+  await bot.sendMessage(
+    userId,
+    await getText(userId, 'quantityDiscountSettingsText', { thresholdLine, priceLine }),
+    { reply_markup: keyboard }
+  );
+}
+
+async function showBotControlAdmin(userId) {
+  const enabled = await getBotEnabled();
+  const status = await getText(userId, enabled ? 'botEnabledStatus' : 'botDisabledStatus');
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, enabled ? 'disableBot' : 'enableBot'), callback_data: 'admin_toggle_bot_enabled' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+    ]
+  };
+  await bot.sendMessage(userId, await getText(userId, 'botStatusLine', { status }), { reply_markup: keyboard });
+}
+
 
 async function showChannelConfigAdmin(userId) {
   const config = await getChannelConfig();
@@ -1759,7 +1900,7 @@ async function showMerchantsForBuy(userId) {
   buttons.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
   const chooseText = `${await getText(userId, 'chooseMerchant')}
 
-${await getText(userId, 'bulkDiscountInfo')}`;
+${await getBulkDiscountInfoText(userId)}`;
   await bot.sendMessage(userId, chooseText, {
     reply_markup: { inline_keyboard: buttons }
   });
@@ -1917,7 +2058,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
   const merchant = await Merchant.findByPk(merchantId);
   if (!merchant) return { success: false, reason: 'Merchant not found' };
 
-  const unitPrice = getPerCodePriceForQuantity(merchant.price, quantity);
+  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
   let totalCost = unitPrice * quantity;
   let discountPercent = 0;
   if (discountCode) {
@@ -1979,6 +2120,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
 }
 
 async function requestDeposit(userId, amount, currency, message, imageFileId = null, tgUser = null) {
+  const now = new Date();
   const deposit = await BalanceTransaction.create({
     userId,
     amount,
@@ -1986,7 +2128,8 @@ async function requestDeposit(userId, amount, currency, message, imageFileId = n
     status: 'pending',
     imageFileId,
     caption: message,
-    txid: currency
+    txid: currency,
+    lastReminderAt: now
   });
 
   const config = await getDepositConfig(currency);
@@ -2013,11 +2156,13 @@ async function requestDeposit(userId, amount, currency, message, imageFileId = n
     `اليوم: ${parts.day}\n` +
     `الساعة: ${parts.hour}:${parts.minute}:${parts.second}`;
 
+  let receiptMsg;
   if (imageFileId) {
-    await bot.sendPhoto(ADMIN_ID, imageFileId, { caption: notifText });
+    receiptMsg = await bot.sendPhoto(ADMIN_ID, imageFileId, { caption: notifText });
   } else {
-    await bot.sendMessage(ADMIN_ID, notifText);
+    receiptMsg = await bot.sendMessage(ADMIN_ID, notifText);
   }
+  await bot.pinChatMessage(ADMIN_ID, receiptMsg.message_id, { disable_notification: true }).catch(() => {});
 
   const adminMsg = await bot.sendMessage(
     ADMIN_ID,
@@ -2204,7 +2349,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   if (!isFree) {
     merchant = await getOrCreateChatGptMerchant();
-    price = getPerCodePriceForQuantity(merchant.price, safeQuantity);
+    price = await getPerCodePriceForQuantity(merchant.price, safeQuantity);
     const userObj = await User.findByPk(userId);
     currentBalance = parseFloat(userObj.balance);
 
@@ -2269,6 +2414,10 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     const isActuallyNewUser = !existedBeforeStart;
 
     const currentUser = await findOrCreateUser(userId);
+    if (!isAdmin(userId) && !(await getBotEnabled())) {
+      await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
+      return;
+    }
     const tgUser = msg.from || {};
     const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
     const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
@@ -2364,6 +2513,12 @@ bot.on('callback_query', async query => {
 
   try {
     await findOrCreateUser(userId);
+
+    if (!isAdmin(userId) && !(await getBotEnabled())) {
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.sendMessage(userId, await getText(userId, 'botPausedMessage')).catch(() => {});
+      return;
+    }
 
     if (data.startsWith('lang_')) {
       const newLang = data.split('_')[1];
@@ -2719,7 +2874,7 @@ bot.on('callback_query', async query => {
       const currentState = safeParseState((await User.findByPk(userId)).state);
       const discountCode = currentState?.discountCode || null;
       await setUserState(userId, { action: 'buy', merchantId, discountCode });
-      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getText(userId, 'bulkDiscountInfo')}`);
+      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getBulkDiscountInfoText(userId)}`);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -2941,6 +3096,48 @@ bot.on('callback_query', async query => {
     if (data === 'admin_set_free_code_days' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_free_code_days' });
       await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeDays'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_edit_referral_milestones' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'edit_referral_milestones' });
+      await bot.sendMessage(userId, await getText(userId, 'enterReferralMilestones'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_quantity_discount_settings' && isAdmin(userId)) {
+      await showQuantityDiscountSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_bulk_discount_threshold' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_bulk_discount_threshold' });
+      await bot.sendMessage(userId, await getText(userId, 'enterBulkDiscountThreshold'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_bulk_discount_price' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_bulk_discount_price' });
+      await bot.sendMessage(userId, await getText(userId, 'enterBulkDiscountPrice'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_bot_control' && isAdmin(userId)) {
+      await showBotControlAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_bot_enabled' && isAdmin(userId)) {
+      const enabled = await getBotEnabled();
+      await Setting.upsert({ key: 'bot_enabled', lang: 'global', value: enabled ? 'false' : 'true' });
+      await bot.sendMessage(userId, await getText(userId, enabled ? 'botTurnedOff' : 'botTurnedOn'));
+      await showBotControlAdmin(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3176,7 +3373,7 @@ bot.on('callback_query', async query => {
 
     if (data === 'chatgpt_code') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-      await bot.sendMessage(userId, await getText(userId, 'askQuantity'));
+      await bot.sendMessage(userId, `${await getText(userId, 'askQuantity')}\n\n${await getBulkDiscountInfoText(userId)}`);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3197,6 +3394,10 @@ bot.on('message', async msg => {
   try {
     const user = await User.findByPk(userId);
     if (!user) return;
+    if (!isAdmin(userId) && !(await getBotEnabled())) {
+      await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
+      return;
+    }
     let state = safeParseState(user.state);
 
     const verificationRequired = await isVerificationRequiredForUser(userId);
@@ -3318,7 +3519,12 @@ bot.on('message', async msg => {
       const targetAdminId = state.targetAdminId;
       const supportText = text || '';
       const photoFileId = photo ? photo[photo.length - 1].file_id : null;
-      const notifText = await getText(targetAdminId, 'supportNotification', { userId, message: supportText });
+      const notifText = await getText(targetAdminId, 'supportNotification', {
+        userId,
+        username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
+        name: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد',
+        message: supportText || 'No message'
+      });
       if (photoFileId) {
         await bot.sendPhoto(targetAdminId, photoFileId, { caption: notifText });
       } else {
@@ -3622,6 +3828,58 @@ bot.on('message', async msg => {
         return;
       }
 
+
+      if (state.action === 'edit_referral_milestones') {
+        const raw = String(text || '').trim();
+        const parsedPairs = raw.split(',').map(part => part.trim()).filter(Boolean);
+        const normalized = [];
+        for (const pair of parsedPairs) {
+          const [countStr, bonusStr] = pair.split(':').map(v => String(v || '').trim());
+          const count = parseInt(countStr, 10);
+          const bonus = parseInt(bonusStr, 10);
+          if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(bonus) || bonus <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'enterReferralMilestones'));
+            return;
+          }
+          normalized.push(`${count}:${bonus}`);
+        }
+        if (!normalized.length) {
+          await bot.sendMessage(userId, await getText(userId, 'enterReferralMilestones'));
+          return;
+        }
+        await Setting.upsert({ key: 'referral_milestones', lang: 'global', value: normalized.join(',') });
+        await bot.sendMessage(userId, await getText(userId, 'referralMilestonesUpdated'));
+        await clearUserState(userId);
+        await showReferralSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_bulk_discount_threshold') {
+        const threshold = parseInt(text, 10);
+        if (!Number.isInteger(threshold) || threshold <= 0) {
+          await bot.sendMessage(userId, await getText(userId, 'enterBulkDiscountThreshold'));
+          return;
+        }
+        await Setting.upsert({ key: 'bulk_discount_threshold', lang: 'global', value: String(threshold) });
+        await bot.sendMessage(userId, await getText(userId, 'bulkDiscountSettingsUpdated'));
+        await clearUserState(userId);
+        await showQuantityDiscountSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_bulk_discount_price') {
+        const price = parseFloat(text);
+        if (!Number.isFinite(price) || price <= 0) {
+          await bot.sendMessage(userId, await getText(userId, 'enterBulkDiscountPrice'));
+          return;
+        }
+        await Setting.upsert({ key: 'bulk_discount_price', lang: 'global', value: String(price) });
+        await bot.sendMessage(userId, await getText(userId, 'bulkDiscountSettingsUpdated'));
+        await clearUserState(userId);
+        await showQuantityDiscountSettingsAdmin(userId);
+        return;
+      }
+
       if (state.action === 'set_referral_percent') {
         const percent = parseFloat(text);
         if (Number.isNaN(percent)) {
@@ -3697,14 +3955,24 @@ bot.on('message', async msg => {
           }
 
           targetUser.referralPoints = (targetUser.referralPoints || 0) + points;
+          targetUser.adminGrantedPoints = (targetUser.adminGrantedPoints || 0) + points;
           await targetUser.save();
+
+          const refIdentity = await getTelegramIdentityById(targetUser.id);
+          const referralCount = await User.count({ where: { referredBy: targetUser.id, referralRewarded: true } });
+          const milestoneRewards = await getCumulativeReferralMilestonePoints(referralCount);
 
           await bot.sendMessage(
             userId,
-            await getText(userId, 'grantPointsDone', {
+            await getText(userId, 'grantPointsDoneDetailed', {
               userId: targetUser.id,
+              username: refIdentity.usernameText,
+              name: refIdentity.fullName,
               points,
-              total: targetUser.referralPoints
+              total: targetUser.referralPoints,
+              adminGranted: targetUser.adminGrantedPoints || 0,
+              referrals: referralCount,
+              milestoneRewards
             })
           );
 
@@ -3935,7 +4203,12 @@ bot.on('message', async msg => {
     if (state?.action === 'support') {
       const supportText = text || '';
       const photoFileId = photo ? photo[photo.length - 1].file_id : null;
-      const notifText = await getText(ADMIN_ID, 'supportNotification', { userId, message: supportText });
+      const notifText = await getText(ADMIN_ID, 'supportNotification', {
+        userId,
+        username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
+        name: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد',
+        message: supportText || 'No message'
+      });
       if (photoFileId) {
         await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText });
       } else {
