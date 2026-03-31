@@ -2200,6 +2200,7 @@ async function approveDeposit(depositId, adminId) {
     await bot.sendMessage(deposit.userId, await getText(deposit.userId, 'depositSuccess', {
       balance: newBalance.toFixed(2)
     }));
+    await bot.unpinChatMessage(ADMIN_ID).catch(() => {});
     return true;
   } catch (err) {
     await t.rollback();
@@ -2215,6 +2216,7 @@ async function rejectDeposit(depositId, adminId) {
   deposit.status = 'rejected';
   await deposit.save();
   await bot.sendMessage(deposit.userId, await getText(deposit.userId, 'depositRejected'));
+  await bot.unpinChatMessage(ADMIN_ID).catch(() => {});
   return true;
 }
 
