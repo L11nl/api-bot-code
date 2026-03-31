@@ -328,10 +328,13 @@ const DEFAULT_TEXTS = {
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
-    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.',
+    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.\n\n🔥 Quantity discount: if you buy 50 codes or more, the price becomes 1 USD per code.',
     enterEmailForPurchase: 'Enter your email to receive the code:',
     purchaseSuccess: '✅ Purchase successful! Here are your ChatGPT GO code(s):\n\n{code}',
-    insufficientBalance: '❌ Insufficient balance. Your balance: {balance} USD. Price per code: {price} USD.',
+    insufficientBalance: '❌ Insufficient balance. Your balance: {balance} USD. Price per code: {price} USD\n\nYou need: {needed} USD to get this quantity of codes.',
+    depositNow: '💳 Deposit Balance',
+    bulkDiscountInfo: '🔥 Quantity discount: if you buy 50 codes or more, the price becomes 1 USD per code.',
+    referralMilestoneBonus: '🎁 Referral milestone reached! You received {bonus} bonus points. Total points: {points}',
     invalidQuantity: '❌ Invalid quantity. Please send a valid positive number.',
     mustJoinChannel: '🔒 Please join our channel first\n\n{message}\n\nThen press the check button.',
     joinChannel: '📢 Join Channel',
@@ -548,10 +551,13 @@ const DEFAULT_TEXTS = {
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
-    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.',
+    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.\n\n🔥 خصم على الكمية: إذا اشتريت 50 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
     enterEmailForPurchase: 'أدخل بريدك الإلكتروني لاستلام الكود:',
     purchaseSuccess: '✅ تم الشراء بنجاح! إليك كودات ChatGPT GO:\n\n{code}',
-    insufficientBalance: '❌ رصيد غير كاف. رصيدك: {balance} دولار. سعر الكود: {price} دولار.',
+    insufficientBalance: '❌ رصيد غير كاف. رصيدك: {balance} دولار. سعر الكود: {price} دولار\n\nتحتاج إلى: {needed} دولار كي يمكنك الحصول على هذا العدد من الكودات',
+    depositNow: '💳 شحن الرصيد',
+    bulkDiscountInfo: '🔥 خصم على الكمية: إذا اشتريت 50 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
+    referralMilestoneBonus: '🎁 تم تحقيق مستوى إحالة جديد! حصلت على {bonus} نقاط إضافية. مجموع نقاطك الآن: {points}',
     invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقمًا موجبًا صحيحًا.',
     mustJoinChannel: '🔒 يرجى الاشتراك في القناة أولاً\n\n{message}\n\nثم اضغط زر التحقق.',
     joinChannel: '📢 اشترك الآن',
@@ -743,6 +749,23 @@ function formatCodesForHtml(codeTextOrArray) {
     ? codeTextOrArray
     : String(codeTextOrArray || '').split(/\n\n+/).filter(Boolean);
   return codes.map(code => `<code>${escapeHtml(code)}</code>`).join('\n\n');
+}
+
+function getPerCodePriceForQuantity(basePrice, quantity) {
+  const safeBasePrice = parseFloat(basePrice) || 0;
+  const safeQty = parseInt(quantity, 10) || 0;
+  if (safeQty >= 50 && safeBasePrice > 1) return 1;
+  return safeBasePrice;
+}
+
+function getReferralMilestoneBonus(referralCount) {
+  const milestones = {
+    15: 5,
+    40: 5,
+    80: 10,
+    150: 30
+  };
+  return milestones[referralCount] || 0;
 }
 
 function formatDateParts(date) {
@@ -1064,12 +1087,40 @@ async function awardReferralPoints(referredUserId) {
       }
     );
 
+    const rewardedReferralCount = await User.count({
+      where: {
+        referredBy: referrer.id,
+        referralRewarded: true
+      },
+      transaction: t
+    });
+
+    const milestoneBonus = getReferralMilestoneBonus(rewardedReferralCount);
+    if (milestoneBonus > 0) {
+      await User.increment(
+        { referralPoints: milestoneBonus },
+        {
+          where: { id: referrer.id },
+          transaction: t
+        }
+      );
+    }
+
     await t.commit();
 
     const updatedReferrer = await User.findByPk(referrer.id);
+    const updatedPoints = Number(updatedReferrer?.referralPoints || 0);
+
     await bot.sendMessage(referrer.id, await getText(referrer.id, 'referralEarned', {
-      points: Number(updatedReferrer?.referralPoints || 0)
+      points: updatedPoints
     }));
+
+    if (milestoneBonus > 0) {
+      await bot.sendMessage(referrer.id, await getText(referrer.id, 'referralMilestoneBonus', {
+        bonus: milestoneBonus,
+        points: updatedPoints
+      }));
+    }
 
     return true;
   } catch (err) {
@@ -1706,7 +1757,10 @@ async function showMerchantsForBuy(userId) {
   }
 
   buttons.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
-  await bot.sendMessage(userId, await getText(userId, 'chooseMerchant'), {
+  const chooseText = `${await getText(userId, 'chooseMerchant')}
+
+${await getText(userId, 'bulkDiscountInfo')}`;
+  await bot.sendMessage(userId, chooseText, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
@@ -1863,7 +1917,8 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
   const merchant = await Merchant.findByPk(merchantId);
   if (!merchant) return { success: false, reason: 'Merchant not found' };
 
-  let totalCost = merchant.price * quantity;
+  const unitPrice = getPerCodePriceForQuantity(merchant.price, quantity);
+  let totalCost = unitPrice * quantity;
   let discountPercent = 0;
   if (discountCode) {
     const disc = await applyDiscount(discountCode, totalCost);
@@ -1876,7 +1931,15 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
   if (!user) return { success: false, reason: 'User not found' };
 
   const currentBalance = parseFloat(user.balance);
-  if (currentBalance < totalCost) return { success: false, reason: 'Insufficient balance' };
+  if (currentBalance < totalCost) {
+    return {
+      success: false,
+      reason: 'Insufficient balance',
+      balance: currentBalance,
+      price: unitPrice,
+      totalCost
+    };
+  }
 
   const codes = await Code.findAll({
     where: { merchantId, isUsed: false },
@@ -1907,7 +1970,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
 
     await t.commit();
     const codesText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
-    return { success: true, codes: codesText, discountApplied: discountPercent };
+    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost };
   } catch (err) {
     await t.rollback();
     console.error('Purchase transaction error:', err);
@@ -2141,7 +2204,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   if (!isFree) {
     merchant = await getOrCreateChatGptMerchant();
-    price = parseFloat(merchant.price);
+    price = getPerCodePriceForQuantity(merchant.price, safeQuantity);
     const userObj = await User.findByPk(userId);
     currentBalance = parseFloat(userObj.balance);
 
@@ -2656,7 +2719,7 @@ bot.on('callback_query', async query => {
       const currentState = safeParseState((await User.findByPk(userId)).state);
       const discountCode = currentState?.discountCode || null;
       await setUserState(userId, { action: 'buy', merchantId, discountCode });
-      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}`);
+      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getText(userId, 'bulkDiscountInfo')}`);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3928,7 +3991,7 @@ bot.on('message', async msg => {
         const userObj = await User.findByPk(userId);
         if (userObj.referredBy) {
           const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
-          const rewardAmount = (merchant.price * qty) * referralPercent / 100;
+          const rewardAmount = Number(result.totalCost || (merchant.price * qty)) * referralPercent / 100;
           const referrer = await User.findByPk(userObj.referredBy);
           if (referrer) {
             await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
@@ -3936,6 +3999,20 @@ bot.on('message', async msg => {
             await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
           }
         }
+      } else if (result.reason === 'Insufficient balance') {
+        await bot.sendMessage(
+          userId,
+          await getText(userId, 'insufficientBalance', {
+            balance: Number(result.balance || 0).toFixed(2),
+            price: Number(result.price || merchant.price || 0).toFixed(2),
+            needed: Number(result.totalCost || 0).toFixed(2)
+          }),
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+            }
+          }
+        );
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -4085,7 +4162,19 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
       }
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
-        await bot.sendMessage(userId, await getText(userId, 'insufficientBalance', { balance: result.balance, price: result.price }));
+        await bot.sendMessage(
+          userId,
+          await getText(userId, 'insufficientBalance', {
+            balance: result.balance,
+            price: result.price,
+            needed: result.totalCost
+          }),
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+            }
+          }
+        );
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
