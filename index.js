@@ -323,6 +323,33 @@ const DEFAULT_TEXTS = {
     enterReferralMilestones: 'Send milestone rewards in this format:\n15:5,40:5,80:10,150:30',
     referralMilestonesUpdated: '✅ Referral milestone rewards updated.',
     currentReferralMilestones: 'Current milestone rewards: {milestones}',
+    referralEligibleUsers: '🎁 Eligible Referral Users',
+    deductReferralPoints: '➖ Deduct Points',
+    referralStockSettings: '📦 Referral ChatGPT Stock',
+    referralStockClaim: '🎁 Claim Referral Codes',
+    noReferralEligibleUsers: 'No users currently have 5+ referrals and unclaimed referral gift balance.',
+    referralEligibleUsersTitle: 'Eligible referral users:',
+    enterDeductPointsUserId: 'Send the Telegram user ID whose points you want to deduct:',
+    enterDeductPointsAmount: 'Send the number of points to deduct:',
+    deductPointsDone: '✅ Points deducted. User {userId} now has {points} points.',
+    deductPointsUserNotFound: '❌ User not found.',
+    toggleReferrals: '🔁 Stop/Start Referrals',
+    referralsEnabledStatus: '✅ Referrals counting is enabled',
+    referralsDisabledStatus: '⛔ Referrals counting is stopped',
+    referralsTurnedOn: '✅ Referrals enabled.',
+    referralsTurnedOff: '⛔ Referrals stopped.',
+    addReferralStockCodes: '➕ Add Referral Stock Codes',
+    viewReferralStockCount: '📦 View Referral Stock',
+    referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
+    enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces:',
+    referralStockCodesAdded: '✅ Referral stock codes added.',
+    referralStockNotEnough: '❌ Not enough referral ChatGPT stock for this request.',
+    referralStockNoCodesAvailable: '❌ No referral ChatGPT stock available right now.',
+    referralClaimAskCount: 'Send the number of referral-stock codes you want to claim. Available by your points: {maxCodes}.',
+    botAllowedUsers: '👤 Allowed Users While Bot Stopped',
+    enterAllowedUsers: 'Send allowed Telegram user IDs separated by commas, spaces, or new lines. Send /empty to clear.',
+    allowedUsersUpdated: '✅ Allowed users updated.',
+    currentAllowedUsers: 'Current allowed IDs: {ids}',
     quantityDiscountSettings: '💸 Quantity Discount Settings',
     setBulkDiscountThreshold: '📦 Set Discount Quantity',
     setBulkDiscountPrice: '💵 Set Price After Discount',
@@ -349,7 +376,7 @@ const DEFAULT_TEXTS = {
     creatorDiscountUpdated: '✅ Creator discount for user {userId} updated to {percent}%. Effective required points: {requiredPoints}.',
     creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
     currentCreatorDiscount: 'Your creator discount: {percent}%',
-    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}',
+    manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
     chatgptCode: '🤖 ChatGPT Code',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
@@ -570,6 +597,33 @@ const DEFAULT_TEXTS = {
     enterReferralMilestones: 'أرسل مكافآت الإحالة بهذا الشكل:\n15:5,40:5,80:10,150:30',
     referralMilestonesUpdated: '✅ تم تحديث مكافآت الإحالة المرحلية.',
     currentReferralMilestones: 'مكافآت الإحالة المرحلية الحالية: {milestones}',
+    referralEligibleUsers: '🎁 المؤهلون لهدية الإحالة',
+    deductReferralPoints: '➖ خصم نقاط',
+    referralStockSettings: '📦 مخزون ChatGPT الإحالات',
+    referralStockClaim: '🎁 استلام كودات الإحالات',
+    noReferralEligibleUsers: 'لا يوجد حاليًا مستخدمون لديهم 5 إحالات فأكثر ورصيد هدية إحالات غير مستلم.',
+    referralEligibleUsersTitle: 'المستخدمون المؤهلون:',
+    enterDeductPointsUserId: 'أرسل آيدي المستخدم الذي تريد خصم نقاطه:',
+    enterDeductPointsAmount: 'أرسل عدد النقاط المراد خصمها:',
+    deductPointsDone: '✅ تم خصم النقاط. المستخدم {userId} لديه الآن {points} نقطة.',
+    deductPointsUserNotFound: '❌ المستخدم غير موجود.',
+    toggleReferrals: '🔁 إيقاف/تشغيل الإحالات',
+    referralsEnabledStatus: '✅ احتساب الإحالات مفعل',
+    referralsDisabledStatus: '⛔ احتساب الإحالات متوقف',
+    referralsTurnedOn: '✅ تم تفعيل الإحالات.',
+    referralsTurnedOff: '⛔ تم إيقاف الإحالات.',
+    addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
+    viewReferralStockCount: '📦 عرض مخزون الإحالات',
+    referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
+    enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
+    referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.',
+    referralStockNotEnough: '❌ لا يوجد عدد كافٍ في مخزون ChatGPT الإحالات لهذا الطلب.',
+    referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
+    referralClaimAskCount: 'أرسل عدد كودات مخزون الإحالات التي تريد استلامها. المتاح حسب نقاطك: {maxCodes}.',
+    botAllowedUsers: '👤 المستخدمون المسموح لهم أثناء إيقاف البوت',
+    enterAllowedUsers: 'أرسل آيديات تيليجرام المسموح لهم مفصولة بفواصل أو مسافات أو أسطر. أرسل /empty للحذف.',
+    allowedUsersUpdated: '✅ تم تحديث المستخدمين المسموح لهم.',
+    currentAllowedUsers: 'الآيديات المسموح لها حاليًا: {ids}',
     quantityDiscountSettings: '💸 إعدادات خصم الكمية',
     setBulkDiscountThreshold: '📦 تعيين كمية الخصم',
     setBulkDiscountPrice: '💵 تعيين السعر بعد الخصم',
@@ -596,7 +650,7 @@ const DEFAULT_TEXTS = {
     creatorDiscountUpdated: '✅ تم تحديث خصم المستخدم {userId} إلى {percent}%. عدد النقاط المطلوب الآن لكل كود: {requiredPoints}.',
     creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
-    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}',
+    manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
     chatgptCode: '🤖 كود ChatGPT',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
@@ -773,6 +827,104 @@ async function getFreeCodeCooldownDays() {
 async function getBotEnabled() {
   const rawValue = await getGlobalSetting('bot_enabled', 'true');
   return String(rawValue).toLowerCase() !== 'false';
+}
+
+async function getAllowedUserIds() {
+  const rawValue = await getGlobalSetting('bot_allowed_user_ids', '');
+  return String(rawValue || '')
+    .split(/[\s,]+/)
+    .map(v => parseInt(v, 10))
+    .filter(v => Number.isInteger(v) && v > 0);
+}
+
+async function isUserAllowedWhenBotStopped(userId) {
+  if (isAdmin(userId)) return true;
+  const ids = await getAllowedUserIds();
+  return ids.includes(Number(userId));
+}
+
+async function getReferralEnabled() {
+  const rawValue = await getGlobalSetting('referral_enabled', 'true');
+  return String(rawValue).toLowerCase() !== 'false';
+}
+
+async function getReferralStockMerchant() {
+  let merchant = await Merchant.findOne({ where: { nameEn: 'ChatGPT Referral Stock' } });
+  if (!merchant) {
+    merchant = await Merchant.create({
+      nameEn: 'ChatGPT Referral Stock',
+      nameAr: 'مخزون ChatGPT الإحالات',
+      price: 0,
+      category: 'AI Services',
+      type: 'single',
+      description: { type: 'text', content: 'Referral-only ChatGPT stock' }
+    });
+  }
+  return merchant;
+}
+
+async function getRedeemableReferralCodesCount(userId) {
+  const user = await User.findByPk(userId);
+  if (!user) return 0;
+  const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
+  return Math.floor(Number(user.referralPoints || 0) / requiredPoints);
+}
+
+async function getEligibleReferralUsers(minReferrals = 5) {
+  const requiredPoints = await getReferralRedeemPoints();
+  const users = await User.findAll({
+    where: { referredBy: { [Op.ne]: null } },
+    order: [['referralPoints', 'DESC'], ['id', 'ASC']]
+  });
+  const result = [];
+  for (const user of await User.findAll({ order: [['referralPoints', 'DESC'], ['id', 'ASC']] })) {
+    const referralCount = await User.count({ where: { referredBy: user.id, referralRewarded: true } });
+    const redeemableCodes = Math.floor(Number(user.referralPoints || 0) / requiredPoints);
+    if (referralCount >= minReferrals && redeemableCodes > 0) {
+      result.push({ user, referralCount, redeemableCodes });
+    }
+  }
+  return result;
+}
+
+async function claimReferralStockCodes(userId, requestedCodes) {
+  const user = await User.findByPk(userId);
+  if (!user) return { success: false, reason: 'User not found' };
+  const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
+  const maxCodes = Math.floor(Number(user.referralPoints || 0) / requiredPoints);
+  const count = parseInt(requestedCodes, 10);
+  if (!Number.isInteger(count) || count <= 0 || count > maxCodes) {
+    return { success: false, reason: 'invalid_count', maxCodes };
+  }
+
+  const merchant = await getReferralStockMerchant();
+  const codes = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    limit: count,
+    order: [['id', 'ASC']]
+  });
+
+  if (codes.length < count) {
+    return { success: false, reason: 'not_enough_stock' };
+  }
+
+  const t = await sequelize.transaction();
+  try {
+    await Code.update(
+      { isUsed: true, usedBy: userId, soldAt: new Date() },
+      { where: { id: codes.map(c => c.id) }, transaction: t }
+    );
+    user.referralPoints = Number(user.referralPoints || 0) - (count * requiredPoints);
+    await user.save({ transaction: t });
+    await t.commit();
+
+    const codeText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
+    return { success: true, codes: codeText, count };
+  } catch (err) {
+    await t.rollback();
+    console.error('claimReferralStockCodes error:', err);
+    return { success: false, reason: 'db_error' };
+  }
 }
 
 async function getBulkDiscountThreshold() {
@@ -1234,6 +1386,7 @@ async function awardReferralPoints(referredUserId) {
 }
 
 async function tryAwardReferralIfEligible(userId) {
+  if (!(await getReferralEnabled())) return false;
   const user = await User.findByPk(userId);
   if (!user || !user.referredBy || user.referralRewarded) return false;
 
@@ -1777,10 +1930,12 @@ async function showReferralSettingsAdmin(userId) {
   const redeemPoints = await getReferralRedeemPoints();
   const freeCodeDays = await getFreeCodeCooldownDays();
   const milestonesText = await getReferralMilestonesText();
+  const referralsEnabled = await getReferralEnabled();
   const percentLine = await getText(userId, 'currentReferralPercent', { percent });
   const pointsLine = await getText(userId, 'currentRedeemPoints', { points: redeemPoints });
   const freeCodeDaysLine = await getText(userId, 'currentFreeCodeDays', { days: freeCodeDays });
   const milestonesLine = await getText(userId, 'currentReferralMilestones', { milestones: milestonesText });
+  const referralsStatusLine = await getText(userId, referralsEnabled ? 'referralsEnabledStatus' : 'referralsDisabledStatus');
 
   const keyboard = {
     inline_keyboard: [
@@ -1788,15 +1943,19 @@ async function showReferralSettingsAdmin(userId) {
       [{ text: await getText(userId, 'setRedeemPoints'), callback_data: 'admin_set_redeem_points' }],
       [{ text: await getText(userId, 'setFreeCodeDays'), callback_data: 'admin_set_free_code_days' }],
       [{ text: await getText(userId, 'editReferralMilestones'), callback_data: 'admin_edit_referral_milestones' }],
+      [{ text: await getText(userId, 'referralEligibleUsers'), callback_data: 'admin_referral_eligible_users' }],
       [{ text: await getText(userId, 'grantPoints'), callback_data: 'admin_grant_points' }],
+      [{ text: await getText(userId, 'deductReferralPoints'), callback_data: 'admin_deduct_points' }],
       [{ text: await getText(userId, 'grantCreatorDiscount'), callback_data: 'admin_grant_creator_discount' }],
+      [{ text: await getText(userId, 'referralStockSettings'), callback_data: 'admin_referral_stock_settings' }],
+      [{ text: await getText(userId, 'toggleReferrals'), callback_data: 'admin_toggle_referrals' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
 
   await bot.sendMessage(
     userId,
-    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine, freeCodeDaysLine, milestonesLine }),
+    await getText(userId, 'manageReferralSettingsText', { percentLine, pointsLine, freeCodeDaysLine, milestonesLine, referralsStatusLine }),
     { reply_markup: keyboard }
   );
 }
@@ -1821,16 +1980,36 @@ async function showQuantityDiscountSettingsAdmin(userId) {
   );
 }
 
+async function showReferralStockSettingsAdmin(userId) {
+  const merchant = await getReferralStockMerchant();
+  const count = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'addReferralStockCodes'), callback_data: 'admin_add_referral_stock_codes' }],
+      [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
+    ]
+  };
+  await bot.sendMessage(userId, await getText(userId, 'referralStockCountText', { count }), { reply_markup: keyboard });
+}
+
 async function showBotControlAdmin(userId) {
   const enabled = await getBotEnabled();
   const status = await getText(userId, enabled ? 'botEnabledStatus' : 'botDisabledStatus');
+  const allowedIds = await getAllowedUserIds();
+  const idsText = allowedIds.length ? allowedIds.join(', ') : '-';
   const keyboard = {
     inline_keyboard: [
       [{ text: await getText(userId, enabled ? 'disableBot' : 'enableBot'), callback_data: 'admin_toggle_bot_enabled' }],
+      [{ text: await getText(userId, 'botAllowedUsers'), callback_data: 'admin_set_allowed_users' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
-  await bot.sendMessage(userId, await getText(userId, 'botStatusLine', { status }), { reply_markup: keyboard });
+  await bot.sendMessage(
+    userId,
+    `${await getText(userId, 'botStatusLine', { status })}\n${await getText(userId, 'currentAllowedUsers', { ids: idsText })}`,
+    { reply_markup: keyboard }
+  );
 }
 
 
@@ -2416,7 +2595,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     const isActuallyNewUser = !existedBeforeStart;
 
     const currentUser = await findOrCreateUser(userId);
-    if (!isAdmin(userId) && !(await getBotEnabled())) {
+    if (!isAdmin(userId) && !(await getBotEnabled()) && !(await isUserAllowedWhenBotStopped(userId))) {
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
       return;
     }
@@ -3083,6 +3262,81 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_referral_eligible_users' && isAdmin(userId)) {
+      const eligible = await getEligibleReferralUsers(5);
+      if (!eligible.length) {
+        await bot.sendMessage(userId, await getText(userId, 'noReferralEligibleUsers'));
+      } else {
+        let msgText = `${await getText(userId, 'referralEligibleUsersTitle')}\n\n`;
+        for (const item of eligible.slice(0, 100)) {
+          const identity = await getTelegramIdentityById(item.user.id);
+          msgText += `- ${identity.fullName} | ${identity.usernameText} | ID: ${item.user.id}\n  إحالات: ${item.referralCount} | أكواد مستحقة تقريبًا: ${item.redeemableCodes}\n\n`;
+        }
+        await bot.sendMessage(userId, msgText);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_deduct_points' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'deduct_points', step: 'user_id' });
+      await bot.sendMessage(userId, await getText(userId, 'enterDeductPointsUserId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_referral_stock_settings' && isAdmin(userId)) {
+      await showReferralStockSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_add_referral_stock_codes' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'add_referral_stock_codes' });
+      await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_view_referral_stock_count' && isAdmin(userId)) {
+      const merchant = await getReferralStockMerchant();
+      const count = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+      await bot.sendMessage(userId, await getText(userId, 'referralStockCountText', { count }));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_referrals' && isAdmin(userId)) {
+      const current = await getReferralEnabled();
+      await Setting.upsert({ key: 'referral_enabled', lang: 'global', value: String(!current) });
+      await bot.sendMessage(userId, await getText(userId, !current ? 'referralsTurnedOn' : 'referralsTurnedOff'));
+      await showReferralSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_allowed_users' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_allowed_users' });
+      await bot.sendMessage(userId, await getText(userId, 'enterAllowedUsers'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'referral_stock_claim') {
+      const maxCodes = await getRedeemableReferralCodesCount(userId);
+      if (maxCodes <= 0) {
+        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', {
+          points: (await User.findByPk(userId))?.referralPoints || 0,
+          requiredPoints: await getEffectiveRedeemPointsForUser(userId)
+        }));
+      } else {
+        await setUserState(userId, { action: 'claim_referral_stock' });
+        await bot.sendMessage(userId, await getText(userId, 'referralClaimAskCount', { maxCodes }));
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_set_referral_percent' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_referral_percent' });
       await bot.sendMessage(userId, await getText(userId, 'setReferralPercent'));
@@ -3398,7 +3652,7 @@ bot.on('message', async msg => {
   try {
     const user = await User.findByPk(userId);
     if (!user) return;
-    if (!isAdmin(userId) && !(await getBotEnabled())) {
+    if (!isAdmin(userId) && !(await getBotEnabled()) && !(await isUserAllowedWhenBotStopped(userId))) {
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
       return;
     }
@@ -3921,6 +4175,98 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, await getText(userId, 'freeCodeDaysUpdated', { days }));
         await clearUserState(userId);
         await showReferralSettingsAdmin(userId);
+        return;
+      }
+
+
+      if (state.action === 'set_allowed_users') {
+        const value = String(text || '').trim() === '/empty'
+          ? ''
+          : String(text || '')
+              .split(/[\s,]+/)
+              .map(v => parseInt(v, 10))
+              .filter(v => Number.isInteger(v) && v > 0)
+              .join(',');
+        await Setting.upsert({ key: 'bot_allowed_user_ids', lang: 'global', value });
+        await bot.sendMessage(userId, await getText(userId, 'allowedUsersUpdated'));
+        await clearUserState(userId);
+        await showBotControlAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'add_referral_stock_codes') {
+        const merchant = await getReferralStockMerchant();
+        const lines = String(text || '').split(/\r?\n|\s+/).filter(v => String(v).trim());
+        if (!lines.length) {
+          await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
+          return;
+        }
+        await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
+        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded'));
+        await clearUserState(userId);
+        await showReferralStockSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'deduct_points') {
+        if (state.step === 'user_id') {
+          const targetUserId = parseInt(text, 10);
+          if (!Number.isInteger(targetUserId)) {
+            await bot.sendMessage(userId, await getText(userId, 'enterDeductPointsUserId'));
+            return;
+          }
+          const targetUser = await User.findByPk(targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'deductPointsUserNotFound'));
+            return;
+          }
+          await setUserState(userId, { action: 'deduct_points', step: 'points', targetUserId });
+          await bot.sendMessage(userId, await getText(userId, 'enterDeductPointsAmount'));
+          return;
+        }
+
+        if (state.step === 'points') {
+          const points = parseInt(text, 10);
+          if (!Number.isInteger(points) || points <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'enterDeductPointsAmount'));
+            return;
+          }
+          const targetUser = await User.findByPk(state.targetUserId);
+          if (!targetUser) {
+            await bot.sendMessage(userId, await getText(userId, 'deductPointsUserNotFound'));
+            await clearUserState(userId);
+            await showReferralSettingsAdmin(userId);
+            return;
+          }
+          targetUser.referralPoints = Math.max(0, Number(targetUser.referralPoints || 0) - points);
+          await targetUser.save();
+          await bot.sendMessage(userId, await getText(userId, 'deductPointsDone', {
+            userId: targetUser.id,
+            points: targetUser.referralPoints
+          }));
+          await clearUserState(userId);
+          await showReferralSettingsAdmin(userId);
+          return;
+        }
+      }
+
+      if (state.action === 'claim_referral_stock') {
+        const result = await claimReferralStockCodes(userId, text);
+        if (!result.success) {
+          if (result.reason === 'invalid_count') {
+            await bot.sendMessage(userId, await getText(userId, 'referralClaimAskCount', { maxCodes: result.maxCodes || 0 }));
+          } else if (result.reason === 'not_enough_stock') {
+            await bot.sendMessage(userId, await getText(userId, 'referralStockNotEnough'));
+            await clearUserState(userId);
+          } else {
+            await bot.sendMessage(userId, await getText(userId, 'error'));
+          }
+          return;
+        }
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+        await clearUserState(userId);
+        await sendMainMenu(userId);
         return;
       }
 
