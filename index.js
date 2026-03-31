@@ -964,6 +964,34 @@ async function claimReferralStockCodes(userId, requestedCodes) {
   }
 }
 
+async function takeFallbackChatGptCodesFromReferralStock(userId, quantity) {
+  const count = Math.max(0, parseInt(quantity, 10) || 0);
+  if (count <= 0) return [];
+
+  const merchant = await getReferralStockMerchant();
+  const codes = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    limit: count,
+    order: [['id', 'ASC']]
+  });
+
+  if (!codes.length) return [];
+
+  const t = await sequelize.transaction();
+  try {
+    await Code.update(
+      { isUsed: true, usedBy: userId, soldAt: new Date() },
+      { where: { id: codes.map(c => c.id) }, transaction: t }
+    );
+    await t.commit();
+    return codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
+  } catch (err) {
+    await t.rollback();
+    console.error('takeFallbackChatGptCodesFromReferralStock error:', err);
+    return [];
+  }
+}
+
 async function getBulkDiscountThreshold() {
   const rawValue = await getGlobalSetting('bulk_discount_threshold', '50');
   const value = parseInt(rawValue, 10);
@@ -2585,20 +2613,27 @@ async function processAutoChatGptCode(userId, options = {}) {
   }
 
   const codes = [];
+  let lastFailureReason = null;
+
   for (let i = 0; i < safeQuantity; i += 1) {
     const email = generateRandomEmail();
     const result = await getChatGPTCode(email);
+
     if (!result.success) {
-      if (codes.length === 0) {
-        return { success: false, reason: result.reason };
+      lastFailureReason = result.reason || 'Unknown error';
+      const remaining = safeQuantity - codes.length;
+      const fallbackCodes = await takeFallbackChatGptCodesFromReferralStock(userId, remaining);
+      if (fallbackCodes.length > 0) {
+        codes.push(...fallbackCodes);
       }
       break;
     }
+
     codes.push(result.code);
   }
 
   if (codes.length === 0) {
-    return { success: false, reason: 'No codes were generated' };
+    return { success: false, reason: lastFailureReason || 'No codes were generated' };
   }
 
   if (isFree) {
