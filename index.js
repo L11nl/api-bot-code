@@ -1067,16 +1067,36 @@ async function showFrontSection(userId, sectionKey) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
+
   const merchants = await getMerchantsBySection(sectionKey);
-  if (!merchants.length) {
+  const keyboard = [];
+
+  if (sectionKey === 'gpt') {
+    const chatgptMerchant = await getOrCreateChatGptMerchant();
+    keyboard.push([{
+      text: `${await getText(userId, 'chatgptCode')} ($${Number(chatgptMerchant.price || 0).toFixed(2)})`,
+      callback_data: 'chatgpt_direct_buy'
+    }]);
+  }
+
+  if (!merchants.length && sectionKey !== 'gpt') {
     await bot.sendMessage(userId, await getText(userId, 'noSectionProducts'));
     return;
   }
-  const keyboard = [];
+
   for (const merchant of merchants) {
+    if (sectionKey === 'gpt' && String(merchant.nameEn || '').trim() === 'ChatGPT Code') {
+      continue;
+    }
     const label = `${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`;
     keyboard.push([{ text: label, callback_data: `buy_merchant_${merchant.id}` }]);
   }
+
+  if (keyboard.length === 0) {
+    await bot.sendMessage(userId, await getText(userId, 'noSectionProducts'));
+    return;
+  }
+
   if (isAdmin(userId)) {
     keyboard.push([{ text: await getText(userId, 'manageSection'), callback_data: `admin_manage_section_${sectionKey}` }]);
   }
@@ -4294,7 +4314,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'chatgpt_code') {
+    if (data === 'chatgpt_direct_buy') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
       await bot.sendMessage(userId, `${await getText(userId, 'askQuantity')}\n\n${await getBulkDiscountInfoText(userId)}`);
       await bot.answerCallbackQuery(query.id);
