@@ -197,6 +197,23 @@ const DEFAULT_TEXTS = {
     myBalance: '💰 My Balance',
     deposit: '💳 Deposit',
     support: '📞 Support',
+    changeLanguage: '🌍 Change Language',
+    chooseLanguageMenu: 'Choose your language:',
+    addChatgptProduct: '➕ Add ChatGPT Product',
+    manageChatgptProducts: '📋 Manage ChatGPT Products',
+    chatgptProductsListTitle: 'ChatGPT section products:',
+    manageThisProduct: '⚙️ Manage This Product',
+    chatgptSectionAdminInfo: 'This section appears to users as the main ChatGPT area. Add ChatGPT products here, rename the section, or manage product stock and pricing.',
+    productManageTitle: 'Product management',
+    setProductPrice: '💰 Set Product Price',
+    addProductStock: '📦 Add Product Stock',
+    editProductNames: '✏️ Edit Product Names',
+    editProductTerms: '📝 Edit Product Terms',
+    chooseProductNameLanguage: 'Choose which product name you want to edit:',
+    editNameArabic: '🇮🇶 Arabic Name',
+    editNameEnglish: '🇺🇸 English Name',
+    enterProductName: 'Send the new product name:',
+    productUpdated: '✅ Product updated.',
     chooseMerchant: '👋 Choose product:',
     processing: '⏳ Processing...',
     enterQty: '✍️ Enter quantity:',
@@ -436,10 +453,10 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
     currentCreatorDiscount: 'Your creator discount: {percent}%',
     manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
-    chatgptSectionName: '🤖 ChatGPT',
-    chatgptCode: '🤖 ChatGPT Code',
-    chatgptPrimaryButton: '🤖 Buy ChatGPT Codes',
-    chatgptSecondaryButtonDefault: '➕ Second ChatGPT Button',
+    chatgptSectionName: 'قسم ChatGPT',
+    chatgptCode: '🤖 ChatGPT',
+    chatgptPrimaryButton: '🤖 ChatGPT GO',
+    chatgptSecondaryButtonDefault: '➕ زر ChatGPT إضافي',
     manageChatgptSection: '⚙️ Manage ChatGPT Section',
     setChatgptSectionName: '✏️ Rename ChatGPT Section',
     setChatgptPrimaryName: '✏️ Rename ChatGPT Main Button',
@@ -553,6 +570,23 @@ const DEFAULT_TEXTS = {
     myBalance: '💰 رصيدي',
     deposit: '💳 شحن الرصيد',
     support: '📞 الدعم الفني',
+    changeLanguage: '🌍 تغيير اللغة',
+    chooseLanguageMenu: 'اختر اللغة:',
+    addChatgptProduct: '➕ إضافة منتج ChatGPT',
+    manageChatgptProducts: '📋 إدارة منتجات ChatGPT',
+    chatgptProductsListTitle: 'منتجات قسم ChatGPT:',
+    manageThisProduct: '⚙️ إدارة هذا المنتج',
+    chatgptSectionAdminInfo: 'هذا القسم يظهر للمستخدمين كقسم ChatGPT الرئيسي. من هنا تستطيع إضافة منتجات ChatGPT، تغيير اسم القسم، أو إدارة مخزون وأسعار المنتجات بداخله.',
+    productManageTitle: 'إدارة المنتج',
+    setProductPrice: '💰 تعديل سعر المنتج',
+    addProductStock: '📦 إضافة مخزون للمنتج',
+    editProductNames: '✏️ تعديل أسماء المنتج',
+    editProductTerms: '📝 تعديل شروط المنتج',
+    chooseProductNameLanguage: 'اختر الاسم الذي تريد تعديله:',
+    editNameArabic: '🇮🇶 الاسم العربي',
+    editNameEnglish: '🇺🇸 الاسم الإنجليزي',
+    enterProductName: 'أرسل اسم المنتج الجديد:',
+    productUpdated: '✅ تم تحديث المنتج.',
     chooseMerchant: '👋 اختر المنتج:',
     processing: '⏳ جاري المعالجة...',
     enterQty: '✍️ أرسل الكمية:',
@@ -792,7 +826,7 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
     manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
-    chatgptSectionName: '🤖 ChatGPT',
+    chatgptSectionName: 'قسم ChatGPT',
     chatgptCode: '🤖 كود ChatGPT',
     chatgptPrimaryButton: '🤖 شراء كودات ChatGPT',
     chatgptSecondaryButtonDefault: '➕ الزر الثاني في قسم ChatGPT',
@@ -916,7 +950,7 @@ async function startManagedBot(botService) {
       const ownerAllowed = Number(freshService?.ownerId || 0) === Number(chatId);
       const canUseCode = actions.includes('code') || actions.includes('full') || ownerAllowed;
       if (!freshService || !canUseCode) {
-        await childBot.sendMessage(chatId, '❌ This bot is not allowed to use /code yet.').catch(() => {});
+        await childBot.sendMessage(chatId, '❌ /code غير مفعل لهذا البوت بعد. يجب أن يمنحه الأدمن صلاحية /code أو Full أو يحدد مالكه الصحيح.').catch(() => {});
         return;
       }
       const cardKey = match?.[1] ? match[1].trim() : '';
@@ -977,6 +1011,7 @@ async function showAdminProductsSection(userId) {
     reply_markup: {
       inline_keyboard: [
         [{ text: await getText(userId, 'manageChatgptSection'), callback_data: 'admin_chatgpt_section' }],
+        [{ text: await getText(userId, 'addChatgptProduct'), callback_data: 'admin_add_chatgpt_product' }],
         [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
         [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
         [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
@@ -1455,16 +1490,33 @@ async function getChatgptSecondaryMerchantId() {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-async function showChatgptSection(userId) {
-  const merchant = await getOrCreateChatGptMerchant();
-  const priceText = Number(merchant.price || 0).toFixed(2);
-  const primaryLabel = `${await getChatgptPrimaryLabel(userId)} ($${priceText})`;
-  const keyboard = [[{ text: primaryLabel, callback_data: 'chatgpt_buy_main' }]];
+async function getLocalizedMerchantName(userId, merchant) {
+  const user = await User.findByPk(userId);
+  return (user?.lang || 'en') === 'ar' ? (merchant.nameAr || merchant.nameEn) : (merchant.nameEn || merchant.nameAr);
+}
 
-  const secondaryMerchantId = await getChatgptSecondaryMerchantId();
-  if (secondaryMerchantId) {
-    const secondaryLabel = await getChatgptSecondaryLabel(userId);
-    keyboard.push([{ text: secondaryLabel, callback_data: `chatgpt_secondary_${secondaryMerchantId}` }]);
+async function getChatgptProducts() {
+  await getOrCreateChatGptMerchant();
+  const merchants = await Merchant.findAll({
+    where: {
+      [Op.or]: [
+        { category: 'ChatGPT' },
+        { category: 'chatgpt' }
+      ]
+    },
+    order: [['id', 'ASC']]
+  });
+  return merchants;
+}
+
+async function showChatgptSection(userId) {
+  const merchants = await getChatgptProducts();
+  const keyboard = [];
+
+  for (const merchant of merchants) {
+    const label = `${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`;
+    const callbackData = merchant.nameEn === 'ChatGPT Code' ? 'chatgpt_buy_main' : `buy_merchant_${merchant.id}`;
+    keyboard.push([{ text: label, callback_data: callbackData }]);
   }
 
   if (isAdmin(userId)) {
@@ -1472,7 +1524,7 @@ async function showChatgptSection(userId) {
   }
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
-  const helpText = isAdmin(userId) ? `\n\n${await getText(userId, 'chatgptSectionHelp')}` : '';
+  const helpText = isAdmin(userId) ? `\n\n${await getText(userId, 'chatgptSectionAdminInfo')}` : '';
   await bot.sendMessage(userId, `${await getText(userId, 'chatgptSectionChooseText')}${helpText}`, {
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -1480,23 +1532,21 @@ async function showChatgptSection(userId) {
 
 async function showChatgptSectionAdmin(userId) {
   const sectionName = await getChatgptSectionLabel(userId);
-  const primaryName = await getChatgptPrimaryLabel(userId);
-  const secondaryName = await getChatgptSecondaryLabel(userId);
-  const secondaryMerchantId = await getChatgptSecondaryMerchantId();
-  const secondaryMerchant = secondaryMerchantId ? await Merchant.findByPk(secondaryMerchantId) : null;
-  const linkedText = secondaryMerchant ? `${secondaryMerchant.nameAr || secondaryMerchant.nameEn} (ID: ${secondaryMerchant.id})` : '-';
+  const merchants = await getChatgptProducts();
+  let infoText = `${await getText(userId, 'manageChatgptSection')}\n\n${await getText(userId, 'chatgptSectionAdminInfo')}\n\n${await getText(userId, 'chatgptSectionName')}: ${sectionName}\n\n${await getText(userId, 'chatgptProductsListTitle')}\n`;
+  for (const merchant of merchants) {
+    infoText += `\n• ${(await getLocalizedMerchantName(userId, merchant))} ($${Number(merchant.price || 0).toFixed(2)}) | ID: ${merchant.id}`;
+  }
 
   await bot.sendMessage(
     userId,
-    `${await getText(userId, 'manageChatgptSection')}\n\n${await getText(userId, 'chatgptSectionHelp')}\n\nSection: ${sectionName}\nPrimary: ${primaryName}\nSecond: ${secondaryName}\nLinked product: ${linkedText}`,
+    infoText,
     {
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'setChatgptSectionName'), callback_data: 'admin_set_chatgpt_section_name' }],
-          [{ text: await getText(userId, 'setChatgptPrimaryName'), callback_data: 'admin_set_chatgpt_primary_name' }],
-          [{ text: await getText(userId, 'setChatgptSecondaryName'), callback_data: 'admin_set_chatgpt_secondary_name' }],
-          [{ text: await getText(userId, 'setChatgptSecondaryProduct'), callback_data: 'admin_set_chatgpt_secondary_product' }],
-          [{ text: await getText(userId, 'disableChatgptSecondary'), callback_data: 'admin_disable_chatgpt_secondary' }],
+          [{ text: await getText(userId, 'addChatgptProduct'), callback_data: 'admin_add_chatgpt_product' }],
+          [{ text: await getText(userId, 'manageChatgptProducts'), callback_data: 'admin_manage_chatgpt_products' }],
           [{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]
         ]
       }
@@ -1971,6 +2021,7 @@ const DEFAULT_BUTTONS = {
   referral: true,
   discount: true,
   support: true,
+  change_language: true,
   admin_panel: true
 };
 
@@ -1986,6 +2037,7 @@ const DEFAULT_BUTTON_ORDER = [
   'referral',
   'discount',
   'support',
+  'change_language',
   'admin_panel'
 ];
 
@@ -2056,7 +2108,8 @@ async function getMenuButtonItems(userId) {
     { id: 'discount', name: await getText(userId, 'discount') },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
+    { id: 'change_language', name: await getText(userId, 'changeLanguage') },
+    { id: 'chatgpt_code', name: await getChatgptSectionLabel(userId) },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
@@ -2385,10 +2438,8 @@ async function sendMainMenu(userId) {
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const canClaimFree = await canUserClaimFreeCode(userId);
-  const chatgptMerchant = await getOrCreateChatGptMerchant();
-  const chatgptPrice = Number(chatgptMerchant.price || 0).toFixed(2);
   const buttonLabels = {
-    chatgpt_code: `${await getText(userId, 'chatgptCode')} ($${chatgptPrice})`,
+    chatgpt_code: await getChatgptSectionLabel(userId),
     free_code: await getText(userId, 'freeCodeMenu'),
     referral_prize: await getText(userId, 'referralStockClaim'),
     buy: await getText(userId, 'buy'),
@@ -2399,6 +2450,7 @@ async function sendMainMenu(userId) {
     referral: await getText(userId, 'referral'),
     discount: await getText(userId, 'discount'),
     support: await getText(userId, 'support'),
+    change_language: await getText(userId, 'changeLanguage'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
@@ -3043,13 +3095,16 @@ async function getOrCreateChatGptMerchant() {
   let merchant = await Merchant.findOne({ where: { nameEn: 'ChatGPT Code' } });
   if (!merchant) {
     merchant = await Merchant.create({
-      nameEn: 'ChatGPT Code',
-      nameAr: 'كود ChatGPT',
+      nameEn: 'CHAT GPT GO',
+      nameAr: 'CHAT GPT GO',
       price: 5.00,
       category: 'ChatGPT',
-      type: 'single',
+      type: 'code',
       description: { type: 'text', content: 'Get a ChatGPT GO code via email' }
     });
+  } else if (merchant.category !== 'ChatGPT') {
+    merchant.category = 'ChatGPT';
+    await merchant.save();
   }
   return merchant;
 }
@@ -3263,14 +3318,18 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
     await tryAwardReferralIfEligible(userId);
 
-    await bot.sendMessage(userId, await getText(userId, 'start'), {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
-          [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
-        ]
-      }
-    });
+    if (isActuallyNewUser || !currentUser.lang) {
+      await bot.sendMessage(userId, await getText(userId, 'chooseLanguageMenu'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
+          ]
+        }
+      });
+    } else {
+      await sendMainMenu(userId);
+    }
   } catch (err) {
     console.error('Error in /start:', err);
   }
@@ -3289,7 +3348,7 @@ bot.on('callback_query', async query => {
   try {
     await findOrCreateUser(userId);
 
-    if (!isAdmin(userId) && !(await getBotEnabled())) {
+    if (!isAdmin(userId) && !(await getBotEnabled()) && !(await isUserAllowedWhenBotStopped(userId))) {
       await bot.answerCallbackQuery(query.id).catch(() => {});
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage')).catch(() => {});
       return;
@@ -3298,12 +3357,27 @@ bot.on('callback_query', async query => {
     if (data.startsWith('lang_')) {
       const newLang = data.split('_')[1];
       await User.update({ lang: newLang }, { where: { id: userId } });
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
       const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
       if (canUse) {
         await tryAwardReferralIfEligible(userId);
         await sendMainMenu(userId);
       }
-      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'change_language') {
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
+      await bot.sendMessage(userId, await getText(userId, 'chooseLanguageMenu'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
+          ]
+        }
+      });
       return;
     }
 
@@ -3329,8 +3403,9 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'back_to_menu') {
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
       await sendMainMenu(userId);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
@@ -3859,9 +3934,9 @@ ${await getBulkDiscountInfoText(userId)}`);
       }
       const keyboard = {
         inline_keyboard: [
-          [{ text: '✏️ Edit', callback_data: 'admin_edit_merchant' }],
-          [{ text: '🗑️ Delete', callback_data: 'admin_delete_merchant' }],
-          [{ text: '📂 Edit Category', callback_data: 'admin_edit_category' }],
+          [{ text: await getText(userId, 'editMerchant'), callback_data: 'admin_edit_merchant' }],
+          [{ text: await getText(userId, 'deleteMerchant'), callback_data: 'admin_delete_merchant' }],
+          [{ text: await getText(userId, 'editCategory'), callback_data: 'admin_edit_category' }],
           [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
         ]
       };
@@ -4408,14 +4483,17 @@ ${await getBulkDiscountInfoText(userId)}`);
     }
 
     if (data === 'chatgpt_code') {
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
       await showChatgptSection(userId);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'chatgpt_buy_main') {
       const merchant = await getOrCreateChatGptMerchant();
       const priceText = Number(merchant.price || 0).toFixed(2);
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
       if (merchant.termsText) {
         await setUserState(userId, { action: 'chatgpt_terms_pending' });
         await bot.sendMessage(userId, `${await getText(userId, 'termsReadyText')}
@@ -4430,13 +4508,12 @@ ${merchant.termsText}`, {
         });
       } else {
         await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-        await bot.sendMessage(userId, `${await getChatgptPrimaryLabel(userId)} ($${priceText})
+        await bot.sendMessage(userId, `${await getLocalizedMerchantName(userId, merchant)} ($${priceText})
 
 ${await getText(userId, 'askQuantity')}
 
 ${await getBulkDiscountInfoText(userId)}`);
       }
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
@@ -4444,24 +4521,97 @@ ${await getBulkDiscountInfoText(userId)}`);
       const merchant = await getOrCreateChatGptMerchant();
       const priceText = Number(merchant.price || 0).toFixed(2);
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-      await bot.sendMessage(userId, `${await getChatgptPrimaryLabel(userId)} ($${priceText})
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
+      await bot.sendMessage(userId, `${await getLocalizedMerchantName(userId, merchant)} ($${priceText})
 
 ${await getText(userId, 'askQuantity')}
 
 ${await getBulkDiscountInfoText(userId)}`);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data.startsWith('chatgpt_secondary_')) {
       const merchantId = parseInt(data.split('_')[2], 10);
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
       await triggerMerchantPurchaseFlow(userId, merchantId);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'admin_chatgpt_section' && isAdmin(userId)) {
       await showChatgptSectionAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_add_chatgpt_product' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'add_merchant', step: 'nameEn', presetCategory: 'ChatGPT' });
+      await bot.sendMessage(userId, await getText(userId, 'askMerchantNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_manage_chatgpt_products' && isAdmin(userId)) {
+      const merchants = await getChatgptProducts();
+      for (const merchant of merchants) {
+        await bot.sendMessage(
+          userId,
+          `${await getText(userId, 'productManageTitle')}\n\n${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})\nID: ${merchant.id}`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: await getText(userId, 'setProductPrice'), callback_data: `set_price_merchant_${merchant.id}` }],
+                [{ text: await getText(userId, 'addProductStock'), callback_data: `add_codes_merchant_${merchant.id}` }],
+                [{ text: await getText(userId, 'editProductNames'), callback_data: `admin_edit_product_names_${merchant.id}` }],
+                [{ text: await getText(userId, 'editProductTerms'), callback_data: `admin_edit_product_terms_${merchant.id}` }]
+              ]
+            }
+          }
+        );
+      }
+      if (!merchants.length) {
+        await bot.sendMessage(userId, await getText(userId, 'noCodes'));
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_edit_product_names_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[4], 10);
+      await setUserState(userId, { action: 'edit_product_name', merchantId });
+      await bot.sendMessage(userId, await getText(userId, 'chooseProductNameLanguage'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'editNameArabic'), callback_data: `admin_edit_product_name_ar_${merchantId}` }],
+            [{ text: await getText(userId, 'editNameEnglish'), callback_data: `admin_edit_product_name_en_${merchantId}` }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_edit_product_name_ar_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[5], 10);
+      await setUserState(userId, { action: 'edit_product_name', merchantId, targetLang: 'ar' });
+      await bot.sendMessage(userId, await getText(userId, 'enterProductName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_edit_product_name_en_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[5], 10);
+      await setUserState(userId, { action: 'edit_product_name', merchantId, targetLang: 'en' });
+      await bot.sendMessage(userId, await getText(userId, 'enterProductName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_edit_product_terms_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[4], 10);
+      await setUserState(userId, { action: 'edit_product_terms', merchantId });
+      await bot.sendMessage(userId, await getText(userId, 'askTermsText'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -4705,6 +4855,36 @@ bot.on('message', async msg => {
       }
 
 
+
+      if (state.action === 'edit_product_name') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+        if (state.targetLang === 'ar') merchant.nameAr = String(text || '').trim();
+        else merchant.nameEn = String(text || '').trim();
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'productUpdated'));
+        await clearUserState(userId);
+        return;
+      }
+
+      if (state.action === 'edit_product_terms') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+        merchant.termsText = String(text || '').trim() === '/skip' ? null : String(text || '');
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'productUpdated'));
+        await clearUserState(userId);
+        return;
+      }
+
       if (state.action === 'set_chatgpt_section_name') {
         const lang = (await User.findByPk(userId))?.lang || 'en';
         await Setting.upsert({ key: `chatgpt_section_name_${lang}`, lang: 'global', value: String(text || '').trim() });
@@ -4750,8 +4930,13 @@ bot.on('message', async msg => {
         }
 
         if (state.step === 'nameAr') {
-          await setUserState(userId, { ...state, nameAr: text, step: 'category' });
-          await bot.sendMessage(userId, await getText(userId, 'askCategory'));
+          if (state.presetCategory) {
+            await setUserState(userId, { ...state, nameAr: text, category: state.presetCategory, step: 'price' });
+            await bot.sendMessage(userId, await getText(userId, 'askMerchantPrice'));
+          } else {
+            await setUserState(userId, { ...state, nameAr: text, step: 'category' });
+            await bot.sendMessage(userId, await getText(userId, 'askCategory'));
+          }
           return;
         }
 
