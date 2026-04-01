@@ -198,7 +198,7 @@ const DEFAULT_TEXTS = {
     chooseMerchant: '👋 Choose merchant:',
     processing: '⏳ Processing...',
     enterQty: '✍️ Enter quantity:',
-    noCodes: '❌ Stock is empty',
+    noCodes: '❌ Not enough codes in stock',
     back: '🔙 Back',
     adminPanel: '🔧 Admin Panel',
     addMerchant: '➕ Add Merchant',
@@ -399,49 +399,7 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
     currentCreatorDiscount: 'Your creator discount: {percent}%',
     manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
-    chatgptCode: 'GPT',
-    productsSection: '📦 Products Section',
-    addProductSection: '➕ Add Section',
-    manageProductSections: '📚 Manage Sections',
-    enterSectionNameEn: 'Send section name in English:',
-    enterSectionNameAr: 'Send section name in Arabic:',
-    sectionAdded: '✅ Section added successfully.',
-    productSectionsTitle: '📚 Product sections:',
-    noProductSections: 'No sections found.',
-    manageSection: '📂 Manage Section',
-    renameSection: '✏️ Rename Section',
-    deleteSection: '🗑️ Delete Section',
-    sectionDeleted: '✅ Section deleted.',
-    cannotDeleteGptSection: '❌ GPT section cannot be deleted.',
-    addSectionProduct: '➕ Add Product In Section',
-    manageSectionProducts: '📋 Manage Section Products',
-    sectionManageText: 'Manage section: {name}',
-    sectionChooseText: 'Choose a product from this section:',
-    noSectionProducts: '❌ This section has no products yet.',
-    setSectionName: '✏️ Set Section Name',
-    sectionNameUpdated: '✅ Section name updated.',
-    sectionProductsTitle: 'Products in section {name}:',
-    manageProductInline: '⚙️ Manage Product',
-    renameProduct: '✏️ Rename Product',
-    deleteProduct: '🗑️ Delete Product',
-    productDeleted: '✅ Product deleted.',
-    chooseProductNameLanguage: 'Choose which product name to edit:',
-    editNameArabic: '🇮🇶 Arabic Name',
-    editNameEnglish: '🇺🇸 English Name',
-    enterProductName: 'Send the new product name:',
-    productUpdated: '✅ Product updated.',
-    showOnHome: '📌 Show On Main Page',
-    hideFromHome: '🚫 Hide From Main Page',
-    featuredUpdated: '✅ Home visibility updated.',
-    sectionButtonManageInfo: 'This section appears on the main page. From here you can rename it, add products, manage products, and delete the section.',
-    typeCodeSingle: 'Code',
-    typeAccountSingle: 'Email + Password',
-    typeAccountVerifySingle: 'Email + Password + Verification',
-    typeAccountBulk: 'Bulk Email + Password',
-    typeAccountVerifyBulk: 'Bulk Email + Password + Verification',
-    stockFormatCode: 'Send stock items. Each line = one code.',
-    stockFormatAccount: 'Send stock items in pairs:\nemail\npassword',
-    stockFormatAccountVerify: 'Send stock items in groups of 3 lines:\nemail\npassword\nverification',
+    chatgptCode: '🤖 ChatGPT Code',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
@@ -534,7 +492,7 @@ const DEFAULT_TEXTS = {
     chooseMerchant: '👋 اختر التاجر:',
     processing: '⏳ جاري المعالجة...',
     enterQty: '✍️ أرسل الكمية:',
-    noCodes: '❌ المخزون فارغ',
+    noCodes: '❌ لا يوجد عدد كافٍ من الأكواد في المخزون',
     back: '🔙 رجوع',
     adminPanel: '🔧 لوحة التحكم',
     addMerchant: '➕ إضافة تاجر',
@@ -735,49 +693,7 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
     manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
-    chatgptCode: 'GPT',
-    productsSection: '📦 قسم المنتجات',
-    addProductSection: '➕ إضافة قسم',
-    manageProductSections: '📚 إدارة الأقسام',
-    enterSectionNameEn: 'أرسل اسم القسم بالإنجليزية:',
-    enterSectionNameAr: 'أرسل اسم القسم بالعربية:',
-    sectionAdded: '✅ تمت إضافة القسم بنجاح.',
-    productSectionsTitle: '📚 أقسام المنتجات:',
-    noProductSections: 'لا توجد أقسام.',
-    manageSection: '📂 إدارة القسم',
-    renameSection: '✏️ تعديل اسم القسم',
-    deleteSection: '🗑️ حذف القسم',
-    sectionDeleted: '✅ تم حذف القسم.',
-    cannotDeleteGptSection: '❌ لا يمكن حذف قسم GPT.',
-    addSectionProduct: '➕ إضافة منتج داخل القسم',
-    manageSectionProducts: '📋 إدارة منتجات القسم',
-    sectionManageText: 'إدارة القسم: {name}',
-    sectionChooseText: 'اختر منتجًا من هذا القسم:',
-    noSectionProducts: '❌ هذا القسم لا يحتوي منتجات بعد.',
-    setSectionName: '✏️ تعيين اسم القسم',
-    sectionNameUpdated: '✅ تم تحديث اسم القسم.',
-    sectionProductsTitle: 'منتجات القسم {name}:',
-    manageProductInline: '⚙️ إدارة المنتج',
-    renameProduct: '✏️ تعديل اسم المنتج',
-    deleteProduct: '🗑️ حذف المنتج',
-    productDeleted: '✅ تم حذف المنتج.',
-    chooseProductNameLanguage: 'اختر الاسم الذي تريد تعديله:',
-    editNameArabic: '🇮🇶 الاسم العربي',
-    editNameEnglish: '🇺🇸 الاسم الإنجليزي',
-    enterProductName: 'أرسل الاسم الجديد للمنتج:',
-    productUpdated: '✅ تم تحديث المنتج.',
-    showOnHome: '📌 إظهار في الواجهة',
-    hideFromHome: '🚫 إخفاء من الواجهة',
-    featuredUpdated: '✅ تم تحديث ظهور المنتج في الواجهة.',
-    sectionButtonManageInfo: 'هذا القسم يظهر في الواجهة الرئيسية. من هنا تستطيع تعديل اسمه، إضافة منتجات، إدارة المنتجات، أو حذف القسم.',
-    typeCodeSingle: 'كود',
-    typeAccountSingle: 'إيميل وباسورد',
-    typeAccountVerifySingle: 'إيميل وباسورد وتحقق',
-    typeAccountBulk: 'جملة إيميل وباسورد',
-    typeAccountVerifyBulk: 'جملة إيميل وباسورد وتحقق',
-    stockFormatCode: 'أرسل المخزون بحيث كل سطر = كود واحد.',
-    stockFormatAccount: 'أرسل المخزون على شكل زوجين:\nإيميل\nباسورد',
-    stockFormatAccountVerify: 'أرسل المخزون على شكل 3 أسطر لكل منتج:\nإيميل\nباسورد\nتحقق',
+    chatgptCode: '🤖 كود ChatGPT',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
@@ -902,283 +818,6 @@ async function getGlobalSetting(key, defaultValue) {
   return setting.value;
 }
 
-
-function slugifySectionKey(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '') || `section_${Date.now()}`;
-}
-
-function getDefaultProductSections() {
-  return [
-    { key: 'gpt', nameEn: 'GPT', nameAr: 'GPT', isSystem: true }
-  ];
-}
-
-async function getProductSections() {
-  const raw = await getGlobalSetting('product_sections', '');
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length) {
-      const list = parsed.map(s => ({
-        key: String(s.key || '').trim(),
-        nameEn: String(s.nameEn || '').trim() || String(s.key || '').trim(),
-        nameAr: String(s.nameAr || '').trim() || String(s.nameEn || '').trim() || String(s.key || '').trim(),
-        isSystem: Boolean(s.isSystem)
-      })).filter(s => s.key);
-      if (!list.find(s => s.key === 'gpt')) {
-        list.unshift(getDefaultProductSections()[0]);
-      }
-      return list;
-    }
-  } catch {}
-  return getDefaultProductSections();
-}
-
-async function saveProductSections(sections) {
-  await Setting.upsert({
-    key: 'product_sections',
-    lang: 'global',
-    value: JSON.stringify(sections)
-  });
-}
-
-async function addProductSection(nameEn, nameAr) {
-  const sections = await getProductSections();
-  let key = slugifySectionKey(nameEn || nameAr);
-  let counter = 2;
-  while (sections.find(s => s.key === key)) {
-    key = `${slugifySectionKey(nameEn || nameAr)}_${counter}`;
-    counter += 1;
-  }
-  sections.push({ key, nameEn: nameEn || key, nameAr: nameAr || nameEn || key, isSystem: false });
-  await saveProductSections(sections);
-  return key;
-}
-
-async function updateProductSection(key, patch = {}) {
-  const sections = await getProductSections();
-  const updated = sections.map(s => s.key === key ? { ...s, ...patch } : s);
-  await saveProductSections(updated);
-}
-
-async function deleteProductSectionByKey(key) {
-  const sections = await getProductSections();
-  const section = sections.find(s => s.key === key);
-  if (!section || section.key === 'gpt') return false;
-  await Merchant.update({ category: 'general' }, { where: { category: key } });
-  await saveProductSections(sections.filter(s => s.key !== key));
-  const featuredMap = await getFeaturedProductsMap();
-  delete featuredMap[key];
-  await saveFeaturedProductsMap(featuredMap);
-  return true;
-}
-
-async function getProductSectionByKey(key) {
-  return (await getProductSections()).find(s => s.key === key) || null;
-}
-
-async function getLocalizedSectionName(userId, section) {
-  const lang = (await User.findByPk(userId))?.lang || 'en';
-  return lang === 'ar' ? (section.nameAr || section.nameEn) : (section.nameEn || section.nameAr);
-}
-
-async function getFeaturedProductsMap() {
-  const raw = await getGlobalSetting('featured_products_map', '{}');
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-async function saveFeaturedProductsMap(map) {
-  await Setting.upsert({
-    key: 'featured_products_map',
-    lang: 'global',
-    value: JSON.stringify(map || {})
-  });
-}
-
-async function getFeaturedProductIdsForSection(sectionKey) {
-  const map = await getFeaturedProductsMap();
-  return Array.isArray(map[sectionKey]) ? map[sectionKey].map(v => parseInt(v, 10)).filter(Boolean) : [];
-}
-
-async function isProductFeaturedOnHome(sectionKey, merchantId) {
-  const ids = await getFeaturedProductIdsForSection(sectionKey);
-  return ids.includes(Number(merchantId));
-}
-
-async function toggleFeaturedProduct(sectionKey, merchantId) {
-  const map = await getFeaturedProductsMap();
-  const current = Array.isArray(map[sectionKey]) ? map[sectionKey].map(v => parseInt(v, 10)).filter(Boolean) : [];
-  const id = Number(merchantId);
-  map[sectionKey] = current.includes(id) ? current.filter(v => v !== id) : [...current, id];
-  await saveFeaturedProductsMap(map);
-  return map[sectionKey].includes(id);
-}
-
-function getMerchantDedupeKey(merchant) {
-  return [
-    String(merchant?.category || '').trim().toLowerCase(),
-    String(merchant?.nameEn || '').trim().toLowerCase(),
-    String(merchant?.nameAr || '').trim().toLowerCase(),
-    Number(merchant?.price || 0).toFixed(2),
-    String(merchant?.type || '').trim().toLowerCase()
-  ].join('|');
-}
-
-function dedupeMerchants(merchants) {
-  const seen = new Set();
-  const out = [];
-  for (const merchant of merchants) {
-    const key = getMerchantDedupeKey(merchant);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(merchant);
-  }
-  return out;
-}
-
-async function getMerchantsBySection(sectionKey) {
-  if (sectionKey === 'gpt') {
-    return dedupeMerchants(await Merchant.findAll({
-      where: {
-        [Op.or]: [
-          { category: 'gpt' },
-          { category: 'ChatGPT' },
-          { category: 'chatgpt' },
-          { category: 'AI Services' },
-          { nameEn: 'ChatGPT Code' }
-        ]
-      },
-      order: [['id', 'ASC']]
-    }));
-  }
-  return dedupeMerchants(await Merchant.findAll({ where: { category: sectionKey }, order: [['id', 'ASC']] }));
-}
-
-async function showFrontSection(userId, sectionKey) {
-  const section = await getProductSectionByKey(sectionKey);
-  if (!section) {
-    await bot.sendMessage(userId, await getText(userId, 'error'));
-    return;
-  }
-
-  const merchants = await getMerchantsBySection(sectionKey);
-  const keyboard = [];
-
-  if (sectionKey === 'gpt') {
-    const chatgptMerchant = await getOrCreateChatGptMerchant();
-    keyboard.push([{
-      text: `${await getText(userId, 'chatgptCode')} ($${Number(chatgptMerchant.price || 0).toFixed(2)})`,
-      callback_data: 'chatgpt_direct_buy'
-    }]);
-  }
-
-  if (!merchants.length && sectionKey !== 'gpt') {
-    await bot.sendMessage(userId, await getText(userId, 'noSectionProducts'));
-    return;
-  }
-
-  for (const merchant of merchants) {
-    if (sectionKey === 'gpt' && String(merchant.nameEn || '').trim() === 'ChatGPT Code') {
-      continue;
-    }
-    const label = `${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`;
-    keyboard.push([{ text: label, callback_data: `buy_merchant_${merchant.id}` }]);
-  }
-
-  if (keyboard.length === 0) {
-    await bot.sendMessage(userId, await getText(userId, 'noSectionProducts'));
-    return;
-  }
-
-  if (isAdmin(userId)) {
-    keyboard.push([{ text: await getText(userId, 'manageSection'), callback_data: `admin_manage_section_${sectionKey}` }]);
-  }
-  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
-  await bot.sendMessage(userId, `${await getLocalizedSectionName(userId, section)}
-
-${await getText(userId, 'sectionChooseText')}`, {
-    reply_markup: { inline_keyboard: keyboard }
-  });
-}
-
-async function showAdminProductsSection(userId) {
-  const sections = await getProductSections();
-  const keyboard = [
-    [{ text: await getText(userId, 'addProductSection'), callback_data: 'admin_add_product_section' }],
-    [{ text: await getText(userId, 'manageProductSections'), callback_data: 'admin_manage_product_sections' }],
-    [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-  ];
-  for (const section of sections) {
-    keyboard.splice(Math.max(0, keyboard.length - 1), 0, [{ text: `📂 ${await getLocalizedSectionName(userId, section)}`, callback_data: `admin_manage_section_${section.key}` }]);
-  }
-  await bot.sendMessage(userId, await getText(userId, 'productsSection'), {
-    reply_markup: { inline_keyboard: keyboard }
-  });
-}
-
-async function showSectionAdmin(userId, sectionKey) {
-  const section = await getProductSectionByKey(sectionKey);
-  if (!section) {
-    await bot.sendMessage(userId, await getText(userId, 'error'));
-    return;
-  }
-  const keyboard = [
-    [{ text: await getText(userId, 'renameSection'), callback_data: `admin_rename_section_${sectionKey}` }],
-    [{ text: await getText(userId, 'addSectionProduct'), callback_data: `admin_section_add_product_${sectionKey}` }],
-    [{ text: await getText(userId, 'manageSectionProducts'), callback_data: `admin_section_manage_products_${sectionKey}` }],
-  ];
-  if (sectionKey !== 'gpt') {
-    keyboard.push([{ text: await getText(userId, 'deleteSection'), callback_data: `admin_delete_section_${sectionKey}` }]);
-  }
-  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]);
-  await bot.sendMessage(userId, `${await getText(userId, 'sectionManageText', { name: await getLocalizedSectionName(userId, section) })}
-
-${await getText(userId, 'sectionButtonManageInfo')}`, {
-    reply_markup: { inline_keyboard: keyboard }
-  });
-}
-
-async function showSectionProductsAdmin(userId, sectionKey) {
-  const section = await getProductSectionByKey(sectionKey);
-  if (!section) {
-    await bot.sendMessage(userId, await getText(userId, 'error'));
-    return;
-  }
-  const merchants = await getMerchantsBySection(sectionKey);
-  if (!merchants.length) {
-    await bot.sendMessage(userId, await getText(userId, 'noSectionProducts'));
-    return;
-  }
-  for (const merchant of merchants) {
-    const featured = await isProductFeaturedOnHome(sectionKey, merchant.id);
-    await bot.sendMessage(userId,
-      `${await getText(userId, 'sectionProductsTitle', { name: await getLocalizedSectionName(userId, section) })}
-
-${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})
-ID: ${merchant.id}
-Type: ${merchant.type}${featured ? '\n📌 Featured on home' : ''}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: await getText(userId, 'setPrice'), callback_data: `set_price_merchant_${merchant.id}` }],
-            [{ text: await getText(userId, 'addCodes'), callback_data: `add_codes_merchant_${merchant.id}` }],
-            [{ text: await getText(userId, 'renameProduct'), callback_data: `admin_rename_product_${merchant.id}` }],
-            [{ text: featured ? await getText(userId, 'hideFromHome') : await getText(userId, 'showOnHome'), callback_data: `admin_toggle_feature_${sectionKey}_${merchant.id}` }],
-            [{ text: await getText(userId, 'deleteProduct'), callback_data: `admin_delete_product_${merchant.id}` }]
-          ]
-        }
-      }
-    );
-  }
-}
-
 async function getCodeDeliveryMessage(userId) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
@@ -1258,7 +897,7 @@ async function getReferralStockMerchant() {
       nameEn: 'ChatGPT Referral Stock',
       nameAr: 'مخزون ChatGPT الإحالات',
       price: 0,
-      category: 'gpt',
+      category: 'AI Services',
       type: 'single',
       description: { type: 'text', content: 'Referral-only ChatGPT stock' }
     });
@@ -2000,7 +1639,7 @@ async function getMenuButtonItems(userId) {
     { id: 'discount', name: '🎟️ Discount' },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'chatgpt_code', name: ((await getProductSectionByKey('gpt'))?.nameAr || (await getProductSectionByKey('gpt'))?.nameEn || await getText(userId, 'chatgptCode')) },
+    { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
@@ -2326,56 +1965,29 @@ async function sendMainMenu(userId) {
   if (!canUse) return;
 
   const visibility = await getMenuButtonsVisibility();
+  const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
-  const gptSection = await getProductSectionByKey('gpt');
-  const allSections = await getProductSections();
-  const normalButtons = [
-    { id: 'my_balance', text: await getText(userId, 'myBalance') },
-    { id: 'deposit', text: await getText(userId, 'deposit') },
-    { id: 'referral', text: await getText(userId, 'referral') },
-    { id: 'discount', text: '🎟️ Discount' },
-    { id: 'my_purchases', text: await getText(userId, 'myPurchases') },
-    { id: 'support', text: await getText(userId, 'support') },
-    { id: 'free_code', text: await getText(userId, 'freeCodeMenu') }
-  ];
+  const buttonLabels = {
+    redeem: await getText(userId, 'redeem'),
+    buy: await getText(userId, 'buy'),
+    my_balance: await getText(userId, 'myBalance'),
+    deposit: await getText(userId, 'deposit'),
+    referral: await getText(userId, 'referral'),
+    referral_prize: await getText(userId, 'referralStockClaim'),
+    discount: '🎟️ Discount',
+    my_purchases: await getText(userId, 'myPurchases'),
+    support: await getText(userId, 'support'),
+    chatgpt_code: await getText(userId, 'chatgptCode'),
+    admin_panel: await getText(userId, 'adminPanel')
+  };
 
   const buttons = [];
-
-  if (visibility.chatgpt_code !== false) {
-    buttons.push([{ text: await getLocalizedSectionName(userId, gptSection || { nameEn: 'GPT', nameAr: 'GPT' }), callback_data: 'chatgpt_code' }]);
-    for (const merchantId of await getFeaturedProductIdsForSection('gpt')) {
-      const merchant = await Merchant.findByPk(merchantId);
-      if (!merchant) continue;
-      buttons.push([{ text: `⭐ ${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`, callback_data: `buy_merchant_${merchant.id}` }]);
+  for (const id of order) {
+    if (id === 'admin_panel' && !isAdmin(userId)) continue;
+    if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
+    if (visibility[id] !== false && buttonLabels[id]) {
+      buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
-  }
-
-  for (const section of allSections.filter(s => s.key !== 'gpt')) {
-    buttons.push([{ text: await getLocalizedSectionName(userId, section), callback_data: `front_section_${section.key}` }]);
-    for (const merchantId of await getFeaturedProductIdsForSection(section.key)) {
-      const merchant = await Merchant.findByPk(merchantId);
-      if (!merchant) continue;
-      buttons.push([{ text: `⭐ ${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`, callback_data: `buy_merchant_${merchant.id}` }]);
-    }
-  }
-
-  for (const item of normalButtons) {
-    if (item.id === 'free_code' && visibility[item.id] === false) continue;
-    if (item.id === 'discount' && visibility[item.id] === false) continue;
-    if (item.id === 'my_balance' && visibility[item.id] === false) continue;
-    if (item.id === 'deposit' && visibility[item.id] === false) continue;
-    if (item.id === 'referral' && visibility[item.id] === false) continue;
-    if (item.id === 'my_purchases' && visibility[item.id] === false) continue;
-    if (item.id === 'support' && visibility[item.id] === false) continue;
-    buttons.push([{ text: item.text, callback_data: item.id }]);
-  }
-
-  if (visibility.referral_prize !== false && redeemableReferralCodes > 0) {
-    buttons.push([{ text: await getText(userId, 'referralStockClaim'), callback_data: 'referral_prize' }]);
-  }
-
-  if (isAdmin(userId) && visibility.admin_panel !== false) {
-    buttons.push([{ text: await getText(userId, 'adminPanel'), callback_data: 'admin' }]);
   }
 
   await bot.sendMessage(userId, await getText(userId, 'menu'), {
@@ -2392,7 +2004,6 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
-      [{ text: await getText(userId, 'productsSection'), callback_data: 'admin_section_products' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
       [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
@@ -3266,118 +2877,6 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin' && isAdmin(userId)) {
       await showAdminPanel(userId);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_section_products' && isAdmin(userId)) {
-      await showAdminProductsSection(userId);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_add_product_section' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'add_product_section', step: 'nameEn' });
-      await bot.sendMessage(userId, await getText(userId, 'enterSectionNameEn'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_manage_product_sections' && isAdmin(userId)) {
-      const sections = await getProductSections();
-      if (!sections.length) {
-        await bot.sendMessage(userId, await getText(userId, 'noProductSections'));
-      } else {
-        const keyboard = [];
-        for (const section of sections) {
-          keyboard.push([{ text: await getLocalizedSectionName(userId, section), callback_data: `admin_manage_section_${section.key}` }]);
-        }
-        keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]);
-        await bot.sendMessage(userId, await getText(userId, 'productSectionsTitle'), { reply_markup: { inline_keyboard: keyboard } });
-      }
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'chatgpt_code') {
-      await bot.answerCallbackQuery(query.id).catch(() => {});
-      await showFrontSection(userId, 'gpt');
-      return;
-    }
-
-    if (data.startsWith('front_section_')) {
-      const sectionKey = data.substring('front_section_'.length);
-      await bot.answerCallbackQuery(query.id).catch(() => {});
-      await showFrontSection(userId, sectionKey);
-      return;
-    }
-
-    if (data.startsWith('admin_manage_section_') && isAdmin(userId)) {
-      const sectionKey = data.substring('admin_manage_section_'.length);
-      await showSectionAdmin(userId, sectionKey);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_rename_section_') && isAdmin(userId)) {
-      const sectionKey = data.substring('admin_rename_section_'.length);
-      await setUserState(userId, { action: 'rename_product_section', step: 'nameEn', sectionKey });
-      await bot.sendMessage(userId, await getText(userId, 'enterSectionNameEn'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_delete_section_') && isAdmin(userId)) {
-      const sectionKey = data.substring('admin_delete_section_'.length);
-      if (sectionKey === 'gpt') {
-        await bot.sendMessage(userId, await getText(userId, 'cannotDeleteGptSection'));
-      } else {
-        await deleteProductSectionByKey(sectionKey);
-        await bot.sendMessage(userId, await getText(userId, 'sectionDeleted'));
-      }
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_section_add_product_') && isAdmin(userId)) {
-      const sectionKey = data.substring('admin_section_add_product_'.length);
-      await setUserState(userId, { action: 'add_merchant', step: 'nameEn', presetCategory: sectionKey });
-      await bot.sendMessage(userId, await getText(userId, 'askMerchantNameEn'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_section_manage_products_') && isAdmin(userId)) {
-      const sectionKey = data.substring('admin_section_manage_products_'.length);
-      await showSectionProductsAdmin(userId, sectionKey);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_rename_product_') && isAdmin(userId)) {
-      const merchantId = parseInt(data.substring('admin_rename_product_'.length), 10);
-      await setUserState(userId, { action: 'rename_section_product', step: 'nameEn', merchantId });
-      await bot.sendMessage(userId, await getText(userId, 'askMerchantNameEn'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_delete_product_') && isAdmin(userId)) {
-      const merchantId = parseInt(data.substring('admin_delete_product_'.length), 10);
-      await Merchant.destroy({ where: { id: merchantId } });
-      await Code.destroy({ where: { merchantId } });
-      await bot.sendMessage(userId, await getText(userId, 'productDeleted'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('admin_toggle_feature_') && isAdmin(userId)) {
-      const rest = data.substring('admin_toggle_feature_'.length);
-      const splitIndex = rest.lastIndexOf('_');
-      const sectionKey = rest.substring(0, splitIndex);
-      const merchantId = parseInt(rest.substring(splitIndex + 1), 10);
-      await toggleFeaturedProduct(sectionKey, merchantId);
-      await bot.sendMessage(userId, await getText(userId, 'featuredUpdated'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -4303,10 +3802,10 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data.startsWith('merchant_type_')) {
+    if (data === 'merchant_type_single' || data === 'merchant_type_bulk') {
       const state = safeParseState((await User.findByPk(userId)).state);
       if (state?.action === 'add_merchant' && state.step === 'type') {
-        const selectedType = data.replace('merchant_type_', '');
+        const selectedType = data === 'merchant_type_single' ? 'single' : 'bulk';
         await setUserState(userId, { ...state, selectedType, step: 'description' });
         await bot.sendMessage(userId, await getText(userId, 'askDescription'));
       }
@@ -4314,7 +3813,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'chatgpt_direct_buy') {
+    if (data === 'chatgpt_code') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
       await bot.sendMessage(userId, `${await getText(userId, 'askQuantity')}\n\n${await getBulkDiscountInfoText(userId)}`);
       await bot.answerCallbackQuery(query.id);
@@ -4512,62 +4011,6 @@ bot.on('message', async msg => {
         return;
       }
 
-
-      if (state.action === 'add_product_section') {
-        if (state.step === 'nameEn') {
-          await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
-          await bot.sendMessage(userId, await getText(userId, 'enterSectionNameAr'));
-          return;
-        }
-        if (state.step === 'nameAr') {
-          const sectionKey = await addProductSection(state.nameEn, text);
-          await bot.sendMessage(userId, await getText(userId, 'sectionAdded'));
-          await clearUserState(userId);
-          await showSectionAdmin(userId, sectionKey);
-          return;
-        }
-      }
-
-      if (state.action === 'rename_product_section') {
-        if (state.step === 'nameEn') {
-          await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
-          await bot.sendMessage(userId, await getText(userId, 'enterSectionNameAr'));
-          return;
-        }
-        if (state.step === 'nameAr') {
-          await updateProductSection(state.sectionKey, { nameEn: state.nameEn, nameAr: text });
-          await bot.sendMessage(userId, await getText(userId, 'sectionNameUpdated'));
-          await clearUserState(userId);
-          await showSectionAdmin(userId, state.sectionKey);
-          return;
-        }
-      }
-
-      if (state.action === 'rename_section_product') {
-        const merchant = await Merchant.findByPk(state.merchantId);
-        if (!merchant) {
-          await bot.sendMessage(userId, 'Merchant not found');
-          await clearUserState(userId);
-          return;
-        }
-        if (state.step === 'nameEn') {
-          merchant.nameEn = text;
-          await merchant.save();
-          await setUserState(userId, { ...state, step: 'nameAr' });
-          await bot.sendMessage(userId, await getText(userId, 'askMerchantNameAr'));
-          return;
-        }
-        if (state.step === 'nameAr') {
-          merchant.nameAr = text;
-          await merchant.save();
-          await bot.sendMessage(userId, await getText(userId, 'productUpdated'));
-          const sectionKey = merchant.category === 'AI Services' ? 'gpt' : (merchant.category || 'general');
-          await clearUserState(userId);
-          await showSectionProductsAdmin(userId, sectionKey);
-          return;
-        }
-      }
-
       if (state.action === 'add_merchant') {
         if (state.step === 'nameEn') {
           await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
@@ -4591,11 +4034,8 @@ bot.on('message', async msg => {
           await bot.sendMessage(userId, await getText(userId, 'askMerchantType'), {
             reply_markup: {
               inline_keyboard: [
-                [{ text: await getText(userId, 'typeCodeSingle'), callback_data: 'merchant_type_code_single' }],
-                [{ text: await getText(userId, 'typeAccountSingle'), callback_data: 'merchant_type_account_single' }],
-                [{ text: await getText(userId, 'typeAccountVerifySingle'), callback_data: 'merchant_type_account_verify_single' }],
-                [{ text: await getText(userId, 'typeAccountBulk'), callback_data: 'merchant_type_account_bulk' }],
-                [{ text: await getText(userId, 'typeAccountVerifyBulk'), callback_data: 'merchant_type_account_verify_bulk' }]
+                [{ text: await getText(userId, 'typeSingle'), callback_data: 'merchant_type_single' }],
+                [{ text: await getText(userId, 'typeBulk'), callback_data: 'merchant_type_bulk' }]
               ]
             }
           });
@@ -4617,8 +4057,7 @@ bot.on('message', async msg => {
             nameEn: state.nameEn,
             nameAr: state.nameAr,
             price: state.price,
-            category: state.presetCategory || state.category || 'general',
-            type: state.selectedType || 'code_single',
+            type: state.selectedType || 'single',
             description
           });
 
@@ -4666,31 +4105,18 @@ bot.on('message', async msg => {
           return;
         }
 
-        if (merchant.type === 'code_single' || merchant.type === 'single') {
+        if (merchant.type === 'single') {
           await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
-        } else if (merchant.type === 'account_single' || merchant.type === 'account_bulk' || merchant.type === 'bulk') {
-          if (lines.length % 2 !== 0) {
-            await bot.sendMessage(userId, await getText(userId, 'stockFormatAccount'));
-            return;
-          }
-          const items = [];
-          for (let i = 0; i < lines.length; i += 2) {
-            items.push({ value: lines[i], extra: lines[i + 1], merchantId: merchant.id, isUsed: false });
-          }
-          await Code.bulkCreate(items);
-        } else if (merchant.type === 'account_verify_single' || merchant.type === 'account_verify_bulk') {
-          if (lines.length % 3 !== 0) {
-            await bot.sendMessage(userId, await getText(userId, 'stockFormatAccountVerify'));
-            return;
-          }
-          const items = [];
-          for (let i = 0; i < lines.length; i += 3) {
-            items.push({ value: lines[i], extra: `${lines[i + 1]}
-${lines[i + 2]}`, merchantId: merchant.id, isUsed: false });
-          }
-          await Code.bulkCreate(items);
         } else {
-          await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
+          if (lines.length % 2 !== 0) {
+            await bot.sendMessage(userId, '❌ Bulk codes must be pairs (email / password).');
+            return;
+          }
+          const pairs = [];
+          for (let i = 0; i < lines.length; i += 2) {
+            pairs.push({ value: lines[i], extra: lines[i + 1], merchantId: merchant.id, isUsed: false });
+          }
+          await Code.bulkCreate(pairs);
         }
 
         await bot.sendMessage(userId, await getText(userId, 'codesAdded'));
