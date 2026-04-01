@@ -198,7 +198,7 @@ const DEFAULT_TEXTS = {
     chooseMerchant: '👋 Choose merchant:',
     processing: '⏳ Processing...',
     enterQty: '✍️ Enter quantity:',
-    noCodes: '❌ Not enough codes in stock',
+    noCodes: '❌ Stock is empty',
     back: '🔙 Back',
     adminPanel: '🔧 Admin Panel',
     addMerchant: '➕ Add Merchant',
@@ -534,7 +534,7 @@ const DEFAULT_TEXTS = {
     chooseMerchant: '👋 اختر التاجر:',
     processing: '⏳ جاري المعالجة...',
     enterQty: '✍️ أرسل الكمية:',
-    noCodes: '❌ لا يوجد عدد كافٍ من الأكواد في المخزون',
+    noCodes: '❌ المخزون فارغ',
     back: '🔙 رجوع',
     adminPanel: '🔧 لوحة التحكم',
     addMerchant: '➕ إضافة تاجر',
@@ -3300,15 +3300,15 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'chatgpt_code') {
+      await bot.answerCallbackQuery(query.id).catch(() => {});
       await showFrontSection(userId, 'gpt');
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data.startsWith('front_section_')) {
       const sectionKey = data.substring('front_section_'.length);
+      await bot.answerCallbackQuery(query.id).catch(() => {});
       await showFrontSection(userId, sectionKey);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
