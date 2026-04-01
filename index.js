@@ -485,6 +485,19 @@ const DEFAULT_TEXTS = {
     productSectionAdded: '✅ Product section created.',
     chooseSectionForProduct: 'Choose the section for this product:',
     sectionProductsChooseText: 'Choose the product you want from this section:',
+    manageThisSection: '⚙️ Manage This Section',
+    sectionAdminTitle: 'Section management',
+    sectionAdminInfo: 'This section appears to users on the main page. From here you can rename it, add products to it, manage its products, or delete the whole section.',
+    renameSectionButton: '✏️ Rename Section',
+    addSectionProductButton: '➕ Add Product Inside Section',
+    manageSectionProductsButton: '📋 Manage Section Products',
+    deleteSectionButton: '🗑️ Delete Section',
+    enterSectionNewName: 'Send the new section name:',
+    sectionUpdated: '✅ Section updated.',
+    sectionDeleted: '✅ Section deleted.',
+    confirmDeleteSection: '⚠️ Are you sure you want to delete this section and all its products?',
+    sectionManageProductsEmpty: 'No products found in this section yet.',
+    openSectionManage: '📂 Open section management',
     manageBotsHelp: 'Here you add secondary bots, grant them /code or full permissions, and assign an owner ID when needed.',
     noBotsFound: 'No bots found.',
     grantCodePermission: '➕ Grant /code',
@@ -873,6 +886,19 @@ const DEFAULT_TEXTS = {
     productSectionAdded: '✅ تم إنشاء قسم المنتج.',
     chooseSectionForProduct: 'اختر القسم لهذا المنتج:',
     sectionProductsChooseText: 'اختر المنتج الذي تريده من هذا القسم:',
+    manageThisSection: '⚙️ إدارة هذا القسم',
+    sectionAdminTitle: 'إدارة القسم',
+    sectionAdminInfo: 'هذا القسم يظهر للمستخدمين في الواجهة الرئيسية. من هنا يمكنك تغيير اسمه، إضافة منتجات بداخله، إدارة منتجاته، أو حذف القسم كاملًا.',
+    renameSectionButton: '✏️ تغيير اسم القسم',
+    addSectionProductButton: '➕ إضافة منتج داخل القسم',
+    manageSectionProductsButton: '📋 إدارة منتجات القسم',
+    deleteSectionButton: '🗑️ حذف القسم',
+    enterSectionNewName: 'أرسل الاسم الجديد للقسم:',
+    sectionUpdated: '✅ تم تحديث القسم.',
+    sectionDeleted: '✅ تم حذف القسم.',
+    confirmDeleteSection: '⚠️ هل أنت متأكد من حذف هذا القسم مع جميع منتجاته؟',
+    sectionManageProductsEmpty: 'لا توجد منتجات داخل هذا القسم حتى الآن.',
+    openSectionManage: '📂 فتح إدارة القسم',
     manageBotsHelp: 'من هنا تضيف البوتات الثانوية وتمنحها صلاحية /code أو الصلاحية الكاملة وتحدد مالك البوت عند الحاجة.',
     noBotsFound: 'لا توجد بوتات مضافة.',
     grantCodePermission: '➕ منح /code',
@@ -1222,6 +1248,25 @@ async function addProductSection(nameEn, nameAr) {
   return key;
 }
 
+async function updateProductSection(sectionKey, updates = {}) {
+  const sections = await getProductSections();
+  const target = sections.find(s => s.key === sectionKey);
+  if (!target || target.key === 'chatgpt') return false;
+  if (typeof updates.nameEn === 'string') target.nameEn = updates.nameEn;
+  if (typeof updates.nameAr === 'string') target.nameAr = updates.nameAr;
+  await saveProductSections(sections);
+  return true;
+}
+
+async function deleteProductSection(sectionKey) {
+  if (!sectionKey || sectionKey === 'chatgpt') return false;
+  const sections = await getProductSections();
+  const filtered = sections.filter(s => s.key !== sectionKey);
+  await saveProductSections(filtered);
+  await Merchant.destroy({ where: { category: sectionKey } });
+  return true;
+}
+
 async function getLocalizedSectionName(userId, section) {
   const user = await User.findByPk(userId);
   return (user?.lang || 'en') === 'ar' ? (section.nameAr || section.nameEn) : (section.nameEn || section.nameAr);
@@ -1282,25 +1327,105 @@ async function showProductSection(userId, sectionKey) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
+
   const merchants = dedupeMerchantsList(sectionKey === 'chatgpt' ? await getChatgptProducts() : await getProductsBySection(sectionKey));
-  if (!merchants.length) {
-    await bot.sendMessage(userId, await getText(userId, 'noCodes'));
-    return;
-  }
   const keyboard = [];
+
   for (const merchant of merchants) {
     const label = `${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})`;
     const callbackData = sectionKey === 'chatgpt' && merchant.nameEn === 'ChatGPT Code' ? 'chatgpt_buy_main' : `buy_merchant_${merchant.id}`;
     keyboard.push([{ text: label, callback_data: callbackData }]);
   }
-  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
-  await bot.sendMessage(userId, `${await getLocalizedSectionName(userId, section)}
 
-${await getText(userId, 'sectionProductsChooseText')}`, {
+  if (isAdmin(userId)) {
+    if (sectionKey === 'chatgpt') {
+      keyboard.push([{ text: await getText(userId, 'manageChatgptSection'), callback_data: 'admin_chatgpt_section' }]);
+    } else {
+      keyboard.push([{ text: await getText(userId, 'manageThisSection'), callback_data: `admin_section_manage_${sectionKey}` }]);
+    }
+  }
+
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
+
+  let messageText = `${await getLocalizedSectionName(userId, section)}\n\n${await getText(userId, 'sectionProductsChooseText')}`;
+  if (!merchants.length) {
+    messageText += `\n\n${await getText(userId, 'noCodes')}`;
+  }
+
+  await bot.sendMessage(userId, messageText, {
     reply_markup: { inline_keyboard: keyboard }
   });
 }
 
+
+async function showGenericSectionAdmin(userId, sectionKey) {
+  const sections = await getProductSections();
+  const section = sections.find(s => s.key === sectionKey);
+  if (!section || section.key === 'chatgpt') {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const merchants = dedupeMerchantsList(await getProductsBySection(sectionKey));
+  let infoText =
+    `${await getText(userId, 'sectionAdminTitle')}\n\n` +
+    `${await getText(userId, 'sectionAdminInfo')}\n\n` +
+    `${await getLocalizedSectionName(userId, section)}\n\n` +
+    `${await getText(userId, 'chatgptProductsListTitle')}\n`;
+
+  if (merchants.length) {
+    for (const merchant of merchants) {
+      infoText += `\n• ${(await getLocalizedMerchantName(userId, merchant))} ($${Number(merchant.price || 0).toFixed(2)}) | ID: ${merchant.id}`;
+    }
+  } else {
+    infoText += `\n${await getText(userId, 'sectionManageProductsEmpty')}`;
+  }
+
+  await bot.sendMessage(userId, infoText, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'renameSectionButton'), callback_data: `admin_section_rename_${sectionKey}` }],
+        [{ text: await getText(userId, 'addSectionProductButton'), callback_data: `admin_section_add_product_${sectionKey}` }],
+        [{ text: await getText(userId, 'manageSectionProductsButton'), callback_data: `admin_section_products_${sectionKey}` }],
+        [{ text: await getText(userId, 'deleteSectionButton'), callback_data: `admin_section_delete_${sectionKey}` }],
+        [{ text: await getText(userId, 'back'), callback_data: `front_section_${sectionKey}` }]
+      ]
+    }
+  });
+}
+
+async function showGenericSectionProductsAdmin(userId, sectionKey) {
+  const sections = await getProductSections();
+  const section = sections.find(s => s.key === sectionKey);
+  if (!section || section.key === 'chatgpt') {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const merchants = dedupeMerchantsList(await getProductsBySection(sectionKey));
+  if (!merchants.length) {
+    await bot.sendMessage(userId, await getText(userId, 'sectionManageProductsEmpty'));
+    return;
+  }
+
+  for (const merchant of merchants) {
+    await bot.sendMessage(
+      userId,
+      `${await getText(userId, 'productManageTitle')}\n\n${await getLocalizedMerchantName(userId, merchant)} ($${Number(merchant.price || 0).toFixed(2)})\nID: ${merchant.id}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'setProductPrice'), callback_data: `set_price_merchant_${merchant.id}` }],
+            [{ text: await getText(userId, 'addProductStock'), callback_data: `add_codes_merchant_${merchant.id}` }],
+            [{ text: await getText(userId, 'editProductNames'), callback_data: `admin_edit_product_names_${merchant.id}` }],
+            [{ text: await getText(userId, 'editProductTerms'), callback_data: `admin_edit_product_terms_${merchant.id}` }],
+            [{ text: await getText(userId, 'deleteSectionButton'), callback_data: `admin_delete_product_${merchant.id}_${sectionKey}` }]
+          ]
+        }
+      }
+    );
+  }
+}
 async function getCodeDeliveryMessage(userId) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
@@ -4685,6 +4810,73 @@ ${await getBulkDiscountInfoText(userId)}`);
       return;
     }
 
+    if (data.startsWith('admin_section_manage_') && isAdmin(userId)) {
+      const sectionKey = data.substring('admin_section_manage_'.length);
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      await bot.deleteMessage(userId, query.message.message_id).catch(() => {});
+      await showGenericSectionAdmin(userId, sectionKey);
+      return;
+    }
+
+    if (data.startsWith('admin_section_rename_') && isAdmin(userId)) {
+      const sectionKey = data.substring('admin_section_rename_'.length);
+      await setUserState(userId, { action: 'rename_product_section', sectionKey });
+      await bot.sendMessage(userId, await getText(userId, 'enterSectionNewName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_section_add_product_') && isAdmin(userId)) {
+      const sectionKey = data.substring('admin_section_add_product_'.length);
+      await setUserState(userId, { action: 'add_merchant', step: 'nameEn', presetCategory: sectionKey });
+      await bot.sendMessage(userId, await getText(userId, 'askMerchantNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_section_products_') && isAdmin(userId)) {
+      const sectionKey = data.substring('admin_section_products_'.length);
+      await showGenericSectionProductsAdmin(userId, sectionKey);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_section_delete_') && isAdmin(userId)) {
+      const sectionKey = data.substring('admin_section_delete_'.length);
+      await bot.sendMessage(userId, await getText(userId, 'confirmDeleteSection'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'yes'), callback_data: `confirm_delete_section_${sectionKey}` }],
+            [{ text: await getText(userId, 'no'), callback_data: `admin_section_manage_${sectionKey}` }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('confirm_delete_section_') && isAdmin(userId)) {
+      const sectionKey = data.substring('confirm_delete_section_'.length);
+      await deleteProductSection(sectionKey);
+      await bot.sendMessage(userId, await getText(userId, 'sectionDeleted'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_delete_product_') && isAdmin(userId)) {
+      const rest = data.substring('admin_delete_product_'.length);
+      const parts = rest.split('_');
+      const merchantId = parseInt(parts[0], 10);
+      const sectionKey = parts.slice(1).join('_');
+      await Merchant.destroy({ where: { id: merchantId } });
+      await bot.sendMessage(userId, await getText(userId, 'merchantDeleted'));
+      if (sectionKey) {
+        await showGenericSectionProductsAdmin(userId, sectionKey);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_add_product_section' && isAdmin(userId)) {
       await setUserState(userId, { action: 'add_product_section', step: 'nameEn' });
       await bot.sendMessage(userId, await getText(userId, 'enterSectionNameEn'));
@@ -4697,14 +4889,14 @@ ${await getBulkDiscountInfoText(userId)}`);
       if (!sections.length) {
         await bot.sendMessage(userId, await getText(userId, 'noProductSections'));
       } else {
-        let msg = `${await getText(userId, 'productSectionsTitle')}
-
-`;
-        for (const section of sections) {
-          msg += `• ${section.nameAr} / ${section.nameEn} [${section.key}]
-`;
-        }
-        await bot.sendMessage(userId, msg);
+        await bot.sendMessage(userId, await getText(userId, 'productSectionsTitle'), {
+          reply_markup: {
+            inline_keyboard: sections.map(section => ([{
+              text: `${section.nameAr} / ${section.nameEn}`,
+              callback_data: `admin_section_manage_${section.key}`
+            }])).concat([[{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]])
+          }
+        });
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -5194,12 +5386,33 @@ bot.on('message', async msg => {
           return;
         }
         if (state.step === 'nameAr') {
-          await addProductSection(state.nameEn, text);
+          const newKey = await addProductSection(state.nameEn, text);
           await bot.sendMessage(userId, await getText(userId, 'productSectionAdded'));
           await clearUserState(userId);
-          await showAdminProductsSection(userId);
+          await showGenericSectionAdmin(userId, newKey);
           return;
         }
+      }
+
+      if (state.action === 'rename_product_section') {
+        const sectionKey = state.sectionKey;
+        const sections = await getProductSections();
+        const section = sections.find(s => s.key === sectionKey);
+        if (!section || section.key === 'chatgpt') {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+        const currentLang = (await User.findByPk(userId))?.lang || 'en';
+        if (currentLang === 'ar') {
+          await updateProductSection(sectionKey, { nameAr: text });
+        } else {
+          await updateProductSection(sectionKey, { nameEn: text });
+        }
+        await bot.sendMessage(userId, await getText(userId, 'sectionUpdated'));
+        await clearUserState(userId);
+        await showGenericSectionAdmin(userId, sectionKey);
+        return;
       }
 
       if (state.action === 'add_merchant') {
@@ -5283,8 +5496,15 @@ bot.on('message', async msg => {
           });
 
           await bot.sendMessage(userId, await getText(userId, 'merchantCreated', { id: merchant.id }));
+          const targetSection = state.presetCategory || state.category;
           await clearUserState(userId);
-          await showAdminProductsSection(userId);
+          if (targetSection && String(targetSection).toLowerCase() !== 'chatgpt') {
+            await showGenericSectionAdmin(userId, targetSection);
+          } else if (targetSection && String(targetSection).toLowerCase() === 'chatgpt') {
+            await showChatgptSectionAdmin(userId);
+          } else {
+            await showAdminProductsSection(userId);
+          }
           return;
         }
       }
