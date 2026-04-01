@@ -201,6 +201,11 @@ const DEFAULT_TEXTS = {
     chooseLanguageMenu: 'Choose your language:',
     addChatgptProduct: '➕ Add ChatGPT Product',
     manageChatgptProducts: '📋 Manage ChatGPT Products',
+    searchDuplicateChatgptProducts: '🔎 Search Repeated Buttons',
+    deleteDuplicateChatgptProducts: '🗑️ Delete Repeated Buttons',
+    noDuplicateChatgptProducts: '✅ No repeated ChatGPT buttons found.',
+    duplicateChatgptProductsResult: '🔎 Repeated ChatGPT buttons\n\nCount: {count}\n\n{list}',
+    duplicateChatgptProductsDeleted: '✅ Repeated ChatGPT buttons deleted. Removed: {count}',
     chatgptProductsListTitle: 'ChatGPT section products:',
     manageThisProduct: '⚙️ Manage This Product',
     chatgptSectionAdminInfo: 'This section appears to users as the main ChatGPT area. Add ChatGPT products here, rename the section, or manage product stock and pricing.',
@@ -584,6 +589,11 @@ const DEFAULT_TEXTS = {
     chooseLanguageMenu: 'اختر اللغة:',
     addChatgptProduct: '➕ إضافة منتج ChatGPT',
     manageChatgptProducts: '📋 إدارة منتجات ChatGPT',
+    searchDuplicateChatgptProducts: '🔎 البحث عن الأزرار المكررة',
+    deleteDuplicateChatgptProducts: '🗑️ حذف الأزرار المكررة',
+    noDuplicateChatgptProducts: '✅ لا توجد أزرار ChatGPT مكررة.',
+    duplicateChatgptProductsResult: '🔎 الأزرار المكررة داخل ChatGPT\n\nالعدد: {count}\n\n{list}',
+    duplicateChatgptProductsDeleted: '✅ تم حذف الأزرار المكررة من ChatGPT. المحذوف: {count}',
     chatgptProductsListTitle: 'منتجات قسم ChatGPT:',
     manageThisProduct: '⚙️ إدارة هذا المنتج',
     chatgptSectionAdminInfo: 'هذا القسم يظهر للمستخدمين كقسم ChatGPT الرئيسي. من هنا تستطيع إضافة منتجات ChatGPT، تغيير اسم القسم، أو إدارة مخزون وأسعار المنتجات بداخله.',
@@ -1233,8 +1243,7 @@ function getMerchantDedupeKey(merchant) {
   return `${category}|${type}|${nameEn}|${nameAr}|${price}`;
 }
 
-async function getUniqueMerchantsForSection(sectionKey) {
-  const merchants = await getUniqueMerchantsForSection(sectionKey);
+function dedupeMerchantsList(merchants) {
   const unique = [];
   const seen = new Set();
   for (const merchant of merchants) {
@@ -1247,20 +1256,22 @@ async function getUniqueMerchantsForSection(sectionKey) {
 }
 
 async function findDuplicateChatgptProducts() {
-  const merchants = (await getChatgptProducts()).filter((merchant, index, arr) => arr.findIndex(m => getMerchantDedupeKey(m) === getMerchantDedupeKey(merchant)) === index);
-  const seen = new Map()
+  const merchants = await getChatgptProducts();
+  const seen = new Map();
   const duplicateIds = [];
   const lines = [];
+
   for (const merchant of merchants) {
     const key = getMerchantDedupeKey(merchant);
     if (!seen.has(key)) {
       seen.set(key, merchant);
     } else {
-      duplicateIds.push(merchant.id);
       const first = seen.get(key);
+      duplicateIds.push(merchant.id);
       lines.push(`ID ${first.id} + ID ${merchant.id} | ${merchant.nameAr || merchant.nameEn} ($${Number(merchant.price || 0).toFixed(2)})`);
     }
   }
+
   return { count: duplicateIds.length, duplicateIds, lines };
 }
 
@@ -1271,7 +1282,7 @@ async function showProductSection(userId, sectionKey) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
-  const merchants = await getUniqueMerchantsForSection(sectionKey);
+  const merchants = dedupeMerchantsList(sectionKey === 'chatgpt' ? await getChatgptProducts() : await getProductsBySection(sectionKey));
   if (!merchants.length) {
     await bot.sendMessage(userId, await getText(userId, 'noCodes'));
     return;
@@ -1671,7 +1682,7 @@ async function getChatgptProducts() {
 }
 
 async function showChatgptSection(userId) {
-  const merchants = (await getChatgptProducts()).filter((merchant, index, arr) => arr.findIndex(m => getMerchantDedupeKey(m) === getMerchantDedupeKey(merchant)) === index);
+  const merchants = dedupeMerchantsList(await getChatgptProducts());
   const keyboard = [];
 
   for (const merchant of merchants) {
@@ -1693,7 +1704,7 @@ async function showChatgptSection(userId) {
 
 async function showChatgptSectionAdmin(userId) {
   const sectionName = await getChatgptSectionLabel(userId);
-  const merchants = (await getChatgptProducts()).filter((merchant, index, arr) => arr.findIndex(m => getMerchantDedupeKey(m) === getMerchantDedupeKey(merchant)) === index);
+  const merchants = dedupeMerchantsList(await getChatgptProducts());
   let infoText = `${await getText(userId, 'manageChatgptSection')}\n\n${await getText(userId, 'chatgptSectionAdminInfo')}\n\n${await getText(userId, 'chatgptSectionName')}: ${sectionName}\n\n${await getText(userId, 'chatgptProductsListTitle')}\n`;
   for (const merchant of merchants) {
     infoText += `\n• ${(await getLocalizedMerchantName(userId, merchant))} ($${Number(merchant.price || 0).toFixed(2)}) | ID: ${merchant.id}`;
@@ -1708,6 +1719,7 @@ async function showChatgptSectionAdmin(userId) {
           [{ text: await getText(userId, 'setChatgptSectionName'), callback_data: 'admin_set_chatgpt_section_name' }],
           [{ text: await getText(userId, 'addChatgptProduct'), callback_data: 'admin_add_chatgpt_product' }],
           [{ text: await getText(userId, 'manageChatgptProducts'), callback_data: 'admin_manage_chatgpt_products' }],
+          [{ text: await getText(userId, 'searchDuplicateChatgptProducts'), callback_data: 'admin_search_duplicate_chatgpt_products' }],
           [{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]
         ]
       }
@@ -4805,7 +4817,7 @@ ${await getBulkDiscountInfoText(userId)}`);
     }
 
     if (data === 'admin_manage_chatgpt_products' && isAdmin(userId)) {
-      const merchants = (await getChatgptProducts()).filter((merchant, index, arr) => arr.findIndex(m => getMerchantDedupeKey(m) === getMerchantDedupeKey(merchant)) === index);
+      const merchants = dedupeMerchantsList(await getChatgptProducts());
       for (const merchant of merchants) {
         await bot.sendMessage(
           userId,
