@@ -378,9 +378,13 @@ const DEFAULT_TEXTS = {
     viewReferralStockCount: '📦 View Referral Stock',
     searchDuplicateReferralCodes: '🔎 Search Duplicate Codes',
     deleteSoldReferralCodes: '🗑️ Delete Sold Codes',
+    searchAndDeleteReferralCodes: '🔍 Search Codes And Delete',
     deleteDuplicateReferralCodes: '🗑️ Delete Duplicate Codes',
     noDuplicateReferralCodes: '✅ No duplicate codes found in referral stock.',
     noSoldReferralCodes: '✅ No sold/used codes found in referral stock.',
+    enterSearchDeleteReferralCodes: 'Send the codes you want to search for and delete from referral stock. Send each code on a new line or separated by spaces.',
+    searchDeleteReferralCodesNotFound: '✅ None of the sent codes were found in referral stock.',
+    searchDeleteReferralCodesDone: '✅ Search finished. Deleted: {deleted} code(s). Not found: {notFound} code(s).',
     duplicateReferralCodesResult: '🔎 Duplicate referral-stock codes\n\nDuplicate count: {count}\n\n{list}',
     duplicateReferralCodesDeleted: '✅ Duplicate referral-stock codes deleted. Removed: {count}',
     soldReferralCodesDeleted: '✅ Sold/used referral-stock codes deleted. Removed: {count}',
@@ -737,9 +741,13 @@ const DEFAULT_TEXTS = {
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
     searchDuplicateReferralCodes: '🔎 البحث عن الاكواد المكررة',
     deleteSoldReferralCodes: '🗑️ حذف الكودات المبيوعة',
+    searchAndDeleteReferralCodes: '🔍 البحث عن الكودات وحذفها',
     deleteDuplicateReferralCodes: '🗑️ حذف الاكواد المكررة',
     noDuplicateReferralCodes: '✅ لا توجد أكواد مكررة في مخزون الإحالات.',
     noSoldReferralCodes: '✅ لا توجد كودات مبيوعة/مسحوبة في مخزون الإحالات.',
+    enterSearchDeleteReferralCodes: 'أرسل الكودات التي تريد البحث عنها وحذفها من مخزون الإحالات. أرسل كل كود في سطر أو افصل بينها بمسافات.',
+    searchDeleteReferralCodesNotFound: '✅ لم يتم العثور على أي كود من الكودات المرسلة داخل مخزون الإحالات.',
+    searchDeleteReferralCodesDone: '✅ انتهى البحث. تم حذف: {deleted} كود. غير موجود: {notFound} كود.',
     duplicateReferralCodesResult: '🔎 الأكواد المكررة في مخزون الإحالات\n\nعدد التكرار: {count}\n\n{list}',
     duplicateReferralCodesDeleted: '✅ تم حذف الأكواد المكررة من مخزون الإحالات. المحذوف: {count}',
     soldReferralCodesDeleted: '✅ تم حذف الكودات المبيوعة/المسحوبة من مخزون الإحالات. المحذوف: {count}',
@@ -1243,6 +1251,52 @@ async function deleteSoldReferralStockCodes() {
 
   await Code.destroy({ where: { id: ids } });
   return { count: ids.length };
+}
+
+async function searchAndDeleteReferralStockCodes(rawInput) {
+  const merchant = await getReferralStockMerchant();
+  const wanted = Array.from(new Set(String(rawInput || '')
+    .split(/\r?\n|\s+/)
+    .map(v => String(v || '').trim())
+    .filter(Boolean)));
+
+  if (!wanted.length) {
+    return { deleted: 0, notFound: 0, foundValues: [] };
+  }
+
+  const rows = await Code.findAll({
+    where: { merchantId: merchant.id },
+    attributes: ['id', 'value']
+  });
+
+  const bucket = new Map();
+  for (const row of rows) {
+    const key = String(row.value || '').trim();
+    if (!key) continue;
+    if (!bucket.has(key)) bucket.set(key, []);
+    bucket.get(key).push(row.id);
+  }
+
+  const idsToDelete = [];
+  const foundValues = [];
+  for (const code of wanted) {
+    const ids = bucket.get(code);
+    if (ids && ids.length) {
+      idsToDelete.push(...ids);
+      foundValues.push(code);
+    }
+  }
+
+  const uniqueIds = Array.from(new Set(idsToDelete));
+  if (uniqueIds.length) {
+    await Code.destroy({ where: { id: uniqueIds } });
+  }
+
+  return {
+    deleted: uniqueIds.length,
+    notFound: Math.max(0, wanted.length - foundValues.length),
+    foundValues
+  };
 }
 
 async function getSuccessfulReferralCount(userId) {
@@ -2520,6 +2574,7 @@ async function showReferralStockSettingsAdmin(userId) {
       [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
       [{ text: await getText(userId, 'searchDuplicateReferralCodes'), callback_data: 'admin_search_referral_stock_duplicates' }],
       [{ text: await getText(userId, 'deleteSoldReferralCodes'), callback_data: 'admin_delete_sold_referral_stock_codes' }],
+      [{ text: await getText(userId, 'searchAndDeleteReferralCodes'), callback_data: 'admin_search_delete_referral_stock_codes' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -4038,6 +4093,13 @@ ${await getBulkDiscountInfoText(userId)}`);
       return;
     }
 
+    if (data === 'admin_search_delete_referral_stock_codes' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'search_delete_referral_stock_codes' });
+      await bot.sendMessage(userId, await getText(userId, 'enterSearchDeleteReferralCodes'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_toggle_referrals' && isAdmin(userId)) {
       const current = await getReferralEnabled();
       await Setting.upsert({ key: 'referral_enabled', lang: 'global', value: String(!current) });
@@ -5233,6 +5295,21 @@ bot.on('message', async msg => {
         }
         await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
         await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded'));
+        await clearUserState(userId);
+        await showReferralStockSettingsAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'search_delete_referral_stock_codes') {
+        const result = await searchAndDeleteReferralStockCodes(text || '');
+        if (!result.deleted) {
+          await bot.sendMessage(userId, await getText(userId, 'searchDeleteReferralCodesNotFound'));
+        } else {
+          await bot.sendMessage(userId, await getText(userId, 'searchDeleteReferralCodesDone', {
+            deleted: result.deleted,
+            notFound: result.notFound
+          }));
+        }
         await clearUserState(userId);
         await showReferralStockSettingsAdmin(userId);
         return;
