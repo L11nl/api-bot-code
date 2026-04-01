@@ -62,7 +62,8 @@ const Merchant = sequelize.define('Merchant', {
   price: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'single' },
-  description: { type: DataTypes.JSONB, allowNull: true }
+  description: { type: DataTypes.JSONB, allowNull: true },
+  verifyLink: { type: DataTypes.TEXT, allowNull: true }
 });
 
 const PaymentMethod = sequelize.define('PaymentMethod', {
@@ -195,15 +196,15 @@ const DEFAULT_TEXTS = {
     myBalance: '💰 My Balance',
     deposit: '💳 Deposit',
     support: '📞 Support',
-    chooseMerchant: '👋 Choose merchant:',
+    chooseMerchant: '👋 Choose product:',
     processing: '⏳ Processing...',
     enterQty: '✍️ Enter quantity:',
     noCodes: '❌ Not enough codes in stock',
     back: '🔙 Back',
     adminPanel: '🔧 Admin Panel',
-    addMerchant: '➕ Add Merchant',
-    listMerchants: '📋 List Merchants',
-    addCodes: '📦 Add Codes',
+    addMerchant: '➕ Add Product',
+    listMerchants: '📋 List Products',
+    addCodes: '📦 Add Stock',
     stats: '📊 Stats',
     setPrice: '💰 Set Price',
     setChatgptPrice: '🤖 Set ChatGPT Price',
@@ -243,21 +244,26 @@ const DEFAULT_TEXTS = {
     depositNotification: '💳 New deposit request from user {userId}\nAmount: {amount} {currency}\nPayment Method: {method}\n\nMessage: {message}',
     approve: '✅ Approve',
     reject: '❌ Reject',
-    success: '✅ Purchase successful! Here are your codes:',
+    success: '✅ Purchase successful! Here are your items/codes:',
     error: '❌ Error',
-    askMerchantNameEn: 'Send merchant name in English:',
-    askMerchantNameAr: 'Send merchant name in Arabic:',
+    askMerchantNameEn: 'Send product name in English:',
+    askMerchantNameAr: 'Send product name in Arabic:',
     askMerchantPrice: 'Send price in USD:',
-    askMerchantType: 'Select merchant type:',
-    typeSingle: 'Single (one code per line)',
+    askMerchantType: 'Select product type:',
+    typeSingle: 'Code',
+    typeCredentials: 'Email + Password',
+    typeCredentials2fa: 'Email + Password + 2FA/Verify',
+    typeFile: 'File',
+    typeCustom: 'Custom message/product',
+    askVerifyLink: 'Send verification link (optional) or /skip:',
     typeBulk: 'Bulk (email/password pairs)',
-    askDescription: 'Send description (text, photo, video, or /skip):',
-    merchantCreated: '✅ Merchant created! ID: {id}',
+    askDescription: 'Send description/explanation (text, photo, video, or /skip):',
+    merchantCreated: '✅ Product created! ID: {id}',
     enterPrice: 'Enter new price (USD):',
     priceUpdated: '💰 Price updated!',
-    enterCodes: 'Send codes separated by new lines or spaces:',
+    enterCodes: 'Send stock data. For custom products use a line with only - between products. For file products send a document file now or send stored file IDs.',
     codesAdded: '✅ Codes added successfully!',
-    merchantList: '📋 Merchants list:\n',
+    merchantList: '📋 Products list:\n',
     askCategory: 'Send category name:',
     categoryUpdated: 'Category updated!',
     setReferralPercent: 'Set referral reward percentage:',
@@ -406,6 +412,7 @@ const DEFAULT_TEXTS = {
     currentCreatorDiscount: 'Your creator discount: {percent}%',
     manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
     chatgptCode: '🤖 ChatGPT Code',
+    chatgptPurchaseAdminNotice: '🤖 User bought ChatGPT code(s)\nName: {name}\nUsername: {username}\nID: {id}\nCount: {count}\nCode(s):\n{codes}\nRemaining stock: {remaining}',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
@@ -495,15 +502,15 @@ const DEFAULT_TEXTS = {
     myBalance: '💰 رصيدي',
     deposit: '💳 شحن الرصيد',
     support: '📞 الدعم الفني',
-    chooseMerchant: '👋 اختر التاجر:',
+    chooseMerchant: '👋 اختر المنتج:',
     processing: '⏳ جاري المعالجة...',
     enterQty: '✍️ أرسل الكمية:',
     noCodes: '❌ لا يوجد عدد كافٍ من الأكواد في المخزون',
     back: '🔙 رجوع',
     adminPanel: '🔧 لوحة التحكم',
-    addMerchant: '➕ إضافة تاجر',
-    listMerchants: '📋 قائمة التجار',
-    addCodes: '📦 إضافة أكواد',
+    addMerchant: '➕ إضافة منتج',
+    listMerchants: '📋 قائمة المنتجات',
+    addCodes: '📦 إضافة مخزون',
     stats: '📊 الإحصائيات',
     setPrice: '💰 تعديل السعر',
     setChatgptPrice: '🤖 تعديل سعر كود ChatGPT',
@@ -543,21 +550,26 @@ const DEFAULT_TEXTS = {
     depositNotification: '💳 طلب شحن جديد من المستخدم {userId}\nالمبلغ: {amount} {currency}\nطريقة الدفع: {method}\n\nالرسالة: {message}',
     approve: '✅ موافقة',
     reject: '❌ رفض',
-    success: '✅ تم الشراء بنجاح! إليك الأكواد:',
+    success: '✅ تم الشراء بنجاح! إليك المنتج/الأكواد:',
     error: '❌ خطأ',
-    askMerchantNameEn: 'أرسل اسم التاجر بالإنجليزية:',
-    askMerchantNameAr: 'أرسل اسم التاجر بالعربية:',
+    askMerchantNameEn: 'أرسل اسم المنتج بالإنجليزية:',
+    askMerchantNameAr: 'أرسل اسم المنتج بالعربية:',
     askMerchantPrice: 'أرسل السعر بالدولار:',
-    askMerchantType: 'اختر نوع التاجر:',
-    typeSingle: 'فردي (كود واحد في كل سطر)',
+    askMerchantType: 'اختر نوع المنتج:',
+    typeSingle: 'كود',
+    typeCredentials: 'إيميل وباسورد',
+    typeCredentials2fa: 'إيميل وباسورد وتحقق خطوتين',
+    typeFile: 'ملف',
+    typeCustom: 'رسالة/منتج مخصص',
+    askVerifyLink: 'أرسل رابط التحقق (اختياري) أو /skip:',
     typeBulk: 'جملة (إيميل وباسورد في سطرين)',
-    askDescription: 'أرسل شرح توضيحي (نص، صورة، فيديو، أو /skip):',
-    merchantCreated: '✅ تم إنشاء التاجر! المعرف: {id}',
+    askDescription: 'أرسل شرح/وصف المنتج (نص، صورة، فيديو، أو /skip):',
+    merchantCreated: '✅ تم إنشاء المنتج! المعرف: {id}',
     enterPrice: 'أدخل السعر الجديد (دولار):',
     priceUpdated: '💰 تم تحديث السعر!',
-    enterCodes: 'أرسل الأكواد مفصولة بسطور جديدة أو مسافات:',
+    enterCodes: 'أرسل بيانات المخزون. للمنتج المخصص استخدم سطرًا يحتوي فقط على - بين كل منتج وآخر. ولنوع الملف أرسل ملفًا الآن أو أرسل file ids.',
     codesAdded: '✅ تمت إضافة الأكواد بنجاح!',
-    merchantList: '📋 قائمة التجار:\n',
+    merchantList: '📋 قائمة المنتجات:\n',
     askCategory: 'أرسل اسم التصنيف:',
     categoryUpdated: 'تم تحديث التصنيف!',
     setReferralPercent: 'أدخل نسبة مكافأة الإحالة:',
@@ -706,6 +718,7 @@ const DEFAULT_TEXTS = {
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
     manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
     chatgptCode: '🤖 كود ChatGPT',
+    chatgptPurchaseAdminNotice: '🤖 قام مستخدم بشراء كود/كودات ChatGPT\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}\nالكود/الأكواد:\n{codes}\nالمتبقي في المخزون: {remaining}',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
@@ -2014,6 +2027,8 @@ async function sendMainMenu(userId) {
   const visibility = await getMenuButtonsVisibility();
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
+  const chatgptMerchant = await getOrCreateChatGptMerchant();
+  const chatgptPrice = Number(chatgptMerchant.price || 0).toFixed(2);
   const buttonLabels = {
     redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
@@ -2024,7 +2039,7 @@ async function sendMainMenu(userId) {
     discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
-    chatgpt_code: await getText(userId, 'chatgptCode'),
+    chatgpt_code: `${await getText(userId, 'chatgptCode')} ($${chatgptPrice})`,
     admin_panel: await getText(userId, 'adminPanel')
   };
 
@@ -2227,7 +2242,7 @@ async function showMerchantsForBuy(userId) {
     buttons.push([{ text: `📂 ${category}`, callback_data: 'ignore' }]);
     for (const m of list) {
       const row = [{
-        text: `${user.lang === 'en' ? m.nameEn : m.nameAr} - ${m.price} USD`,
+        text: `${user.lang === 'en' ? m.nameEn : m.nameAr} - $${m.price}`,
         callback_data: `buy_merchant_${m.id}`
       }];
       if (m.description && (m.description.content || m.description.fileId)) {
@@ -2460,8 +2475,8 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
       count: quantity,
       remaining: remainingStock
     })).catch(() => {});
-    const codesText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
-    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost };
+    const codesText = formatPurchasedItemsText(merchant, codes);
+    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost, merchant, items: codes };
   } catch (err) {
     await t.rollback();
     console.error('Purchase transaction error:', err);
@@ -2692,6 +2707,50 @@ async function getOrCreateChatGptMerchant() {
   return merchant;
 }
 
+function splitCustomProductBlocks(rawText) {
+  const lines = String(rawText || '').split(/\r?\n/);
+  const blocks = [];
+  let current = [];
+  for (const line of lines) {
+    if (line.trim() === '-') {
+      if (current.length) {
+        blocks.push(current.join('\n').trim());
+        current = [];
+      }
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length) {
+    blocks.push(current.join('\n').trim());
+  }
+  return blocks.filter(Boolean);
+}
+
+function parseStoredFileCodeValue(value) {
+  const raw = String(value || '');
+  if (!raw.startsWith('FILE::')) return null;
+  const parts = raw.split('::');
+  return {
+    fileId: parts[1] || '',
+    fileName: parts.slice(2).join('::') || 'file'
+  };
+}
+
+function formatPurchasedItemsText(merchant, codes) {
+  return codes.map(code => {
+    if (merchant.type === 'file') {
+      const parsed = parseStoredFileCodeValue(code.value);
+      return parsed ? `File: ${parsed.fileName}` : String(code.value || '');
+    }
+
+    let base = String(code.value || '');
+    if (code.extra) base += `\n${code.extra}`;
+    if (merchant.verifyLink) base += `\nVerify: ${merchant.verifyLink}`;
+    return base.trim();
+  }).join('\n\n');
+}
+
 async function processAutoChatGptCode(userId, options = {}) {
   const { isFree = false, fromPoints = false, quantity = 1 } = options;
   const safeQuantity = Math.max(1, parseInt(quantity, 10) || 1);
@@ -2752,6 +2811,14 @@ async function processAutoChatGptCode(userId, options = {}) {
     await BalanceTransaction.create({ userId, amount: -chargedAmount, type: 'purchase', status: 'completed' });
   }
 
+  const fallbackUsed = !!lastFailureReason;
+  let remainingStock = 'External source';
+  if (fallbackUsed) {
+    const referralStockMerchant = await getReferralStockMerchant();
+    const remainCount = await Code.count({ where: { merchantId: referralStockMerchant.id, isUsed: false } });
+    remainingStock = String(remainCount);
+  }
+
   return {
     success: true,
     code: codes.join('\n\n'),
@@ -2760,7 +2827,9 @@ async function processAutoChatGptCode(userId, options = {}) {
     requestedQuantity: safeQuantity,
     partial: codes.length !== safeQuantity,
     price: price.toFixed(2),
-    totalCost: (price * codes.length).toFixed(2)
+    totalCost: (price * codes.length).toFixed(2),
+    fallbackUsed,
+    remainingStock
   };
 }
 
@@ -3380,7 +3449,7 @@ bot.on('callback_query', async query => {
       const merchants = await Merchant.findAll();
       let msg = await getText(userId, 'merchantList');
       for (const m of merchants) {
-        msg += `ID: ${m.id} | ${m.nameEn} / ${m.nameAr} | Price: ${m.price} USD | Category: ${m.category} | Type: ${m.type}\n`;
+        msg += `ID: ${m.id} | ${m.nameEn} / ${m.nameAr} | Price: $${m.price} | Category: ${m.category} | Type: ${m.type}${m.verifyLink ? ' | Verify: ' + m.verifyLink : ''}\n`;
       }
       const keyboard = {
         inline_keyboard: [
@@ -3892,20 +3961,33 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'merchant_type_single' || data === 'merchant_type_bulk') {
+    if (data === 'merchant_type_single' || data === 'merchant_type_bulk' || data.startsWith('product_type_')) {
       const state = safeParseState((await User.findByPk(userId)).state);
       if (state?.action === 'add_merchant' && state.step === 'type') {
-        const selectedType = data === 'merchant_type_single' ? 'single' : 'bulk';
-        await setUserState(userId, { ...state, selectedType, step: 'description' });
-        await bot.sendMessage(userId, await getText(userId, 'askDescription'));
+        let selectedType = 'code';
+        if (data === 'merchant_type_single') selectedType = 'code';
+        else if (data === 'merchant_type_bulk') selectedType = 'credentials';
+        else if (data === 'product_type_code') selectedType = 'code';
+        else if (data === 'product_type_credentials') selectedType = 'credentials';
+        else if (data === 'product_type_credentials2fa') selectedType = 'credentials2fa';
+        else if (data === 'product_type_file') selectedType = 'file';
+        else if (data === 'product_type_custom') selectedType = 'custom';
+        await setUserState(userId, { ...state, selectedType, step: 'verifyLink' });
+        await bot.sendMessage(userId, await getText(userId, 'askVerifyLink'));
       }
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'chatgpt_code') {
+      const merchant = await getOrCreateChatGptMerchant();
+      const priceText = Number(merchant.price || 0).toFixed(2);
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-      await bot.sendMessage(userId, `${await getText(userId, 'askQuantity')}\n\n${await getBulkDiscountInfoText(userId)}`);
+      await bot.sendMessage(userId, `${await getText(userId, 'chatgptCode')} ($${priceText})
+
+${await getText(userId, 'askQuantity')}
+
+${await getBulkDiscountInfoText(userId)}`);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3922,6 +4004,7 @@ bot.on('message', async msg => {
   const text = msg.text;
   const photo = msg.photo;
   const video = msg.video;
+  const document = msg.document;
 
   try {
     const user = await User.findByPk(userId);
@@ -4124,11 +4207,21 @@ bot.on('message', async msg => {
           await bot.sendMessage(userId, await getText(userId, 'askMerchantType'), {
             reply_markup: {
               inline_keyboard: [
-                [{ text: await getText(userId, 'typeSingle'), callback_data: 'merchant_type_single' }],
-                [{ text: await getText(userId, 'typeBulk'), callback_data: 'merchant_type_bulk' }]
+                [{ text: await getText(userId, 'typeSingle'), callback_data: 'product_type_code' }],
+                [{ text: await getText(userId, 'typeCredentials'), callback_data: 'product_type_credentials' }],
+                [{ text: await getText(userId, 'typeCredentials2fa'), callback_data: 'product_type_credentials2fa' }],
+                [{ text: await getText(userId, 'typeFile'), callback_data: 'product_type_file' }],
+                [{ text: await getText(userId, 'typeCustom'), callback_data: 'product_type_custom' }]
               ]
             }
           });
+          return;
+        }
+
+        if (state.step === 'verifyLink') {
+          const verifyLink = String(text || '').trim() === '/skip' ? null : String(text || '').trim();
+          await setUserState(userId, { ...state, verifyLink, step: 'description' });
+          await bot.sendMessage(userId, await getText(userId, 'askDescription'));
           return;
         }
 
@@ -4147,7 +4240,8 @@ bot.on('message', async msg => {
             nameEn: state.nameEn,
             nameAr: state.nameAr,
             price: state.price,
-            type: state.selectedType || 'single',
+            type: state.selectedType || 'code',
+            verifyLink: state.verifyLink || null,
             description
           });
 
@@ -4187,7 +4281,6 @@ bot.on('message', async msg => {
       }
 
       if (state.action === 'add_codes') {
-        const lines = String(text || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
         const merchant = await Merchant.findByPk(state.merchantId);
         if (!merchant) {
           await bot.sendMessage(userId, 'Merchant not found');
@@ -4195,11 +4288,24 @@ bot.on('message', async msg => {
           return;
         }
 
-        if (merchant.type === 'single') {
+        if (merchant.type === 'file') {
+          if (document) {
+            const value = `FILE::${document.file_id}::${document.file_name || 'file'}`;
+            await Code.create({ value, merchantId: merchant.id, isUsed: false });
+            await bot.sendMessage(userId, await getText(userId, 'codesAdded'));
+            await clearUserState(userId);
+            await showAdminPanel(userId);
+            return;
+          }
+        }
+
+        const lines = String(text || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+
+        if (merchant.type === 'code' || merchant.type === 'single') {
           await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
-        } else {
+        } else if (merchant.type === 'credentials' || merchant.type === 'bulk') {
           if (lines.length % 2 !== 0) {
-            await bot.sendMessage(userId, '❌ Bulk codes must be pairs (email / password).');
+            await bot.sendMessage(userId, '❌ Product type Email+Password needs pairs of lines.');
             return;
           }
           const pairs = [];
@@ -4207,6 +4313,40 @@ bot.on('message', async msg => {
             pairs.push({ value: lines[i], extra: lines[i + 1], merchantId: merchant.id, isUsed: false });
           }
           await Code.bulkCreate(pairs);
+        } else if (merchant.type === 'credentials2fa') {
+          const blocks = splitCustomProductBlocks(String(text || ''));
+          const items = [];
+          if (blocks.length) {
+            for (const block of blocks) {
+              const parts = block.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+              if (parts.length < 2) continue;
+              let extra = parts[1];
+              if (parts.slice(2).length) extra += `\n${parts.slice(2).join('\n')}`;
+              items.push({ value: parts[0], extra, merchantId: merchant.id, isUsed: false });
+            }
+          } else {
+            if (lines.length % 3 !== 0 && lines.length % 2 !== 0) {
+              await bot.sendMessage(userId, '❌ Send blocks of email/password/2FA info.');
+              return;
+            }
+            const step = lines.length % 3 === 0 ? 3 : 2;
+            for (let i = 0; i < lines.length; i += step) {
+              let extra = lines[i + 1] || '';
+              if (step === 3 && lines[i + 2]) extra += `\n${lines[i + 2]}`;
+              items.push({ value: lines[i], extra, merchantId: merchant.id, isUsed: false });
+            }
+          }
+          await Code.bulkCreate(items);
+        } else if (merchant.type === 'custom') {
+          const blocks = splitCustomProductBlocks(String(text || ''));
+          const items = (blocks.length ? blocks : [String(text || '').trim()]).filter(Boolean)
+            .map(value => ({ value, merchantId: merchant.id, isUsed: false }));
+          await Code.bulkCreate(items);
+        } else if (merchant.type === 'file') {
+          await bot.sendMessage(userId, '❌ Send a document file for this product type.');
+          return;
+        } else {
+          await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
         }
 
         await bot.sendMessage(userId, await getText(userId, 'codesAdded'));
@@ -5015,13 +5155,27 @@ bot.on('message', async msg => {
       }
       const result = await processPurchase(userId, merchant.id, qty, state.discountCode || null);
       if (result.success) {
-        let msgText = await getText(userId, 'success');
-        if (result.discountApplied) msgText += `\n🎟️ Discount applied: ${result.discountApplied}%`;
-        msgText += `\n\n${formatCodesForHtml(result.codes)}`;
-        {
-        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await bot.sendMessage(userId, `${deliveryPrefix}${msgText}`, { parse_mode: 'HTML' });
-      }
+        if (merchant.type === 'file') {
+          const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+          if (deliveryPrefix) await bot.sendMessage(userId, deliveryPrefix);
+          await bot.sendMessage(userId, await getText(userId, 'success'));
+          for (const item of result.items || []) {
+            const parsed = parseStoredFileCodeValue(item.value);
+            if (parsed?.fileId) {
+              await bot.sendDocument(userId, parsed.fileId, { caption: parsed.fileName || undefined }).catch(async () => {
+                await bot.sendMessage(userId, parsed.fileName || 'File');
+              });
+            } else {
+              await bot.sendMessage(userId, String(item.value || ''));
+            }
+          }
+        } else {
+          let msgText = await getText(userId, 'success');
+          if (result.discountApplied) msgText += `\n🎟️ Discount applied: ${result.discountApplied}%`;
+          msgText += `\n\n${formatCodesForHtml(result.codes)}`;
+          const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+          await bot.sendMessage(userId, `${deliveryPrefix}${msgText}`, { parse_mode: 'HTML' });
+        }
 
         const userObj = await User.findByPk(userId);
         if (userObj.referredBy) {
@@ -5197,6 +5351,16 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
       }
+
+        const identity = await getTelegramIdentityById(userId);
+        await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'chatgptPurchaseAdminNotice', {
+          name: identity.fullName,
+          username: identity.usernameText,
+          id: userId,
+          count: result.quantity,
+          codes: String(result.codes || ''),
+          remaining: result.remainingStock || 'External source'
+        })).catch(() => {});
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         const freshUser = await User.findByPk(userId);
         const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
