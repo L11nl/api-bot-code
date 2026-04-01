@@ -436,7 +436,33 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ You received a creator discount of {percent}%. Your required points per free code are now {requiredPoints}.',
     currentCreatorDiscount: 'Your creator discount: {percent}%',
     manageReferralSettingsText: '👥 Referral Settings\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
+    chatgptSectionName: '🤖 ChatGPT',
     chatgptCode: '🤖 ChatGPT Code',
+    chatgptPrimaryButton: '🤖 Buy ChatGPT Codes',
+    chatgptSecondaryButtonDefault: '➕ Second ChatGPT Button',
+    manageChatgptSection: '⚙️ Manage ChatGPT Section',
+    setChatgptSectionName: '✏️ Rename ChatGPT Section',
+    setChatgptPrimaryName: '✏️ Rename ChatGPT Main Button',
+    setChatgptSecondaryName: '✏️ Rename Second Button',
+    setChatgptSecondaryProduct: '🔗 Link Second Button To Product',
+    disableChatgptSecondary: '❌ Disable Second Button',
+    chatgptSectionHelp: 'This section appears to users as the main ChatGPT area. From here users can buy ChatGPT codes and any extra product you link as a second button.',
+    enterChatgptSectionName: 'Send the new ChatGPT section name:',
+    enterChatgptPrimaryName: 'Send the new main button name inside ChatGPT section:',
+    enterChatgptSecondaryName: 'Send the new second button name:',
+    enterChatgptSecondaryProductId: 'Send the product ID to link to the second button, or /empty to clear it:',
+    chatgptSectionUpdated: '✅ ChatGPT section settings updated.',
+    chatgptSectionChooseText: 'Choose what you want inside ChatGPT section:',
+    manageBotsHelp: 'Here you add secondary bots, grant them /code or full permissions, and assign an owner ID when needed.',
+    noBotsFound: 'No bots found.',
+    grantCodePermission: '➕ Grant /code',
+    grantFullPermission: '👑 Grant Full',
+    removePermissions: '❌ Remove Permissions',
+    deleteBotButton: '🗑️ Delete Bot',
+    addBotButton: '➕ Add Bot',
+    enterBotOwnerId: 'Send the Telegram user ID of the bot owner:',
+    managedBotAllowedText: 'Allowed: {allowed}',
+    managedBotOwnerText: 'Owner: {owner}',
     chatgptPurchaseAdminNotice: '🤖 User bought ChatGPT code(s)\nName: {name}\nUsername: {username}\nID: {id}\nCount: {count}\nCode(s):\n{codes}\nRemaining stock: {remaining}',
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
@@ -766,7 +792,33 @@ const DEFAULT_TEXTS = {
     creatorDiscountGrantedNotification: '🎟️ تم منحك خصم صانع محتوى بنسبة {percent}%. عدد النقاط المطلوب لكل كود أصبح {requiredPoints}.',
     currentCreatorDiscount: 'خصم صانع المحتوى الخاص بك: {percent}%',
     manageReferralSettingsText: '👥 إعدادات الإحالة\n\n{percentLine}\n{pointsLine}\n{freeCodeDaysLine}\n{milestonesLine}\n{referralsStatusLine}',
+    chatgptSectionName: '🤖 ChatGPT',
     chatgptCode: '🤖 كود ChatGPT',
+    chatgptPrimaryButton: '🤖 شراء كودات ChatGPT',
+    chatgptSecondaryButtonDefault: '➕ الزر الثاني في قسم ChatGPT',
+    manageChatgptSection: '⚙️ إدارة قسم ChatGPT',
+    setChatgptSectionName: '✏️ تغيير اسم قسم ChatGPT',
+    setChatgptPrimaryName: '✏️ تغيير اسم الزر الرئيسي',
+    setChatgptSecondaryName: '✏️ تغيير اسم الزر الثاني',
+    setChatgptSecondaryProduct: '🔗 ربط الزر الثاني بمنتج',
+    disableChatgptSecondary: '❌ تعطيل الزر الثاني',
+    chatgptSectionHelp: 'هذا القسم يظهر للمستخدمين كقسم ChatGPT الرئيسي. من هنا يمكنهم شراء كودات ChatGPT وأي منتج إضافي تربطه كزر ثانٍ.',
+    enterChatgptSectionName: 'أرسل الاسم الجديد لقسم ChatGPT:',
+    enterChatgptPrimaryName: 'أرسل الاسم الجديد للزر الرئيسي داخل قسم ChatGPT:',
+    enterChatgptSecondaryName: 'أرسل الاسم الجديد للزر الثاني:',
+    enterChatgptSecondaryProductId: 'أرسل رقم المنتج لربطه بالزر الثاني أو /empty للحذف:',
+    chatgptSectionUpdated: '✅ تم تحديث إعدادات قسم ChatGPT.',
+    chatgptSectionChooseText: 'اختر ما تريده داخل قسم ChatGPT:',
+    manageBotsHelp: 'من هنا تضيف البوتات الثانوية وتمنحها صلاحية /code أو الصلاحية الكاملة وتحدد مالك البوت عند الحاجة.',
+    noBotsFound: 'لا توجد بوتات مضافة.',
+    grantCodePermission: '➕ منح /code',
+    grantFullPermission: '👑 منح كامل الصلاحيات',
+    removePermissions: '❌ إزالة الصلاحيات',
+    deleteBotButton: '🗑️ حذف البوت',
+    addBotButton: '➕ إضافة بوت',
+    enterBotOwnerId: 'أرسل آيدي مالك البوت:',
+    managedBotAllowedText: 'الصلاحيات: {allowed}',
+    managedBotOwnerText: 'المالك: {owner}',
     chatgptPurchaseAdminNotice: '🤖 قام مستخدم بشراء كود/كودات ChatGPT\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}\nالكود/الأكواد:\n{codes}\nالمتبقي في المخزون: {remaining}',
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
@@ -860,7 +912,10 @@ async function startManagedBot(botService) {
     childBot.onText(/\/code(?:\s+(.+))?/, async (msg, match) => {
       const chatId = msg.chat.id;
       const freshService = await BotService.findOne({ where: { token: botService.token, isActive: true } });
-      if (!freshService || !Array.isArray(freshService.allowedActions) || !freshService.allowedActions.includes('code')) {
+      const actions = Array.isArray(freshService?.allowedActions) ? freshService.allowedActions : [];
+      const ownerAllowed = Number(freshService?.ownerId || 0) === Number(chatId);
+      const canUseCode = actions.includes('code') || actions.includes('full') || ownerAllowed;
+      if (!freshService || !canUseCode) {
         await childBot.sendMessage(chatId, '❌ This bot is not allowed to use /code yet.').catch(() => {});
         return;
       }
@@ -921,6 +976,7 @@ async function showAdminProductsSection(userId) {
   await bot.sendMessage(userId, await getText(userId, 'productsSectionTitle'), {
     reply_markup: {
       inline_keyboard: [
+        [{ text: await getText(userId, 'manageChatgptSection'), callback_data: 'admin_chatgpt_section' }],
         [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
         [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
         [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
@@ -1372,6 +1428,103 @@ function formatCodesForHtml(codeTextOrArray) {
     ? codeTextOrArray
     : String(codeTextOrArray || '').split(/\n\n+/).filter(Boolean);
   return codes.map(code => `<code>${escapeHtml(code)}</code>`).join('\n\n');
+}
+
+
+async function getChatgptSectionLabel(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  return await getGlobalSetting(`chatgpt_section_name_${lang}`, lang === 'ar' ? '🤖 ChatGPT' : '🤖 ChatGPT');
+}
+
+async function getChatgptPrimaryLabel(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  return await getGlobalSetting(`chatgpt_primary_name_${lang}`, await getText(userId, 'chatgptPrimaryButton'));
+}
+
+async function getChatgptSecondaryLabel(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  return await getGlobalSetting(`chatgpt_secondary_name_${lang}`, await getText(userId, 'chatgptSecondaryButtonDefault'));
+}
+
+async function getChatgptSecondaryMerchantId() {
+  const raw = await getGlobalSetting('chatgpt_secondary_merchant_id', '');
+  const id = parseInt(String(raw || '').trim(), 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function showChatgptSection(userId) {
+  const merchant = await getOrCreateChatGptMerchant();
+  const priceText = Number(merchant.price || 0).toFixed(2);
+  const primaryLabel = `${await getChatgptPrimaryLabel(userId)} ($${priceText})`;
+  const keyboard = [[{ text: primaryLabel, callback_data: 'chatgpt_buy_main' }]];
+
+  const secondaryMerchantId = await getChatgptSecondaryMerchantId();
+  if (secondaryMerchantId) {
+    const secondaryLabel = await getChatgptSecondaryLabel(userId);
+    keyboard.push([{ text: secondaryLabel, callback_data: `chatgpt_secondary_${secondaryMerchantId}` }]);
+  }
+
+  if (isAdmin(userId)) {
+    keyboard.push([{ text: await getText(userId, 'manageChatgptSection'), callback_data: 'admin_chatgpt_section' }]);
+  }
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
+
+  const helpText = isAdmin(userId) ? `\n\n${await getText(userId, 'chatgptSectionHelp')}` : '';
+  await bot.sendMessage(userId, `${await getText(userId, 'chatgptSectionChooseText')}${helpText}`, {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function showChatgptSectionAdmin(userId) {
+  const sectionName = await getChatgptSectionLabel(userId);
+  const primaryName = await getChatgptPrimaryLabel(userId);
+  const secondaryName = await getChatgptSecondaryLabel(userId);
+  const secondaryMerchantId = await getChatgptSecondaryMerchantId();
+  const secondaryMerchant = secondaryMerchantId ? await Merchant.findByPk(secondaryMerchantId) : null;
+  const linkedText = secondaryMerchant ? `${secondaryMerchant.nameAr || secondaryMerchant.nameEn} (ID: ${secondaryMerchant.id})` : '-';
+
+  await bot.sendMessage(
+    userId,
+    `${await getText(userId, 'manageChatgptSection')}\n\n${await getText(userId, 'chatgptSectionHelp')}\n\nSection: ${sectionName}\nPrimary: ${primaryName}\nSecond: ${secondaryName}\nLinked product: ${linkedText}`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'setChatgptSectionName'), callback_data: 'admin_set_chatgpt_section_name' }],
+          [{ text: await getText(userId, 'setChatgptPrimaryName'), callback_data: 'admin_set_chatgpt_primary_name' }],
+          [{ text: await getText(userId, 'setChatgptSecondaryName'), callback_data: 'admin_set_chatgpt_secondary_name' }],
+          [{ text: await getText(userId, 'setChatgptSecondaryProduct'), callback_data: 'admin_set_chatgpt_secondary_product' }],
+          [{ text: await getText(userId, 'disableChatgptSecondary'), callback_data: 'admin_disable_chatgpt_secondary' }],
+          [{ text: await getText(userId, 'back'), callback_data: 'admin_section_products' }]
+        ]
+      }
+    }
+  );
+}
+
+async function triggerMerchantPurchaseFlow(userId, merchantId, discountCode = null) {
+  const merchant = await Merchant.findByPk(merchantId);
+  if (!merchant) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+  if (merchant.termsText) {
+    await setUserState(userId, { action: 'buy_terms_pending', merchantId, discountCode });
+    await bot.sendMessage(userId, `${await getText(userId, 'termsReadyText')}\n\n${merchant.termsText}`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'agreeToTerms'), callback_data: `agree_terms_buy_${merchantId}` }],
+          [{ text: await getText(userId, 'cancelPurchase'), callback_data: 'cancel_purchase_terms' }]
+        ]
+      }
+    });
+  } else {
+    const available = await Code.count({ where: { merchantId, isUsed: false } });
+    await setUserState(userId, { action: 'buy', merchantId, discountCode });
+    await bot.sendMessage(userId, `${(await User.findByPk(userId))?.lang === 'ar' ? merchant.nameAr : merchant.nameEn} ($${Number(merchant.price || 0).toFixed(2)})\n\n${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getBulkDiscountInfoText(userId)}`);
+  }
 }
 
 async function getPerCodePriceForQuantity(basePrice, quantity) {
@@ -2459,30 +2612,31 @@ ${await getBulkDiscountInfoText(userId)}`;
 async function showBotsList(userId) {
   const bots = await BotService.findAll();
   if (!bots.length) {
-    await bot.sendMessage(userId, 'No bots found.');
+    await bot.sendMessage(userId, await getText(userId, 'noBotsFound'));
   } else {
+    await bot.sendMessage(userId, `${await getText(userId, 'manageBotsHelp')}`);
     for (const b of bots) {
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '➕ Grant /code', callback_data: `bot_grant_code_${b.id}` },
-            { text: '👑 Grant Full', callback_data: `bot_grant_full_${b.id}` },
-            { text: '❌ Remove Permissions', callback_data: `bot_remove_perms_${b.id}` }
+            { text: await getText(userId, 'grantCodePermission'), callback_data: `bot_grant_code_${b.id}` },
+            { text: await getText(userId, 'grantFullPermission'), callback_data: `bot_grant_full_${b.id}` },
+            { text: await getText(userId, 'removePermissions'), callback_data: `bot_remove_perms_${b.id}` }
           ],
-          [{ text: '🗑️ Delete Bot', callback_data: `admin_remove_bot_confirm_${b.id}` }]
+          [{ text: await getText(userId, 'deleteBotButton'), callback_data: `admin_remove_bot_confirm_${b.id}` }]
         ]
       };
 
       await bot.sendMessage(
         userId,
-        `🤖 *${b.name}*\nID: ${b.id}\nAllowed: ${(b.allowedActions || []).join(', ') || 'none'}\nOwner: ${b.ownerId || 'none'}`,
+        `🤖 *${b.name}*\nID: ${b.id}\n${await getText(userId, 'managedBotAllowedText', { allowed: (b.allowedActions || []).join(', ') || 'none' })}\n${await getText(userId, 'managedBotOwnerText', { owner: b.ownerId || 'none' })}`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
     }
   }
 
-  await bot.sendMessage(userId, '➕ Add Bot', {
-    reply_markup: { inline_keyboard: [[{ text: '➕ Add Bot', callback_data: 'admin_add_bot' }]] }
+  await bot.sendMessage(userId, await getText(userId, 'addBotButton'), {
+    reply_markup: { inline_keyboard: [[{ text: await getText(userId, 'addBotButton'), callback_data: 'admin_add_bot' }]] }
   });
 }
 
@@ -3452,7 +3606,7 @@ bot.on('callback_query', async query => {
         if (!allowed.includes('code')) allowed.push('code');
         botService.allowedActions = allowed.filter(a => a !== 'full');
         await botService.save();
-        await bot.sendMessage(userId, `✅ Granted /code permission to ${botService.name}`);
+        await bot.sendMessage(userId, `✅ ${botService.name} /code`);
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -3461,7 +3615,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('bot_grant_full_') && isAdmin(userId)) {
       const botId = parseInt(data.split('_')[3], 10);
       await setUserState(userId, { action: 'set_bot_owner', botId });
-      await bot.sendMessage(userId, 'Send the Telegram user ID of the new bot owner:');
+      await bot.sendMessage(userId, await getText(userId, 'enterBotOwnerId'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3473,7 +3627,7 @@ bot.on('callback_query', async query => {
         botService.allowedActions = [];
         botService.ownerId = null;
         await botService.save();
-        await bot.sendMessage(userId, `❌ Removed all permissions from ${botService.name}`);
+        await bot.sendMessage(userId, `❌ ${botService.name}`);
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -4254,6 +4408,12 @@ ${await getBulkDiscountInfoText(userId)}`);
     }
 
     if (data === 'chatgpt_code') {
+      await showChatgptSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'chatgpt_buy_main') {
       const merchant = await getOrCreateChatGptMerchant();
       const priceText = Number(merchant.price || 0).toFixed(2);
       if (merchant.termsText) {
@@ -4270,7 +4430,7 @@ ${merchant.termsText}`, {
         });
       } else {
         await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-        await bot.sendMessage(userId, `${await getText(userId, 'chatgptCode')} ($${priceText})
+        await bot.sendMessage(userId, `${await getChatgptPrimaryLabel(userId)} ($${priceText})
 
 ${await getText(userId, 'askQuantity')}
 
@@ -4284,11 +4444,60 @@ ${await getBulkDiscountInfoText(userId)}`);
       const merchant = await getOrCreateChatGptMerchant();
       const priceText = Number(merchant.price || 0).toFixed(2);
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-      await bot.sendMessage(userId, `${await getText(userId, 'chatgptCode')} ($${priceText})
+      await bot.sendMessage(userId, `${await getChatgptPrimaryLabel(userId)} ($${priceText})
 
 ${await getText(userId, 'askQuantity')}
 
 ${await getBulkDiscountInfoText(userId)}`);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('chatgpt_secondary_')) {
+      const merchantId = parseInt(data.split('_')[2], 10);
+      await triggerMerchantPurchaseFlow(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_chatgpt_section' && isAdmin(userId)) {
+      await showChatgptSectionAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_chatgpt_section_name' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_section_name' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptSectionName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_chatgpt_primary_name' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_primary_name' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptPrimaryName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_chatgpt_secondary_name' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_secondary_name' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptSecondaryName'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_chatgpt_secondary_product' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_secondary_product' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptSecondaryProductId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_disable_chatgpt_secondary' && isAdmin(userId)) {
+      await Setting.upsert({ key: 'chatgpt_secondary_merchant_id', lang: 'global', value: '' });
+      await bot.sendMessage(userId, await getText(userId, 'chatgptSectionUpdated'));
+      await showChatgptSectionAdmin(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -4484,14 +4693,52 @@ bot.on('message', async msg => {
           const botService = await BotService.findByPk(state.botId);
           if (botService) {
             botService.ownerId = ownerId;
-            botService.allowedActions = ['full'];
+            botService.allowedActions = ['full', 'code'];
             await botService.save();
-            await bot.sendMessage(userId, `✅ Granted full permissions to user ${ownerId} for bot ${botService.name}`);
+            await bot.sendMessage(userId, `✅ ${botService.name} → ${ownerId}`);
           } else {
             await bot.sendMessage(userId, 'Bot not found');
           }
         }
         await clearUserState(userId);
+        return;
+      }
+
+
+      if (state.action === 'set_chatgpt_section_name') {
+        const lang = (await User.findByPk(userId))?.lang || 'en';
+        await Setting.upsert({ key: `chatgpt_section_name_${lang}`, lang: 'global', value: String(text || '').trim() });
+        await bot.sendMessage(userId, await getText(userId, 'chatgptSectionUpdated'));
+        await clearUserState(userId);
+        await showChatgptSectionAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_chatgpt_primary_name') {
+        const lang = (await User.findByPk(userId))?.lang || 'en';
+        await Setting.upsert({ key: `chatgpt_primary_name_${lang}`, lang: 'global', value: String(text || '').trim() });
+        await bot.sendMessage(userId, await getText(userId, 'chatgptSectionUpdated'));
+        await clearUserState(userId);
+        await showChatgptSectionAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_chatgpt_secondary_name') {
+        const lang = (await User.findByPk(userId))?.lang || 'en';
+        await Setting.upsert({ key: `chatgpt_secondary_name_${lang}`, lang: 'global', value: String(text || '').trim() });
+        await bot.sendMessage(userId, await getText(userId, 'chatgptSectionUpdated'));
+        await clearUserState(userId);
+        await showChatgptSectionAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_chatgpt_secondary_product') {
+        const raw = String(text || '').trim();
+        const value = raw === '/empty' ? '' : raw;
+        await Setting.upsert({ key: 'chatgpt_secondary_merchant_id', lang: 'global', value });
+        await bot.sendMessage(userId, await getText(userId, 'chatgptSectionUpdated'));
+        await clearUserState(userId);
+        await showChatgptSectionAdmin(userId);
         return;
       }
 
