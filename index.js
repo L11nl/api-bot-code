@@ -345,6 +345,13 @@ const DEFAULT_TEXTS = {
     referralsTurnedOff: '⛔ Referrals stopped.',
     addReferralStockCodes: '➕ Add Referral Stock Codes',
     viewReferralStockCount: '📦 View Referral Stock',
+    searchDuplicateReferralCodes: '🔎 Search Duplicate Codes',
+    deleteDuplicateReferralCodes: '🗑️ Delete Duplicate Codes',
+    noDuplicateReferralCodes: '✅ No duplicate codes found in referral stock.',
+    duplicateReferralCodesResult: '🔎 Duplicate referral-stock codes\n\nDuplicate count: {count}\n\n{list}',
+    duplicateReferralCodesDeleted: '✅ Duplicate referral-stock codes deleted. Removed: {count}',
+    purchaseStockAdminNotice: '🛒 A code/item was purchased\nName: {name}\nUsername: {username}\nID: {id}\nMerchant: {merchant}\nCount: {count}\nRemaining stock: {remaining}',
+    stockClaimAdminShort: '📦 Stock withdrawal\nUser: {name}\nUsername: {username}\nID: {id}\nCount: {count}\nRemaining stock: {remaining}',
     referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
     enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces:',
     referralStockCodesAdded: '✅ Referral stock codes added.',
@@ -367,7 +374,6 @@ const DEFAULT_TEXTS = {
     balanceDeductedDone: '✅ Deducted {amount} USD from user {userId}. New balance: {balance} USD',
     balanceReceivedNotification: '💰 {amount} USD has been added to your balance. New balance: {balance} USD',
     balanceDeductedNotification: '💰 {amount} USD has been deducted from your balance. New balance: {balance} USD',
-    stockClaimAdminShort: '📦 Stock withdrawal\nUser: {name}\nUsername: {username}\nID: {id}\nCount: {count}',
     balancePurchaseAdminNotice: '💳 Purchase by balance\nUser: {name}\nUsername: {username}\nID: {id}\nMerchant: {merchant}\nQuantity: {qty}\nTotal: {total} USD',
     enterAllowedUsers: 'Send allowed Telegram user IDs separated by commas, spaces, or new lines. Send /empty to clear.',
     allowedUsersUpdated: '✅ Allowed users updated.',
@@ -639,6 +645,13 @@ const DEFAULT_TEXTS = {
     referralsTurnedOff: '⛔ تم إيقاف الإحالات.',
     addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
+    searchDuplicateReferralCodes: '🔎 البحث عن الاكواد المكررة',
+    deleteDuplicateReferralCodes: '🗑️ حذف الاكواد المكررة',
+    noDuplicateReferralCodes: '✅ لا توجد أكواد مكررة في مخزون الإحالات.',
+    duplicateReferralCodesResult: '🔎 الأكواد المكررة في مخزون الإحالات\n\nعدد التكرار: {count}\n\n{list}',
+    duplicateReferralCodesDeleted: '✅ تم حذف الأكواد المكررة من مخزون الإحالات. المحذوف: {count}',
+    purchaseStockAdminNotice: '🛒 تم شراء كود/شيء من البوت\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالتاجر: {merchant}\nالعدد: {count}\nالمتبقي في المخزون: {remaining}',
+    stockClaimAdminShort: '📦 تم سحب كود من مخزون الإحالات\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}\nالمتبقي في المخزون: {remaining}',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
     enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
     referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.',
@@ -661,7 +674,6 @@ const DEFAULT_TEXTS = {
     balanceDeductedDone: '✅ تم سحب {amount} دولار من المستخدم {userId}. الرصيد الجديد: {balance} دولار',
     balanceReceivedNotification: '💰 تمت إضافة {amount} دولار إلى رصيدك. الرصيد الجديد: {balance} دولار',
     balanceDeductedNotification: '💰 تم سحب {amount} دولار من رصيدك. الرصيد الجديد: {balance} دولار',
-    stockClaimAdminShort: '📦 تم السحب من المخزون\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}',
     balancePurchaseAdminNotice: '💳 شراء بواسطة الرصيد\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالتاجر: {merchant}\nالكمية: {qty}\nالإجمالي: {total} دولار',
     enterAllowedUsers: 'أرسل آيديات تيليجرام المسموح لهم مفصولة بفواصل أو مسافات أو أسطر. أرسل /empty للحذف.',
     allowedUsersUpdated: '✅ تم تحديث المستخدمين المسموح لهم.',
@@ -903,6 +915,41 @@ async function getReferralStockMerchant() {
     });
   }
   return merchant;
+}
+
+async function findReferralStockDuplicates() {
+  const merchant = await getReferralStockMerchant();
+  const codes = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    order: [['id', 'ASC']]
+  });
+
+  const seen = new Map();
+  const duplicateEntries = [];
+  const duplicateIds = [];
+
+  for (const code of codes) {
+    const normalized = String(code.value || '').trim();
+    if (!normalized) continue;
+    if (!seen.has(normalized)) {
+      seen.set(normalized, code.id);
+    } else {
+      duplicateEntries.push(normalized);
+      duplicateIds.push(code.id);
+    }
+  }
+
+  const grouped = {};
+  for (const value of duplicateEntries) {
+    grouped[value] = (grouped[value] || 0) + 1;
+  }
+
+  const lines = Object.entries(grouped).map(([value, extraCount]) => `${value}  x${extraCount + 1}`);
+  return {
+    count: duplicateIds.length,
+    duplicateIds,
+    lines
+  };
 }
 
 async function getSuccessfulReferralCount(userId) {
@@ -2088,6 +2135,7 @@ async function showReferralStockSettingsAdmin(userId) {
     inline_keyboard: [
       [{ text: await getText(userId, 'addReferralStockCodes'), callback_data: 'admin_add_referral_stock_codes' }],
       [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
+      [{ text: await getText(userId, 'searchDuplicateReferralCodes'), callback_data: 'admin_search_referral_stock_duplicates' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -2402,6 +2450,16 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
     });
 
     await t.commit();
+    const identity = await getTelegramIdentityById(userId);
+    const remainingStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+    await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'purchaseStockAdminNotice', {
+      name: identity.fullName,
+      username: identity.usernameText,
+      id: userId,
+      merchant: merchant.nameAr || merchant.nameEn,
+      count: quantity,
+      remaining: remainingStock
+    })).catch(() => {});
     const codesText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
     return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost };
   } catch (err) {
@@ -3439,6 +3497,38 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_search_referral_stock_duplicates' && isAdmin(userId)) {
+      const result = await findReferralStockDuplicates();
+      if (!result.count) {
+        await bot.sendMessage(userId, await getText(userId, 'noDuplicateReferralCodes'));
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'duplicateReferralCodesResult', {
+          count: result.count,
+          list: result.lines.join('\n')
+        }), {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: await getText(userId, 'deleteDuplicateReferralCodes'), callback_data: 'admin_delete_referral_stock_duplicates' }]
+            ]
+          }
+        });
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_delete_referral_stock_duplicates' && isAdmin(userId)) {
+      const result = await findReferralStockDuplicates();
+      if (!result.count) {
+        await bot.sendMessage(userId, await getText(userId, 'noDuplicateReferralCodes'));
+      } else {
+        await Code.destroy({ where: { id: result.duplicateIds } });
+        await bot.sendMessage(userId, await getText(userId, 'duplicateReferralCodesDeleted', { count: result.count }));
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_toggle_referrals' && isAdmin(userId)) {
       const current = await getReferralEnabled();
       await Setting.upsert({ key: 'referral_enabled', lang: 'global', value: String(!current) });
@@ -4468,11 +4558,14 @@ bot.on('message', async msg => {
           milestoneRewards: result.milestoneRewards
         })).catch(() => {});
 
+        const referralStockMerchant = await getReferralStockMerchant();
+        const remainingStock = await Code.count({ where: { merchantId: referralStockMerchant.id, isUsed: false } });
         await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'stockClaimAdminShort', {
           name: identity.fullName,
           username: identity.usernameText,
           id: userId,
-          count: result.count
+          count: result.count,
+          remaining: remainingStock
         })).catch(() => {});
 
         await clearUserState(userId);
