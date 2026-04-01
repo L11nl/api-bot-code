@@ -63,7 +63,8 @@ const Merchant = sequelize.define('Merchant', {
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'single' },
   description: { type: DataTypes.JSONB, allowNull: true },
-  verifyLink: { type: DataTypes.TEXT, allowNull: true }
+  verifyLink: { type: DataTypes.TEXT, allowNull: true },
+  termsText: { type: DataTypes.TEXT, allowNull: true }
 });
 
 const PaymentMethod = sequelize.define('PaymentMethod', {
@@ -256,6 +257,30 @@ const DEFAULT_TEXTS = {
     typeFile: 'File',
     typeCustom: 'Custom message/product',
     askVerifyLink: 'Send verification link (optional) or /skip:',
+    askTermsText: 'Send purchase terms/conditions text (optional) or /skip:',
+    termsReadyText: 'Please read the purchase terms first, then choose agree or cancel.',
+    agreeToTerms: '✅ Agree to Terms',
+    cancelPurchase: '❌ Cancel',
+    purchaseCancelled: '❌ Purchase cancelled.',
+    noTermsSet: 'No terms set.',
+    productsSection: '📦 Products Section',
+    pricingSection: '💰 Pricing Section',
+    paymentsSection: '💳 Payments Section',
+    referralsSection: '👥 Referrals & Marketing',
+    systemSection: '⚙️ System Section',
+    productsSectionTitle: '📦 Product Management',
+    pricingSectionTitle: '💰 Price Management',
+    paymentsSectionTitle: '💳 Payment & Balance',
+    referralsSectionTitle: '👥 Referrals, discounts, announcements',
+    systemSectionTitle: '⚙️ Bots, menu, channel, system',
+    setChatgptTerms: '🤖 Edit ChatGPT Terms',
+    enterChatgptTerms: 'Send ChatGPT purchase terms text or /skip to clear it.',
+    chatgptTermsUpdated: '✅ ChatGPT terms updated.',
+    activeBotCount: 'Active managed bots: {count}',
+    botStarted: '✅ Bot token added and started successfully.',
+    botStartFailed: '❌ Bot token saved but could not start polling: {reason}',
+    botLiveWelcome: '✅ This bot is active and ready.',
+    botCodeUsage: 'Send /code <card_key> to redeem if this bot has permission.',
     typeBulk: 'Bulk (email/password pairs)',
     askDescription: 'Send description/explanation (text, photo, video, or /skip):',
     merchantCreated: '✅ Product created! ID: {id}',
@@ -562,6 +587,30 @@ const DEFAULT_TEXTS = {
     typeFile: 'ملف',
     typeCustom: 'رسالة/منتج مخصص',
     askVerifyLink: 'أرسل رابط التحقق (اختياري) أو /skip:',
+    askTermsText: 'أرسل نص الشروط/التعليمات قبل الشراء (اختياري) أو /skip:',
+    termsReadyText: 'يرجى قراءة الشروط أولاً ثم اختيار الموافقة أو الإلغاء.',
+    agreeToTerms: '✅ موافقة على الشروط',
+    cancelPurchase: '❌ إلغاء',
+    purchaseCancelled: '❌ تم إلغاء عملية الشراء.',
+    noTermsSet: 'لا توجد شروط.',
+    productsSection: '📦 قسم المنتجات',
+    pricingSection: '💰 قسم الأسعار',
+    paymentsSection: '💳 قسم الدفع والرصيد',
+    referralsSection: '👥 قسم الإحالات والتسويق',
+    systemSection: '⚙️ قسم النظام',
+    productsSectionTitle: '📦 إدارة المنتجات',
+    pricingSectionTitle: '💰 إدارة الأسعار',
+    paymentsSectionTitle: '💳 الدفع والرصيد',
+    referralsSectionTitle: '👥 الإحالات والخصومات والإعلانات',
+    systemSectionTitle: '⚙️ البوتات والقوائم والقناة والنظام',
+    setChatgptTerms: '🤖 تعديل شروط ChatGPT',
+    enterChatgptTerms: 'أرسل نص شروط شراء ChatGPT أو /skip للحذف.',
+    chatgptTermsUpdated: '✅ تم تحديث شروط ChatGPT.',
+    activeBotCount: 'عدد البوتات المفعلة: {count}',
+    botStarted: '✅ تم إضافة التوكن وتشغيل البوت بنجاح.',
+    botStartFailed: '❌ تم حفظ التوكن لكن تعذر تشغيل البوت: {reason}',
+    botLiveWelcome: '✅ هذا البوت مفعل ويعمل الآن.',
+    botCodeUsage: 'أرسل /code <card_key> لاسترداد الكود إذا كانت لهذا البوت صلاحية.',
     typeBulk: 'جملة (إيميل وباسورد في سطرين)',
     askDescription: 'أرسل شرح/وصف المنتج (نص، صورة، فيديو، أو /skip):',
     merchantCreated: '✅ تم إنشاء المنتج! المعرف: {id}',
@@ -786,6 +835,159 @@ function isAdmin(userId) {
   return Number(userId) === ADMIN_ID;
 }
 
+const managedBots = new Map();
+const managedBotUserStates = new Map();
+
+function getManagedBotState(token, userId) {
+  const key = `${token}:${userId}`;
+  return managedBotUserStates.get(key);
+}
+
+function setManagedBotState(token, userId, value) {
+  const key = `${token}:${userId}`;
+  if (value === null || value === undefined) managedBotUserStates.delete(key);
+  else managedBotUserStates.set(key, value);
+}
+
+async function startManagedBot(botService) {
+  if (!botService?.token || managedBots.has(botService.token) || !botService.isActive) return { started: false, reason: 'already_started_or_inactive' };
+  try {
+    const childBot = new TelegramBot(botService.token, { polling: true });
+    await childBot.deleteWebHook().catch(() => {});
+    childBot.onText(/\/start/, async msg => {
+      await childBot.sendMessage(msg.chat.id, `${await getText(ADMIN_ID, 'botLiveWelcome')}\n${await getText(ADMIN_ID, 'botCodeUsage')}`).catch(() => {});
+    });
+    childBot.onText(/\/code(?:\s+(.+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      const freshService = await BotService.findOne({ where: { token: botService.token, isActive: true } });
+      if (!freshService || !Array.isArray(freshService.allowedActions) || !freshService.allowedActions.includes('code')) {
+        await childBot.sendMessage(chatId, '❌ This bot is not allowed to use /code yet.').catch(() => {});
+        return;
+      }
+      const cardKey = match?.[1] ? match[1].trim() : '';
+      if (!cardKey) {
+        setManagedBotState(botService.token, chatId, { action: 'await_code' });
+        await childBot.sendMessage(chatId, 'Send the card code.').catch(() => {});
+        return;
+      }
+      const result = await redeemCardSmart(cardKey);
+      if (result.success) {
+        await childBot.sendMessage(chatId, `✅\n\n${formatCardDetails(result.data)}`).catch(() => {});
+      } else {
+        await childBot.sendMessage(chatId, `❌ ${result.reason}`).catch(() => {});
+      }
+    });
+    childBot.on('message', async msg => {
+      const state = getManagedBotState(botService.token, msg.chat.id);
+      if (!state || !msg.text || msg.text.startsWith('/')) return;
+      if (state.action === 'await_code') {
+        setManagedBotState(botService.token, msg.chat.id, null);
+        const result = await redeemCardSmart(msg.text.trim());
+        if (result.success) {
+          await childBot.sendMessage(msg.chat.id, `✅\n\n${formatCardDetails(result.data)}`).catch(() => {});
+        } else {
+          await childBot.sendMessage(msg.chat.id, `❌ ${result.reason}`).catch(() => {});
+        }
+      }
+    });
+    childBot.on('polling_error', err => {
+      console.error(`Managed bot polling error (${botService.name}):`, err.message);
+    });
+    managedBots.set(botService.token, childBot);
+    return { started: true }
+  } catch (err) {
+    console.error('startManagedBot error:', err.message);
+    return { started: false, reason: err.message };
+  }
+}
+
+async function stopManagedBot(token) {
+  const childBot = managedBots.get(token);
+  if (!childBot) return;
+  try {
+    await childBot.stopPolling();
+  } catch {}
+  managedBots.delete(token);
+}
+
+async function startAllManagedBots() {
+  const services = await BotService.findAll({ where: { isActive: true } });
+  for (const service of services) {
+    await startManagedBot(service);
+  }
+}
+
+async function showAdminProductsSection(userId) {
+  await bot.sendMessage(userId, await getText(userId, 'productsSectionTitle'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
+        [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
+        [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
+        [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminPricingSection(userId) {
+  await bot.sendMessage(userId, await getText(userId, 'pricingSectionTitle'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
+        [{ text: await getText(userId, 'setChatgptPrice'), callback_data: 'admin_set_chatgpt_price' }],
+        [{ text: await getText(userId, 'setChatgptTerms'), callback_data: 'admin_set_chatgpt_terms' }],
+        [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
+        [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminPaymentsSection(userId) {
+  await bot.sendMessage(userId, await getText(userId, 'paymentsSectionTitle'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
+        [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
+        [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminReferralsSection(userId) {
+  await bot.sendMessage(userId, await getText(userId, 'referralsSectionTitle'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
+        [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
+        [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminSystemSection(userId) {
+  const activeCount = managedBots.size;
+  await bot.sendMessage(userId, `${await getText(userId, 'systemSectionTitle')}\n\n${await getText(userId, 'activeBotCount', { count: activeCount })}`, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
+        [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
+        [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
+        [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
+        [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
 function safeParseState(value) {
   if (!value) return null;
   try {
@@ -922,7 +1124,7 @@ async function getReferralStockMerchant() {
       nameEn: 'ChatGPT Referral Stock',
       nameAr: 'مخزون ChatGPT الإحالات',
       price: 0,
-      category: 'AI Services',
+      category: 'ChatGPT',
       type: 'single',
       description: { type: 'text', content: 'Referral-only ChatGPT stock' }
     });
@@ -2067,25 +2269,11 @@ async function showAdminPanel(userId) {
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
-      [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
-      [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
-      [{ text: await getText(userId, 'setChatgptPrice'), callback_data: 'admin_set_chatgpt_price' }],
-      [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
-      [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
-      [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
-      [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
-      [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
-      [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
-      [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
-      [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
-      [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
-      [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
-      [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
-      [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
-      [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
-      [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
-      [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
+      [{ text: await getText(userId, 'productsSection'), callback_data: 'admin_section_products' }],
+      [{ text: await getText(userId, 'pricingSection'), callback_data: 'admin_section_pricing' }],
+      [{ text: await getText(userId, 'paymentsSection'), callback_data: 'admin_section_payments' }],
+      [{ text: await getText(userId, 'referralsSection'), callback_data: 'admin_section_referrals' }],
+      [{ text: await getText(userId, 'systemSection'), callback_data: 'admin_section_system' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
     ]
   };
@@ -2704,7 +2892,7 @@ async function getOrCreateChatGptMerchant() {
       nameEn: 'ChatGPT Code',
       nameAr: 'كود ChatGPT',
       price: 5.00,
-      category: 'AI Services',
+      category: 'ChatGPT',
       type: 'single',
       description: { type: 'text', content: 'Get a ChatGPT GO code via email' }
     });
@@ -3012,6 +3200,43 @@ bot.on('callback_query', async query => {
       await bot.answerCallbackQuery(query.id);
       return;
     }
+    if (data === 'admin_section_products' && isAdmin(userId)) {
+      await showAdminProductsSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_section_pricing' && isAdmin(userId)) {
+      await showAdminPricingSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_section_payments' && isAdmin(userId)) {
+      await showAdminPaymentsSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_section_referrals' && isAdmin(userId)) {
+      await showAdminReferralsSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_section_system' && isAdmin(userId)) {
+      await showAdminSystemSection(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_chatgpt_terms' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_chatgpt_terms' });
+      await bot.sendMessage(userId, await getText(userId, 'enterChatgptTerms'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
 
     if (data === 'admin_manage_channel' && isAdmin(userId)) {
       await showChannelConfigAdmin(userId);
@@ -3256,6 +3481,8 @@ bot.on('callback_query', async query => {
 
     if (data.startsWith('admin_remove_bot_confirm_') && isAdmin(userId)) {
       const botId = parseInt(data.split('_')[4], 10);
+      const botService = await BotService.findByPk(botId);
+      if (botService) await stopManagedBot(botService.token);
       await BotService.destroy({ where: { id: botId } });
       await bot.sendMessage(userId, await getText(userId, 'botRemoved'));
       await bot.answerCallbackQuery(query.id);
@@ -3310,8 +3537,28 @@ bot.on('callback_query', async query => {
       }
       const currentState = safeParseState((await User.findByPk(userId)).state);
       const discountCode = currentState?.discountCode || null;
-      await setUserState(userId, { action: 'buy', merchantId, discountCode });
-      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getBulkDiscountInfoText(userId)}`);
+      const merchant = await Merchant.findByPk(merchantId);
+
+      if (merchant?.termsText) {
+        await setUserState(userId, { action: 'buy_terms_pending', merchantId, discountCode });
+        await bot.sendMessage(userId, `${await getText(userId, 'termsReadyText')}
+
+${merchant.termsText}`, {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: await getText(userId, 'agreeToTerms'), callback_data: `agree_terms_buy_${merchantId}` }],
+              [{ text: await getText(userId, 'cancelPurchase'), callback_data: 'cancel_purchase_terms' }]
+            ]
+          }
+        });
+      } else {
+        await setUserState(userId, { action: 'buy', merchantId, discountCode });
+        await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}
+📦 Available: ${available}
+
+${await getBulkDiscountInfoText(userId)}`);
+      }
+
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3984,7 +4231,56 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data.startsWith('agree_terms_buy_')) {
+      const merchantId = parseInt(data.split('_')[3], 10);
+      const currentState = safeParseState((await User.findByPk(userId)).state);
+      const discountCode = currentState?.discountCode || null;
+      const available = await Code.count({ where: { merchantId, isUsed: false } });
+      await setUserState(userId, { action: 'buy', merchantId, discountCode });
+      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}
+📦 Available: ${available}
+
+${await getBulkDiscountInfoText(userId)}`);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'cancel_purchase_terms') {
+      await clearUserState(userId);
+      await bot.sendMessage(userId, await getText(userId, 'purchaseCancelled'));
+      await sendMainMenu(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'chatgpt_code') {
+      const merchant = await getOrCreateChatGptMerchant();
+      const priceText = Number(merchant.price || 0).toFixed(2);
+      if (merchant.termsText) {
+        await setUserState(userId, { action: 'chatgpt_terms_pending' });
+        await bot.sendMessage(userId, `${await getText(userId, 'termsReadyText')}
+
+${merchant.termsText}`, {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: await getText(userId, 'agreeToTerms'), callback_data: 'agree_terms_chatgpt' }],
+              [{ text: await getText(userId, 'cancelPurchase'), callback_data: 'cancel_purchase_terms' }]
+            ]
+          }
+        });
+      } else {
+        await setUserState(userId, { action: 'chatgpt_buy_quantity' });
+        await bot.sendMessage(userId, `${await getText(userId, 'chatgptCode')} ($${priceText})
+
+${await getText(userId, 'askQuantity')}
+
+${await getBulkDiscountInfoText(userId)}`);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'agree_terms_chatgpt') {
       const merchant = await getOrCreateChatGptMerchant();
       const priceText = Number(merchant.price || 0).toFixed(2);
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
@@ -4158,13 +4454,23 @@ bot.on('message', async msg => {
     if (state && isAdmin(userId)) {
       if (state.action === 'add_bot' && state.step === 'token') {
         try {
-          const testBot = new TelegramBot(text, { polling: false });
+          const candidateToken = String(text || '').trim();
+          const testBot = new TelegramBot(candidateToken, { polling: false });
+          await testBot.deleteWebHook().catch(() => {});
           const me = await testBot.getMe();
-          await BotService.create({ token: text, name: me.username, allowedActions: [] });
-          await bot.sendMessage(userId, await getText(userId, 'botAdded'));
+          const [botService] = await BotService.findOrCreate({
+            where: { token: candidateToken },
+            defaults: { token: candidateToken, name: me.username, allowedActions: [], isActive: true }
+          });
+          botService.name = me.username;
+          botService.isActive = true;
+          await botService.save();
+          const startResult = await startManagedBot(botService);
+          if (startResult.started) await bot.sendMessage(userId, await getText(userId, 'botStarted'));
+          else await bot.sendMessage(userId, await getText(userId, 'botStartFailed', { reason: startResult.reason || 'unknown' }));
           await showBotsList(userId);
-        } catch {
-          await bot.sendMessage(userId, '❌ Invalid token');
+        } catch (err) {
+          await bot.sendMessage(userId, `❌ Invalid token: ${err.message}`);
         }
         await clearUserState(userId);
         return;
@@ -4197,7 +4503,13 @@ bot.on('message', async msg => {
         }
 
         if (state.step === 'nameAr') {
-          await setUserState(userId, { ...state, nameAr: text, step: 'price' });
+          await setUserState(userId, { ...state, nameAr: text, step: 'category' });
+          await bot.sendMessage(userId, await getText(userId, 'askCategory'));
+          return;
+        }
+
+        if (state.step === 'category') {
+          await setUserState(userId, { ...state, category: text || 'general', step: 'price' });
           await bot.sendMessage(userId, await getText(userId, 'askMerchantPrice'));
           return;
         }
@@ -4240,21 +4552,39 @@ bot.on('message', async msg => {
             await bot.sendMessage(userId, 'Please send text, photo, video, or /skip');
             return;
           }
+          await setUserState(userId, { ...state, description, step: 'terms' });
+          await bot.sendMessage(userId, await getText(userId, 'askTermsText'));
+          return;
+        }
 
+        if (state.step === 'terms') {
+          const termsText = String(text || '').trim() === '/skip' ? null : String(text || '');
           const merchant = await Merchant.create({
             nameEn: state.nameEn,
             nameAr: state.nameAr,
+            category: state.category || 'general',
             price: state.price,
             type: state.selectedType || 'code',
             verifyLink: state.verifyLink || null,
-            description
+            description: state.description || null,
+            termsText
           });
 
           await bot.sendMessage(userId, await getText(userId, 'merchantCreated', { id: merchant.id }));
           await clearUserState(userId);
-          await showAdminPanel(userId);
+          await showAdminProductsSection(userId);
           return;
         }
+      }
+
+      if (state.action === 'set_chatgpt_terms') {
+        const merchant = await getOrCreateChatGptMerchant();
+        merchant.termsText = String(text || '').trim() === '/skip' ? null : String(text || '');
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'chatgptTermsUpdated'));
+        await clearUserState(userId);
+        await showAdminPricingSection(userId);
+        return;
       }
 
       if (state.action === 'set_chatgpt_price') {
@@ -5485,6 +5815,8 @@ sequelize.sync({ alter: true }).then(async () => {
   await refreshChatGPTCookies(false);
 
   await getOrCreateChatGptMerchant();
+
+  await startAllManagedBots();
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
