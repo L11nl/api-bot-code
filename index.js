@@ -1605,30 +1605,32 @@ async function handleVerificationSuccess(userId) {
 }
 
 const DEFAULT_BUTTONS = {
-  redeem: true,
-  buy: true,
-  my_balance: true,
-  deposit: true,
-  referral: true,
-  discount: true,
-  my_purchases: true,
-  support: true,
   chatgpt_code: true,
   free_code: true,
+  referral_prize: true,
+  buy: true,
+  redeem: true,
+  my_balance: true,
+  deposit: true,
+  my_purchases: true,
+  referral: true,
+  discount: true,
+  support: true,
   admin_panel: true
 };
 
 const DEFAULT_BUTTON_ORDER = [
-  'redeem',
-  'buy',
-  'my_balance',
-  'deposit',
-  'referral',
-  'discount',
-  'my_purchases',
-  'support',
   'chatgpt_code',
   'free_code',
+  'referral_prize',
+  'buy',
+  'redeem',
+  'my_balance',
+  'deposit',
+  'my_purchases',
+  'referral',
+  'discount',
+  'support',
   'admin_panel'
 ];
 
@@ -1696,7 +1698,7 @@ async function getMenuButtonItems(userId) {
     { id: 'deposit', name: await getText(userId, 'deposit') },
     { id: 'referral', name: await getText(userId, 'referral') },
     { id: 'referral_prize', name: await getText(userId, 'referralStockClaim') },
-    { id: 'discount', name: '🎟️ Discount' },
+    { id: 'discount', name: await getText(userId, 'discount') },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
     { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
@@ -2027,19 +2029,21 @@ async function sendMainMenu(userId) {
   const visibility = await getMenuButtonsVisibility();
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
+  const canClaimFree = await canUserClaimFreeCode(userId);
   const chatgptMerchant = await getOrCreateChatGptMerchant();
   const chatgptPrice = Number(chatgptMerchant.price || 0).toFixed(2);
   const buttonLabels = {
-    redeem: await getText(userId, 'redeem'),
+    chatgpt_code: `${await getText(userId, 'chatgptCode')} ($${chatgptPrice})`,
+    free_code: await getText(userId, 'freeCodeMenu'),
+    referral_prize: await getText(userId, 'referralStockClaim'),
     buy: await getText(userId, 'buy'),
+    redeem: await getText(userId, 'redeem'),
     my_balance: await getText(userId, 'myBalance'),
     deposit: await getText(userId, 'deposit'),
-    referral: await getText(userId, 'referral'),
-    referral_prize: await getText(userId, 'referralStockClaim'),
-    discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
+    referral: await getText(userId, 'referral'),
+    discount: await getText(userId, 'discount'),
     support: await getText(userId, 'support'),
-    chatgpt_code: `${await getText(userId, 'chatgptCode')} ($${chatgptPrice})`,
     admin_panel: await getText(userId, 'adminPanel')
   };
 
@@ -2047,6 +2051,7 @@ async function sendMainMenu(userId) {
   for (const id of order) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
+    if (id === 'free_code' && !canClaimFree) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
@@ -2062,25 +2067,25 @@ async function showAdminPanel(userId) {
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
-      [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
-      [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
-      [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
       [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
       [{ text: await getText(userId, 'setChatgptPrice'), callback_data: 'admin_set_chatgpt_price' }],
       [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
       [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
-      [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
-      [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
-      [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
-      [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
-      [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
-      [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
+      [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
       [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
+      [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
+      [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
+      [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
       [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
       [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
+      [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
+      [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
+      [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
+      [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
+      [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
+      [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
     ]
   };
@@ -3130,7 +3135,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'referral_free_code' || data === 'free_code') {
+    if (data === 'referral_free_code' || data === 'free_code' || data === 'get_free_code') {
       const canClaim = await canUserClaimFreeCode(userId);
 
       if (!canClaim) {
