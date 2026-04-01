@@ -377,10 +377,13 @@ const DEFAULT_TEXTS = {
     addReferralStockCodes: '➕ Add Referral Stock Codes',
     viewReferralStockCount: '📦 View Referral Stock',
     searchDuplicateReferralCodes: '🔎 Search Duplicate Codes',
+    deleteSoldReferralCodes: '🗑️ Delete Sold Codes',
     deleteDuplicateReferralCodes: '🗑️ Delete Duplicate Codes',
     noDuplicateReferralCodes: '✅ No duplicate codes found in referral stock.',
+    noSoldReferralCodes: '✅ No sold/used codes found in referral stock.',
     duplicateReferralCodesResult: '🔎 Duplicate referral-stock codes\n\nDuplicate count: {count}\n\n{list}',
     duplicateReferralCodesDeleted: '✅ Duplicate referral-stock codes deleted. Removed: {count}',
+    soldReferralCodesDeleted: '✅ Sold/used referral-stock codes deleted. Removed: {count}',
     purchaseStockAdminNotice: '🛒 A code/item was purchased\nName: {name}\nUsername: {username}\nID: {id}\nMerchant: {merchant}\nCount: {count}\nRemaining stock: {remaining}',
     stockClaimAdminShort: '📦 Stock withdrawal\nUser: {name}\nUsername: {username}\nID: {id}\nCount: {count}\nRemaining stock: {remaining}',
     referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
@@ -733,10 +736,13 @@ const DEFAULT_TEXTS = {
     addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
     searchDuplicateReferralCodes: '🔎 البحث عن الاكواد المكررة',
+    deleteSoldReferralCodes: '🗑️ حذف الكودات المبيوعة',
     deleteDuplicateReferralCodes: '🗑️ حذف الاكواد المكررة',
     noDuplicateReferralCodes: '✅ لا توجد أكواد مكررة في مخزون الإحالات.',
+    noSoldReferralCodes: '✅ لا توجد كودات مبيوعة/مسحوبة في مخزون الإحالات.',
     duplicateReferralCodesResult: '🔎 الأكواد المكررة في مخزون الإحالات\n\nعدد التكرار: {count}\n\n{list}',
     duplicateReferralCodesDeleted: '✅ تم حذف الأكواد المكررة من مخزون الإحالات. المحذوف: {count}',
+    soldReferralCodesDeleted: '✅ تم حذف الكودات المبيوعة/المسحوبة من مخزون الإحالات. المحذوف: {count}',
     purchaseStockAdminNotice: '🛒 تم شراء كود/شيء من البوت\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالتاجر: {merchant}\nالعدد: {count}\nالمتبقي في المخزون: {remaining}',
     stockClaimAdminShort: '📦 تم سحب كود من مخزون الإحالات\nالاسم: {name}\nالمعرف: {username}\nالايدي: {id}\nالعدد: {count}\nالمتبقي في المخزون: {remaining}',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
@@ -1221,6 +1227,22 @@ async function findReferralStockDuplicates() {
     duplicateIds,
     lines
   };
+}
+
+async function deleteSoldReferralStockCodes() {
+  const merchant = await getReferralStockMerchant();
+  const soldCodes = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: true },
+    attributes: ['id']
+  });
+
+  const ids = soldCodes.map(item => item.id);
+  if (!ids.length) {
+    return { count: 0 };
+  }
+
+  await Code.destroy({ where: { id: ids } });
+  return { count: ids.length };
 }
 
 async function getSuccessfulReferralCount(userId) {
@@ -2497,6 +2519,7 @@ async function showReferralStockSettingsAdmin(userId) {
       [{ text: await getText(userId, 'addReferralStockCodes'), callback_data: 'admin_add_referral_stock_codes' }],
       [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
       [{ text: await getText(userId, 'searchDuplicateReferralCodes'), callback_data: 'admin_search_referral_stock_duplicates' }],
+      [{ text: await getText(userId, 'deleteSoldReferralCodes'), callback_data: 'admin_delete_sold_referral_stock_codes' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -3999,6 +4022,17 @@ ${await getBulkDiscountInfoText(userId)}`);
       } else {
         await Code.destroy({ where: { id: result.duplicateIds } });
         await bot.sendMessage(userId, await getText(userId, 'duplicateReferralCodesDeleted', { count: result.count }));
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_delete_sold_referral_stock_codes' && isAdmin(userId)) {
+      const result = await deleteSoldReferralStockCodes();
+      if (!result.count) {
+        await bot.sendMessage(userId, await getText(userId, 'noSoldReferralCodes'));
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'soldReferralCodesDeleted', { count: result.count }));
       }
       await bot.answerCallbackQuery(query.id);
       return;
