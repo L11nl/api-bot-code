@@ -304,7 +304,7 @@ const DEFAULT_TEXTS = {
     redeemPoints: '🎁 Redeem Points',
     getFreeCode: '🎁 Get your free code',
     freeCodeMenu: '🎁 Get your free code',
-    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link:\n{link}\n\nYour points: {points}\nYou can get {redeemableCodes} code(s) with your points.\n🎁 Every {requiredPoints} points = 1 free ChatGPT code!',
+    referralInfo: 'Share your referral link with friends and earn 1 point per successful referral!\n\nYour referral link:\n<code>{link}</code>\n\nYour points: {points}\nYou can get {redeemableCodes} code(s) with your points.\n🎁 Every {requiredPoints} points = 1 free ChatGPT code!',
     referralEarned: '🎉 You earned 1 referral point! Total points: {points}',
     notEnoughPoints: '❌ You do not have enough points. You have {points} points, and each code needs {requiredPoints} points.',
     redeemPointsAskAmount: 'Send the number of ChatGPT codes you want to redeem using your points. Each code costs {requiredPoints} points.',
@@ -598,7 +598,7 @@ const DEFAULT_TEXTS = {
     redeemPoints: '🎁 استبدال النقاط',
     getFreeCode: '🎁 احصل على كودك المجاني',
     freeCodeMenu: '🎁 احصل على كودك المجاني',
-    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك:\n{link}\n\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
+    referralInfo: 'شارك رابط الإحالة الخاص بك مع أصدقائك واربح نقطة واحدة لكل إحالة ناجحة!\n\nرابطك:\n<code>{link}</code>\n\nنقاطك: {points}\n🎁 استبدل {requiredPoints} نقاط للحصول على كود ChatGPT مجاناً!',
     referralEarned: '🎉 لقد ربحت نقطة إحالة! إجمالي النقاط: {points}',
     notEnoughPoints: '❌ لا تملك نقاطًا كافية. لديك {points} نقطة، وكل كود يحتاج {requiredPoints} نقاط.',
     redeemPointsAskAmount: 'أرسل عدد كودات ChatGPT التي تريد أخذها بالنقاط. كل كود يحتاج {requiredPoints} نقاط.',
@@ -1156,8 +1156,12 @@ async function getBotUsername() {
 }
 
 async function getUserReferralLink(userId) {
-  const publicUsername = await getBotUsername();
-  if (!publicUsername) return '';
+  let publicUsername = await getBotUsername();
+  if (!publicUsername) {
+    publicUsername = process.env.PUBLIC_BOT_USERNAME || process.env.BOT_USERNAME || '';
+  }
+  publicUsername = String(publicUsername || '').replace(/^@/, '').trim();
+  if (!publicUsername) return `https://t.me/?start=${userId}`;
   return `https://t.me/${publicUsername}?start=${userId}`;
 }
 
@@ -1216,7 +1220,7 @@ async function showPrivateCodesChannelAdmin(userId) {
     `المعرف: ${config.username || config.chatId || 'غير محدد'}
 
 ` +
-    `ملاحظة: أضف البوت مشرفًا في القناة الخاصة ثم أرسل رابطها أو آيديها.`;
+    `ملاحظة: أضف البوت مشرفًا في القناة الخاصة. يمكنك إرسال رابط دعوة خاص مثل t.me/+... ولكن للإرسال إلى القناة يجب أيضًا إعادة توجيه منشور واحد من نفس القناة ليتم حفظ chat_id.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -1233,7 +1237,7 @@ async function showPrivateCodesChannelAdmin(userId) {
 async function sendCodesToPrivateChannel(adminId, quantity = 100) {
   const config = await getPrivateCodesChannelConfig();
   if (!config.enabled || !config.chatId) {
-    return { success: false, reason: 'channel_not_configured' };
+    return { success: false, reason: config.link ? 'channel_needs_forwarded_post' : 'channel_not_configured' };
   }
 
   const merchant = await getReferralStockMerchant();
@@ -1421,6 +1425,41 @@ async function resolveChannelTarget(input) {
       message: 'The bot could not access this channel. Make sure the bot is added as an administrator in the channel, then send @channelusername or the chat id again.'
     };
   }
+}
+
+
+function isTelegramInviteLink(value) {
+  return /^(https?:\/\/)?t\.me\/(\+|joinchat\/).+/i.test(String(value || '').trim());
+}
+
+function normalizeTelegramInviteLink(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^t\.me\//i.test(raw)) return `https://${raw}`;
+  return raw;
+}
+
+async function resolvePrivateCodesChannelTarget(input) {
+  const raw = String(input || '').trim();
+  if (!raw) {
+    return { ok: false, reason: 'empty', message: 'قيمة القناة فارغة.' };
+  }
+
+  if (isTelegramInviteLink(raw)) {
+    return {
+      ok: true,
+      inviteOnly: true,
+      chatId: '',
+      username: '',
+      title: 'قناة خاصة عبر رابط دعوة',
+      link: normalizeTelegramInviteLink(raw),
+      type: 'channel',
+      message: '✅ تم حفظ رابط الدعوة الخاص. لإكمال الإرسال إلى القناة، قم أيضاً بإعادة توجيه منشور من نفس القناة مرة واحدة ليتم حفظ chat_id.'
+    };
+  }
+
+  return resolveChannelTarget(raw);
 }
 
 async function ensureChannelConfigResolved(config) {
@@ -3744,7 +3783,7 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_set_private_codes_channel' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_private_codes_channel' });
-      await bot.sendMessage(userId, 'أرسل رابط أو آيدي القناة الخاصة، أو قم بإعادة توجيه منشور منها.');
+      await bot.sendMessage(userId, 'أرسل رابط الدعوة الخاص مثل\nhttps://t.me/+Sf4X6ek8eLRiOGM5\nأو أرسل آيدي القناة، أو قم بإعادة توجيه منشور منها.\n\nمهم: إذا أرسلت رابط دعوة خاص فقط، فقم بعده بإعادة توجيه منشور من نفس القناة مرة واحدة ليتم حفظ معرّف القناة الداخلي للإرسال.');
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -3754,11 +3793,13 @@ bot.on('callback_query', async query => {
       if (!result.success) {
         const msg = result.reason === 'channel_not_configured'
           ? '❌ القناة الخاصة غير مفعلة أو غير محفوظة.'
-          : result.reason === 'not_enough_stock'
-            ? `❌ لا يوجد 100 كود متاح. المتوفر حالياً: ${result.available || 0}`
-            : result.reason === 'telegram_send_failed'
-              ? '❌ فشل إرسال الأكواد للقناة. تأكد أن البوت مشرف داخل القناة الخاصة.'
-              : '❌ حدث خطأ أثناء الإرسال.';
+          : result.reason === 'channel_needs_forwarded_post'
+            ? '❌ تم حفظ رابط الدعوة الخاص، لكن الإرسال يحتاج أيضاً إعادة توجيه منشور واحد من نفس القناة ليتم حفظ chat_id الداخلي.'
+            : result.reason === 'not_enough_stock'
+              ? `❌ لا يوجد 100 كود متاح. المتوفر حالياً: ${result.available || 0}`
+              : result.reason === 'telegram_send_failed'
+                ? '❌ فشل إرسال الأكواد للقناة. تأكد أن البوت مشرف داخل القناة الخاصة.'
+                : '❌ حدث خطأ أثناء الإرسال.';
         await bot.sendMessage(userId, msg);
       } else {
         await bot.sendMessage(userId, `✅ تم إرسال ${result.sent} كود إلى القناة الخاصة.
@@ -3849,7 +3890,8 @@ bot.on('callback_query', async query => {
       const points = Number(user?.referralPoints || 0);
       const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
       const redeemableCodes = await getRedeemableReferralCodesCount(userId);
-      const info = await getText(userId, 'referralInfo', { link: link || 'رابط الإحالة غير متاح حالياً', points, requiredPoints, redeemableCodes });
+      const fallbackLink = (await User.findByPk(userId))?.lang === 'ar' ? 'رابط الإحالة غير متاح حالياً' : 'Referral link is currently unavailable';
+      const info = await getText(userId, 'referralInfo', { link: escapeHtml(link || fallbackLink), points, requiredPoints, redeemableCodes });
 
       const freeCodeButtonRow = (await canUserClaimFreeCode(userId)) && !user?.freeChatgptReceived
         ? [[{ text: await getText(userId, 'getFreeCode'), callback_data: 'get_free_code' }]]
@@ -3863,7 +3905,7 @@ bot.on('callback_query', async query => {
         ]
       };
 
-      await bot.sendMessage(userId, info, { parse_mode: 'Markdown', reply_markup: keyboard });
+      await bot.sendMessage(userId, info, { parse_mode: 'HTML', reply_markup: keyboard });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -4805,18 +4847,21 @@ bot.on('message', async msg => {
     if (state && isAdmin(userId)) {
       if (state.action === 'set_private_codes_channel') {
         let resolved = null;
+        const existingCfg = await getPrivateCodesChannelConfig();
+
         if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
           const forwardedChat = msg.forward_from_chat;
           resolved = {
             ok: true,
+            inviteOnly: false,
             chatId: String(forwardedChat.id),
             username: forwardedChat.username ? `@${forwardedChat.username}` : '',
             title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
-            link: forwardedChat.username ? `https://t.me/${forwardedChat.username}` : '',
+            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
             type: 'channel'
           };
         } else {
-          resolved = await resolveChannelTarget(String(text || '').trim());
+          resolved = await resolvePrivateCodesChannelTarget(String(text || '').trim());
         }
 
         if (!resolved || !resolved.ok) {
@@ -4830,13 +4875,18 @@ bot.on('message', async msg => {
 
         await savePrivateCodesChannelConfig({
           enabled: true,
-          chatId: resolved.chatId,
-          link: resolved.link || '',
-          title: resolved.title || '',
-          username: resolved.username || ''
+          chatId: resolved.chatId || existingCfg.chatId || '',
+          link: resolved.link || existingCfg.link || '',
+          title: resolved.title || existingCfg.title || '',
+          username: resolved.username || existingCfg.username || ''
         });
         await clearUserState(userId);
-        await bot.sendMessage(userId, '✅ تم حفظ القناة الخاصة وتفعيلها.');
+        await bot.sendMessage(
+          userId,
+          resolved.inviteOnly
+            ? (resolved.message || '✅ تم حفظ رابط الدعوة الخاص.')
+            : '✅ تم حفظ القناة الخاصة وتفعيلها.'
+        );
         await showPrivateCodesChannelAdmin(userId);
         return;
       }
