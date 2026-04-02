@@ -20,6 +20,7 @@ if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+let BOT_USERNAME_CACHE = process.env.PUBLIC_BOT_USERNAME || '';
 const app = express();
 app.use(express.json());
 
@@ -1142,10 +1143,151 @@ function formatDateParts(date) {
   };
 }
 
+async function getBotUsername() {
+  if (BOT_USERNAME_CACHE) return BOT_USERNAME_CACHE;
+  try {
+    const botInfo = await bot.getMe();
+    BOT_USERNAME_CACHE = botInfo?.username || process.env.PUBLIC_BOT_USERNAME || '';
+    return BOT_USERNAME_CACHE;
+  } catch (err) {
+    console.error('getBotUsername error:', err.message);
+    return process.env.PUBLIC_BOT_USERNAME || '';
+  }
+}
+
 async function getUserReferralLink(userId) {
-  const botInfo = await bot.getMe();
-  const publicUsername = process.env.PUBLIC_BOT_USERNAME || botInfo.username;
+  const publicUsername = await getBotUsername();
+  if (!publicUsername) return '';
   return `https://t.me/${publicUsername}?start=${userId}`;
+}
+
+async function getPrivateCodesChannelConfig() {
+  const values = await Setting.findAll({
+    where: {
+      lang: 'global',
+      key: {
+        [Op.in]: [
+          'private_codes_channel_enabled',
+          'private_codes_channel_chat_id',
+          'private_codes_channel_link',
+          'private_codes_channel_title',
+          'private_codes_channel_username'
+        ]
+      }
+    }
+  });
+
+  const map = Object.fromEntries(values.map(v => [v.key, v.value]));
+  return {
+    enabled: String(map.private_codes_channel_enabled || 'false').toLowerCase() === 'true',
+    chatId: map.private_codes_channel_chat_id || '',
+    link: map.private_codes_channel_link || '',
+    title: map.private_codes_channel_title || '',
+    username: map.private_codes_channel_username || ''
+  };
+}
+
+async function savePrivateCodesChannelConfig(config = {}) {
+  const pairs = {
+    private_codes_channel_enabled: config.enabled ? 'true' : 'false',
+    private_codes_channel_chat_id: config.chatId || '',
+    private_codes_channel_link: config.link || '',
+    private_codes_channel_title: config.title || '',
+    private_codes_channel_username: config.username || ''
+  };
+  for (const [key, value] of Object.entries(pairs)) {
+    await Setting.upsert({ key, lang: 'global', value: String(value) });
+  }
+}
+
+async function showPrivateCodesChannelAdmin(userId) {
+  const config = await getPrivateCodesChannelConfig();
+  const status = config.enabled ? '✅ مفعل' : '⛔ متوقف';
+  const msg =
+    `📦 إعدادات قناة الأكواد الخاصة
+
+` +
+    `الحالة: ${status}
+` +
+    `العنوان: ${config.title || 'غير محدد'}
+` +
+    `الرابط: ${config.link || 'غير محدد'}
+` +
+    `المعرف: ${config.username || config.chatId || 'غير محدد'}
+
+` +
+    `ملاحظة: أضف البوت مشرفًا في القناة الخاصة ثم أرسل رابطها أو آيديها.`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: config.enabled ? '⛔ إيقاف قناة الأكواد الخاصة' : '✅ تفعيل قناة الأكواد الخاصة', callback_data: 'admin_toggle_private_codes_channel' }],
+      [{ text: '🔗 تعيين القناة الخاصة', callback_data: 'admin_set_private_codes_channel' }],
+      [{ text: '📤 إرسال 100 كود للقناة الخاصة', callback_data: 'admin_send_100_codes_to_private_channel' }],
+      [{ text: '🔙 رجوع', callback_data: 'admin' }]
+    ]
+  };
+
+  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
+}
+
+async function sendCodesToPrivateChannel(adminId, quantity = 100) {
+  const config = await getPrivateCodesChannelConfig();
+  if (!config.enabled || !config.chatId) {
+    return { success: false, reason: 'channel_not_configured' };
+  }
+
+  const merchant = await getReferralStockMerchant();
+  const codes = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    limit: quantity,
+    order: [['id', 'ASC']]
+  });
+
+  if (codes.length < quantity) {
+    return { success: false, reason: 'not_enough_stock', available: codes.length };
+  }
+
+  const t = await sequelize.transaction();
+  try {
+    await Code.update(
+      { isUsed: true, usedBy: adminId, soldAt: new Date() },
+      { where: { id: codes.map(c => c.id) }, transaction: t }
+    );
+    await t.commit();
+  } catch (err) {
+    await t.rollback();
+    console.error('sendCodesToPrivateChannel stock update error:', err);
+    return { success: false, reason: 'db_error' };
+  }
+
+  const payloadLines = codes.map((c, index) => `${index + 1}- ${c.extra ? `${c.value}\n${c.extra}` : c.value}`);
+  const chunks = [];
+  let current = '📦 100 كود جديد للقناة الخاصة\n\n';
+  for (const line of payloadLines) {
+    const block = `${line}\n\n`;
+    if ((current + block).length > 3500) {
+      chunks.push(current.trim());
+      current = block;
+    } else {
+      current += block;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+
+  try {
+    for (const chunk of chunks) {
+      await bot.sendMessage(config.chatId, chunk);
+    }
+    const remaining = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+    return { success: true, sent: codes.length, remaining };
+  } catch (err) {
+    console.error('sendCodesToPrivateChannel telegram send error:', err.response?.body || err.message);
+    await Code.update(
+      { isUsed: false, usedBy: null, soldAt: null },
+      { where: { id: codes.map(c => c.id) } }
+    ).catch(() => {});
+    return { success: false, reason: 'telegram_send_failed' };
+  }
 }
 
 async function findOrCreateUser(userId) {
@@ -2700,6 +2842,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
+      [{ text: '📦 قناة الأكواد الخاصة', callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
@@ -3584,6 +3727,47 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_private_codes_channel' && isAdmin(userId)) {
+      await showPrivateCodesChannelAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_private_codes_channel' && isAdmin(userId)) {
+      const cfg = await getPrivateCodesChannelConfig();
+      cfg.enabled = !cfg.enabled;
+      await savePrivateCodesChannelConfig(cfg);
+      await showPrivateCodesChannelAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_private_codes_channel' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_private_codes_channel' });
+      await bot.sendMessage(userId, 'أرسل رابط أو آيدي القناة الخاصة، أو قم بإعادة توجيه منشور منها.');
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_send_100_codes_to_private_channel' && isAdmin(userId)) {
+      const result = await sendCodesToPrivateChannel(userId, 100);
+      if (!result.success) {
+        const msg = result.reason === 'channel_not_configured'
+          ? '❌ القناة الخاصة غير مفعلة أو غير محفوظة.'
+          : result.reason === 'not_enough_stock'
+            ? `❌ لا يوجد 100 كود متاح. المتوفر حالياً: ${result.available || 0}`
+            : result.reason === 'telegram_send_failed'
+              ? '❌ فشل إرسال الأكواد للقناة. تأكد أن البوت مشرف داخل القناة الخاصة.'
+              : '❌ حدث خطأ أثناء الإرسال.';
+        await bot.sendMessage(userId, msg);
+      } else {
+        await bot.sendMessage(userId, `✅ تم إرسال ${result.sent} كود إلى القناة الخاصة.
+المتبقي في المخزون: ${result.remaining}`);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_toggle_verification' && isAdmin(userId)) {
       const config = await getChannelConfig();
       if (!config.enabled) {
@@ -3665,7 +3849,7 @@ bot.on('callback_query', async query => {
       const points = Number(user?.referralPoints || 0);
       const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
       const redeemableCodes = await getRedeemableReferralCodesCount(userId);
-      const info = await getText(userId, 'referralInfo', { link, points, requiredPoints, redeemableCodes });
+      const info = await getText(userId, 'referralInfo', { link: link || 'رابط الإحالة غير متاح حالياً', points, requiredPoints, redeemableCodes });
 
       const freeCodeButtonRow = (await canUserClaimFreeCode(userId)) && !user?.freeChatgptReceived
         ? [[{ text: await getText(userId, 'getFreeCode'), callback_data: 'get_free_code' }]]
@@ -4619,6 +4803,44 @@ bot.on('message', async msg => {
     }
 
     if (state && isAdmin(userId)) {
+      if (state.action === 'set_private_codes_channel') {
+        let resolved = null;
+        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+          const forwardedChat = msg.forward_from_chat;
+          resolved = {
+            ok: true,
+            chatId: String(forwardedChat.id),
+            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
+            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
+            link: forwardedChat.username ? `https://t.me/${forwardedChat.username}` : '',
+            type: 'channel'
+          };
+        } else {
+          resolved = await resolveChannelTarget(String(text || '').trim());
+        }
+
+        if (!resolved || !resolved.ok) {
+          await bot.sendMessage(userId, `❌ ${resolved?.message || 'تعذر حفظ القناة الخاصة.'}`);
+          return;
+        }
+        if (resolved.type && resolved.type !== 'channel') {
+          await bot.sendMessage(userId, '❌ الهدف يجب أن يكون قناة تيليجرام وليس مجموعة.');
+          return;
+        }
+
+        await savePrivateCodesChannelConfig({
+          enabled: true,
+          chatId: resolved.chatId,
+          link: resolved.link || '',
+          title: resolved.title || '',
+          username: resolved.username || ''
+        });
+        await clearUserState(userId);
+        await bot.sendMessage(userId, '✅ تم حفظ القناة الخاصة وتفعيلها.');
+        await showPrivateCodesChannelAdmin(userId);
+        return;
+      }
+
       if (state.action === 'set_channel_link') {
         let resolved = null;
 
@@ -5968,6 +6190,7 @@ sequelize.sync({ alter: true }).then(async () => {
   await refreshChatGPTCookies(false);
 
   await getOrCreateChatGptMerchant();
+  await getBotUsername();
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
