@@ -782,11 +782,6 @@ async function clearUserState(userId) {
   await User.update({ state: null }, { where: { id: userId } });
 }
 
-async function cancelUserStateAndReturnToMenu(userId) {
-  await clearUserState(userId);
-  await sendMainMenu(userId);
-}
-
 function generateReferralCode(userId) {
   return `REF${userId}`;
 }
@@ -2011,13 +2006,49 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
   }
 
   const timestamp = Date.now();
-  const queryString = `startTime=${timestamp - (90 * 24 * 60 * 60 * 1000)}&endTime=${timestamp}&limit=100&timestamp=${timestamp}`;
+  const startTime = timestamp - (7 * 24 * 60 * 60 * 1000);
+  const queryString = `startTime=${startTime}&endTime=${timestamp}&limit=100&timestamp=${timestamp}`;
   const signature = crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
   const url = `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`;
 
   const normalize = (v) => String(v || '').trim().toLowerCase();
   const wanted = normalize(orderNumber);
   const expected = Number(expectedAmountUSDT || 0);
+
+  const extractCurrencies = (item) => {
+    const set = new Set();
+    if (item?.currency) set.add(String(item.currency).toUpperCase());
+    if (Array.isArray(item?.fundsDetail)) {
+      for (const fd of item.fundsDetail) {
+        if (fd?.currency) set.add(String(fd.currency).toUpperCase());
+      }
+    }
+    return Array.from(set);
+  };
+
+  const extractAmounts = (item) => {
+    const values = [];
+    const base = parseFloat(item?.amount || 0);
+    if (Number.isFinite(base) && base !== 0) values.push(Math.abs(base));
+    if (Array.isArray(item?.fundsDetail)) {
+      for (const fd of item.fundsDetail) {
+        const amount = parseFloat(fd?.amount || 0);
+        if (Number.isFinite(amount) && amount !== 0) values.push(Math.abs(amount));
+      }
+    }
+    return values;
+  };
+
+  const matchesOrderId = (item) => {
+    const candidates = [
+      item?.transactionId,
+      item?.orderId,
+      item?.merchantTradeNo,
+      item?.prepayId,
+      item?.bizId
+    ].map(normalize).filter(Boolean);
+    return candidates.includes(wanted);
+  };
 
   try {
     const response = await axios.get(url, {
@@ -2029,26 +2060,28 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
     const rows = Array.isArray(payload.data) ? payload.data : [];
 
     const matched = rows.find(item => {
-      const transactionId = normalize(item.transactionId);
-      const amount = Math.abs(parseFloat(item.amount || 0));
-      const currency = String(item.currency || '').toUpperCase();
-      return transactionId === wanted && currency === 'USDT' && Math.abs(amount - expected) < 0.000001;
+      if (!matchesOrderId(item)) return false;
+      const currencies = extractCurrencies(item);
+      if (!currencies.includes('USDT')) return false;
+      const amounts = extractAmounts(item);
+      return amounts.some(amount => Math.abs(amount - expected) < 0.000001);
     });
 
     if (matched) {
       return {
         success: true,
-        amount: Math.abs(parseFloat(matched.amount || 0)),
-        txId: matched.transactionId,
-        currency: matched.currency || 'USDT',
-        transactionTime: matched.transactionTime || Date.now()
+        amount: extractAmounts(matched)[0] || Math.abs(parseFloat(matched.amount || 0)),
+        txId: matched.transactionId || matched.orderId || orderNumber,
+        currency: (extractCurrencies(matched)[0] || matched.currency || 'USDT'),
+        transactionTime: matched.transactionTime || Date.now(),
+        raw: matched
       };
     }
 
     return { success: false, reason: 'No matching Binance Pay transaction found' };
   } catch (err) {
     console.error('Binance Pay API error:', err.response?.data || err.message);
-    return { success: false, reason: 'API error' };
+    return { success: false, reason: err.response?.data?.msg || err.message || 'API error' };
   }
 }
 
@@ -2936,12 +2969,6 @@ bot.on('callback_query', async query => {
 
     const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: false });
     if (!canUse) {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'cancel_state_and_menu') {
-      await cancelUserStateAndReturnToMenu(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5120,20 +5147,16 @@ bot.on('message', async msg => {
         return;
       }
 
-      const waitingText = user.lang === 'ar'
+      const waitingMsg = await bot.sendMessage(userId, user.lang === 'ar'
         ? '⏳ جاري التحقق من عملية Binance...'
-        : '⏳ Checking Binance transaction...';
-      const waitingMsg = await bot.sendMessage(userId, waitingText);
-      const waitStartedAt = Date.now();
+        : '⏳ Checking Binance transaction...');
 
+      const startedAt = Date.now();
       const checkResult = await checkBinanceDeposit(orderNumber, expectedAmount);
-
-      const minVisibleMs = 1500;
-      const elapsedMs = Date.now() - waitStartedAt;
-      if (elapsedMs < minVisibleMs) {
-        await new Promise(resolve => setTimeout(resolve, minVisibleMs - elapsedMs));
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 1500) {
+        await new Promise(resolve => setTimeout(resolve, 1500 - elapsed));
       }
-
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (checkResult.success) {
@@ -5151,54 +5174,39 @@ bot.on('message', async msg => {
         });
 
         await bot.sendMessage(userId, user.lang === 'ar'
-          ? `✅ تم التحقق من الدفع بنجاح. تمت إضافة ${expectedAmount}$ إلى رصيدك.
-
-رصيدك الجديد: ${newBalance.toFixed(2)}$`
-          : `✅ Payment verified successfully. ${expectedAmount}$ has been added to your balance.
-
-New balance: ${newBalance.toFixed(2)}$`);
+          ? `✅ تم التحقق من الدفع بنجاح. تمت إضافة ${expectedAmount}$ إلى رصيدك.\n\nرصيدك الجديد: ${newBalance.toFixed(2)}$`
+          : `✅ Payment verified successfully. ${expectedAmount}$ has been added to your balance.\n\nNew balance: ${newBalance.toFixed(2)}$`);
 
         const identity = await getTelegramIdentityById(userId);
         await bot.sendMessage(ADMIN_ID,
-          `💰 Binance Auto Deposit
-
-` +
-          `Name: ${identity.fullName}
-` +
-          `Username: ${identity.usernameText}
-` +
-          `ID: ${userId}
-` +
-          `Amount: ${expectedAmount} USD
-` +
-          `Order ID: ${orderNumber}
-` +
+          `💰 Binance Auto Deposit\n\n` +
+          `Name: ${identity.fullName}\n` +
+          `Username: ${identity.usernameText}\n` +
+          `ID: ${userId}\n` +
+          `Amount: ${expectedAmount} USD\n` +
+          `Order ID: ${orderNumber}\n` +
           `Binance ID: ${BINANCE_PAY_ID}`
         ).catch(() => {});
+      } else {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ لم يتم العثور على عملية مطابقة بهذا الـ Order ID والمبلغ المحدد. تأكد من إرسال المبلغ الصحيح ثم أرسل Order ID الصحيح
 
-        await clearUserState(userId);
-        await sendMainMenu(userId);
+اذا هنالك مشكلة تواصل مع الدعم: @Neeeee'
+          : '❌ No matching transaction was found for this Order ID and amount. Please make sure you sent the correct amount, then send the correct Order ID.
+
+If there is a problem, contact support: @Neeeee', {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: user.lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'binance_auto_cancel' },
+              { text: user.lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'binance_auto_back' }
+            ]]
+          }
+        });
         return;
       }
 
-      const failedText = user.lang === 'ar'
-        ? `❌ لم يتم العثور على عملية مطابقة بهذا الـ Order ID والمبلغ المحدد. تأكد من إرسال المبلغ الصحيح ثم أرسل Order ID الصحيح
-
-اذا هنالك مشكلة تواصل مع الدعم: @Neeeee`
-        : `❌ No matching transaction was found for this Order ID and selected amount. Make sure you sent the correct amount, then send the correct Order ID.
-
-If there is a problem, contact support: @Neeeee`;
-
-      const failedKeyboard = {
-        inline_keyboard: [
-          [
-            { text: user.lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
-            { text: user.lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
-          ]
-        ]
-      };
-
-      await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
+      await clearUserState(userId);
+      await sendMainMenu(userId);
       return;
     }
     // -------------------------------------------------------------------
