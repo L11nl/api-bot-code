@@ -5,10 +5,13 @@ const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
 const FormData = require('form-data');
 const { Sequelize, DataTypes, Op } = require('sequelize');
+const crypto = require('crypto');
 
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
 const DATABASE_URL = process.env.DATABASE_URL;
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -1121,7 +1124,6 @@ async function getPerCodePriceForQuantity(basePrice, quantity) {
   return safeBasePrice;
 }
 
-
 function formatDateParts(date) {
   const d = new Date(date);
   return {
@@ -1172,42 +1174,6 @@ async function getTelegramIdentityById(targetUserId) {
     };
   }
 }
-
-async function sendAdminCodeActionNotice(userId, serviceType, options = {}) {
-  try {
-    const identity = await getTelegramIdentityById(userId);
-    const user = await User.findByPk(userId);
-    const parts = formatDateParts(new Date());
-
-    let stockRemainingText = options.stockRemainingText;
-    if (stockRemainingText === undefined) {
-      if (options.stockMerchantId) {
-        const remaining = await Code.count({ where: { merchantId: options.stockMerchantId, isUsed: false } });
-        stockRemainingText = String(remaining);
-      } else {
-        stockRemainingText = 'من الموقع';
-      }
-    }
-
-    const notice =
-      `🎁 شخص اشترى أو استبدل نقاطه\n\n` +
-      `اسمه: ${identity.fullName}\n` +
-      `معرفه: ${identity.usernameText}\n` +
-      `يوزره: ${identity.usernameText}\n` +
-      `ايديه: ${userId}\n` +
-      `عدد نقاطه: ${Number(user?.referralPoints || 0)}\n` +
-      `رصيده: ${Number(user?.balance || 0).toFixed(2)} USD\n` +
-      `نوع الخدمة: ${serviceType}${options.count ? ` (${options.count})` : ''}\n` +
-      `الساعة: ${parts.hour}:${parts.minute}:${parts.second}\n` +
-      `التاريخ: ${parts.year}-${parts.month}-${parts.day}\n` +
-      `كم تبقى بالمخزون: ${stockRemainingText}`;
-
-    await bot.sendMessage(ADMIN_ID, notice).catch(() => {});
-  } catch (err) {
-    console.error('sendAdminCodeActionNotice error:', err);
-  }
-}
-
 
 async function getChannelConfig() {
   let config = await ChannelConfig.findOne();
@@ -1723,7 +1689,6 @@ async function toggleMenuButton(buttonId, action) {
   await setMenuButtonsVisibility(visibility);
 }
 
-
 function getDefaultDepositValues(currency) {
   if (currency === 'USD') {
     return {
@@ -1977,17 +1942,21 @@ async function deleteDepositMethod(currency, index) {
   return config;
 }
 
+// -------------------------------------------------------------------
+// تعديل showCurrencyOptions لإضافة زر بايننس أوتوماتيكي
 async function showCurrencyOptions(userId) {
   const keyboard = {
     inline_keyboard: [
       [{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }],
       [{ text: await getDepositDisplayName(userId, 'USD'), callback_data: 'deposit_currency_usd' }],
+      [{ text: '⚡ Binance Auto (USDT)', callback_data: 'deposit_binance_auto' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
     ]
   };
 
   await bot.sendMessage(userId, await getText(userId, 'chooseCurrency'), { reply_markup: keyboard });
 }
+// -------------------------------------------------------------------
 
 async function showPaymentMethodsForDeposit(userId, amount, currency) {
   const msg = await renderDepositMessage(userId, currency, amount);
@@ -1995,6 +1964,42 @@ async function showPaymentMethodsForDeposit(userId, amount, currency) {
   await setUserState(userId, { action: 'deposit_awaiting_proof', amount, currency });
 }
 
+// -------------------------------------------------------------------
+// دالة التحقق من إيداعات Binance (قراءة فقط)
+async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
+  if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+    console.error('❌ Binance API keys missing');
+    return { success: false, reason: 'Binance not configured' };
+  }
+
+  const timestamp = Date.now();
+  const queryString = `coin=USDT&needTxid=true&timestamp=${timestamp}`;
+  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
+  const url = `https://api.binance.com/sapi/v1/capital/deposit/history?${queryString}&signature=${signature}`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+    const deposits = response.data;
+    if (!Array.isArray(deposits)) return { success: false, reason: 'Invalid response' };
+
+    const matched = deposits.find(dep =>
+      (dep.txId === orderNumber || dep.address === orderNumber || dep.memo === orderNumber) &&
+      parseFloat(dep.amount) >= expectedAmountUSDT - 0.01 &&
+      dep.status === 1
+    );
+
+    if (matched) {
+      return { success: true, amount: parseFloat(matched.amount), txId: matched.txId };
+    }
+    return { success: false, reason: 'No matching deposit found' };
+  } catch (err) {
+    console.error('Binance API error:', err.response?.data || err.message);
+    return { success: false, reason: 'API error' };
+  }
+}
+// -------------------------------------------------------------------
 
 async function sendMainMenu(userId) {
   const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
@@ -2097,7 +2102,6 @@ async function showReferralSettingsAdmin(userId) {
   );
 }
 
-
 async function showQuantityDiscountSettingsAdmin(userId) {
   const threshold = await getBulkDiscountThreshold();
   const price = await getBulkDiscountPrice();
@@ -2161,7 +2165,6 @@ async function showBalanceManagementAdmin(userId) {
   await bot.sendMessage(userId, await getText(userId, 'balanceManagement'), { reply_markup: keyboard });
 }
 
-
 async function showChannelConfigAdmin(userId) {
   const config = await getChannelConfig();
   const statusText = config.enabled
@@ -2193,8 +2196,6 @@ async function showChannelConfigAdmin(userId) {
 
   await bot.sendMessage(userId, msg, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
-
-
 
 async function showMerchantsForBuy(userId) {
   const merchants = await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] });
@@ -2233,8 +2234,6 @@ ${await getBulkDiscountInfoText(userId)}`;
     reply_markup: { inline_keyboard: buttons }
   });
 }
-
-
 
 async function showBotsList(userId) {
   const bots = await BotService.findAll();
@@ -2698,7 +2697,6 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   const codes = [];
   let lastFailureReason = null;
-  let fallbackUsed = false;
 
   for (let i = 0; i < safeQuantity; i += 1) {
     const email = generateRandomEmail();
@@ -2709,7 +2707,6 @@ async function processAutoChatGptCode(userId, options = {}) {
       const remaining = safeQuantity - codes.length;
       const fallbackCodes = await takeFallbackChatGptCodesFromReferralStock(userId, remaining);
       if (fallbackCodes.length > 0) {
-        fallbackUsed = true;
         codes.push(...fallbackCodes);
       }
       break;
@@ -2732,11 +2729,6 @@ async function processAutoChatGptCode(userId, options = {}) {
     await BalanceTransaction.create({ userId, amount: -chargedAmount, type: 'purchase', status: 'completed' });
   }
 
-  const referralStockMerchant = fallbackUsed ? await getReferralStockMerchant() : null;
-  const fallbackRemaining = fallbackUsed && referralStockMerchant
-    ? await Code.count({ where: { merchantId: referralStockMerchant.id, isUsed: false } })
-    : null;
-
   return {
     success: true,
     code: codes.join('\n\n'),
@@ -2745,9 +2737,7 @@ async function processAutoChatGptCode(userId, options = {}) {
     requestedQuantity: safeQuantity,
     partial: codes.length !== safeQuantity,
     price: price.toFixed(2),
-    totalCost: (price * codes.length).toFixed(2),
-    fallbackUsed,
-    fallbackRemaining
+    totalCost: (price * codes.length).toFixed(2)
   };
 }
 
@@ -3066,11 +3056,6 @@ bot.on('callback_query', async query => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
-        await sendAdminCodeActionNotice(userId, 'استلام كود مجاني', {
-          count: result.quantity,
-          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
-          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
-        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -3123,6 +3108,16 @@ bot.on('callback_query', async query => {
       await bot.answerCallbackQuery(query.id);
       return;
     }
+
+    // -------------------------------------------------------------------
+    // زر الدفع التلقائي عبر Binance
+    if (data === 'deposit_binance_auto') {
+      await setUserState(userId, { action: 'binance_auto_payment' });
+      await bot.sendMessage(userId, '🔑 Please send your Binance deposit order number (txid or memo) and the amount in USD, separated by space.\nExample: `ABC123 1`\n\nMake sure you have sent exactly the amount to the Binance deposit address.');
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    // -------------------------------------------------------------------
 
     if (data === 'admin_manage_bots' && isAdmin(userId)) {
       await showBotsList(userId);
@@ -4295,7 +4290,6 @@ bot.on('message', async msg => {
         }
       }
 
-
       if (state.action === 'broadcast_announcement') {
         const messageText = String(text || '').trim();
         if (!messageText) {
@@ -4319,7 +4313,6 @@ bot.on('message', async msg => {
         await showAdminPanel(userId);
         return;
       }
-
 
       if (state.action === 'edit_referral_milestones') {
         const raw = String(text || '').trim();
@@ -4411,7 +4404,6 @@ bot.on('message', async msg => {
         await showReferralSettingsAdmin(userId);
         return;
       }
-
 
       if (state.action === 'set_allowed_users') {
         const value = String(text || '').trim() === '/empty'
@@ -4525,16 +4517,10 @@ bot.on('message', async msg => {
           count: result.count
         })).catch(() => {});
 
-        await sendAdminCodeActionNotice(userId, 'استبدل نقاطه من مخزون الإحالات', {
-          count: result.count,
-          stockMerchantId: (await getReferralStockMerchant()).id
-        });
-
         await clearUserState(userId);
         await sendMainMenu(userId);
         return;
       }
-
 
       if (state.action === 'admin_add_balance') {
         if (state.step === 'user_id') {
@@ -5039,6 +5025,48 @@ bot.on('message', async msg => {
       return;
     }
 
+    // -------------------------------------------------------------------
+    // معالج الدفع التلقائي عبر Binance
+    if (state?.action === 'binance_auto_payment') {
+      const parts = String(text || '').trim().split(/\s+/);
+      if (parts.length < 2) {
+        await bot.sendMessage(userId, '❌ Please send order number and amount, e.g.: `ABC123 1`');
+        return;
+      }
+      const orderNumber = parts[0];
+      const amount = parseFloat(parts[1]);
+      if (isNaN(amount) || amount <= 0) {
+        await bot.sendMessage(userId, '❌ Invalid amount.');
+        return;
+      }
+
+      const waitingMsg = await bot.sendMessage(userId, '⏳ Checking Binance deposit...');
+      const checkResult = await checkBinanceDeposit(orderNumber, amount);
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (checkResult.success) {
+        const user = await User.findByPk(userId);
+        const newBalance = parseFloat(user.balance) + amount;
+        await User.update({ balance: newBalance }, { where: { id: userId } });
+        await BalanceTransaction.create({
+          userId,
+          amount,
+          type: 'deposit',
+          status: 'completed',
+          txid: orderNumber,
+          caption: `Binance auto deposit ${orderNumber}`
+        });
+        await bot.sendMessage(userId, `✅ Deposit successful! ${amount} USD added. New balance: ${newBalance.toFixed(2)} USD`);
+        await bot.sendMessage(ADMIN_ID, `💰 Binance auto deposit\nUser: ${userId}\nAmount: ${amount} USD\nTxID: ${orderNumber}`);
+      } else {
+        await bot.sendMessage(userId, `❌ Deposit verification failed: ${checkResult.reason}. Please contact support: @neeeee`);
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+    // -------------------------------------------------------------------
+
     if (state?.action === 'redeem_via_service') {
       const service = await RedeemService.findByPk(state.serviceId);
       if (!service) {
@@ -5128,11 +5156,6 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
-        await sendAdminCodeActionNotice(userId, 'استبدل نقاطه بكود ChatGPT', {
-          count: result.quantity,
-          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
-          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
-        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -5164,55 +5187,12 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
       }
-        await sendAdminCodeActionNotice(userId, 'شراء كود ChatGPT', {
-          count: result.quantity,
-          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
-          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
-        });
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         const freshUser = await User.findByPk(userId);
         const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
         const neededPoints = qty * requiredPoints;
-        const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
 
-        if (redeemableReferralCodes >= qty) {
-          const referralClaim = await claimReferralStockCodes(userId, qty);
-
-          if (referralClaim.success) {
-            let successText = await getText(userId, 'pointsRedeemed', {
-              code: formatCodesForHtml(referralClaim.codes)
-            });
-            if (referralClaim.count !== qty) {
-              successText += `
-
-⚠️ Requested: ${qty} | Delivered: ${referralClaim.count}`;
-            }
-
-            const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-            await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
-
-            const identity = await getTelegramIdentityById(userId);
-            await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'referralClaimAdminNotice', {
-              name: identity.fullName,
-              username: identity.usernameText,
-              id: userId,
-              claimedNow: referralClaim.count,
-              claimedBefore: referralClaim.claimedBefore,
-              claimedAfter: referralClaim.claimedAfter,
-              eligibleNow: referralClaim.eligibleNow,
-              points: referralClaim.points,
-              adminGranted: referralClaim.adminGranted,
-              referrals: referralClaim.referralCount,
-              milestoneRewards: referralClaim.milestoneRewards
-            })).catch(() => {});
-          } else if (referralClaim.reason === 'not_enough_stock') {
-            await bot.sendMessage(userId, await getText(userId, 'referralStockNotEnough'));
-          } else if (referralClaim.reason === 'no_referrals') {
-            await bot.sendMessage(userId, await getText(userId, 'referralStockAccessDenied'));
-          } else {
-            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${referralClaim.reason || 'Referral claim failed'}`);
-          }
-        } else if (Number(freshUser?.referralPoints || 0) >= neededPoints) {
+        if (Number(freshUser?.referralPoints || 0) >= neededPoints) {
           const waitingPointsMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
           result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity: qty });
           await bot.deleteMessage(userId, waitingPointsMsg.message_id).catch(() => {});
@@ -5230,11 +5210,6 @@ bot.on('message', async msg => {
             }
             const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
             await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
-            await sendAdminCodeActionNotice(userId, 'استبدل نقاطه بكود ChatGPT', {
-              count: result.quantity,
-              stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
-              stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
-            });
           } else {
             await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
           }
@@ -5260,8 +5235,6 @@ bot.on('message', async msg => {
       await sendMainMenu(userId);
       return;
     }
-
-
 
   } catch (err) {
     console.error('Message handler error:', err);
