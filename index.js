@@ -1173,6 +1173,42 @@ async function getTelegramIdentityById(targetUserId) {
   }
 }
 
+async function sendAdminCodeActionNotice(userId, serviceType, options = {}) {
+  try {
+    const identity = await getTelegramIdentityById(userId);
+    const user = await User.findByPk(userId);
+    const parts = formatDateParts(new Date());
+
+    let stockRemainingText = options.stockRemainingText;
+    if (stockRemainingText === undefined) {
+      if (options.stockMerchantId) {
+        const remaining = await Code.count({ where: { merchantId: options.stockMerchantId, isUsed: false } });
+        stockRemainingText = String(remaining);
+      } else {
+        stockRemainingText = 'من الموقع';
+      }
+    }
+
+    const notice =
+      `🎁 شخص اشترى أو استبدل نقاطه\n\n` +
+      `اسمه: ${identity.fullName}\n` +
+      `معرفه: ${identity.usernameText}\n` +
+      `يوزره: ${identity.usernameText}\n` +
+      `ايديه: ${userId}\n` +
+      `عدد نقاطه: ${Number(user?.referralPoints || 0)}\n` +
+      `رصيده: ${Number(user?.balance || 0).toFixed(2)} USD\n` +
+      `نوع الخدمة: ${serviceType}${options.count ? ` (${options.count})` : ''}\n` +
+      `الساعة: ${parts.hour}:${parts.minute}:${parts.second}\n` +
+      `التاريخ: ${parts.year}-${parts.month}-${parts.day}\n` +
+      `كم تبقى بالمخزون: ${stockRemainingText}`;
+
+    await bot.sendMessage(ADMIN_ID, notice).catch(() => {});
+  } catch (err) {
+    console.error('sendAdminCodeActionNotice error:', err);
+  }
+}
+
+
 async function getChannelConfig() {
   let config = await ChannelConfig.findOne();
   if (!config) {
@@ -2662,6 +2698,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   const codes = [];
   let lastFailureReason = null;
+  let fallbackUsed = false;
 
   for (let i = 0; i < safeQuantity; i += 1) {
     const email = generateRandomEmail();
@@ -2672,6 +2709,7 @@ async function processAutoChatGptCode(userId, options = {}) {
       const remaining = safeQuantity - codes.length;
       const fallbackCodes = await takeFallbackChatGptCodesFromReferralStock(userId, remaining);
       if (fallbackCodes.length > 0) {
+        fallbackUsed = true;
         codes.push(...fallbackCodes);
       }
       break;
@@ -2694,6 +2732,11 @@ async function processAutoChatGptCode(userId, options = {}) {
     await BalanceTransaction.create({ userId, amount: -chargedAmount, type: 'purchase', status: 'completed' });
   }
 
+  const referralStockMerchant = fallbackUsed ? await getReferralStockMerchant() : null;
+  const fallbackRemaining = fallbackUsed && referralStockMerchant
+    ? await Code.count({ where: { merchantId: referralStockMerchant.id, isUsed: false } })
+    : null;
+
   return {
     success: true,
     code: codes.join('\n\n'),
@@ -2702,7 +2745,9 @@ async function processAutoChatGptCode(userId, options = {}) {
     requestedQuantity: safeQuantity,
     partial: codes.length !== safeQuantity,
     price: price.toFixed(2),
-    totalCost: (price * codes.length).toFixed(2)
+    totalCost: (price * codes.length).toFixed(2),
+    fallbackUsed,
+    fallbackRemaining
   };
 }
 
@@ -3021,6 +3066,11 @@ bot.on('callback_query', async query => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, 'استلام كود مجاني', {
+          count: result.quantity,
+          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
+          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
+        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -4475,6 +4525,11 @@ bot.on('message', async msg => {
           count: result.count
         })).catch(() => {});
 
+        await sendAdminCodeActionNotice(userId, 'استبدل نقاطه من مخزون الإحالات', {
+          count: result.count,
+          stockMerchantId: (await getReferralStockMerchant()).id
+        });
+
         await clearUserState(userId);
         await sendMainMenu(userId);
         return;
@@ -5073,6 +5128,11 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, 'استبدل نقاطه بكود ChatGPT', {
+          count: result.quantity,
+          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
+          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
+        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -5104,6 +5164,11 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, 'شراء كود ChatGPT', {
+          count: result.quantity,
+          stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
+          stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
+        });
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         const freshUser = await User.findByPk(userId);
         const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
@@ -5165,6 +5230,11 @@ bot.on('message', async msg => {
             }
             const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
             await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
+            await sendAdminCodeActionNotice(userId, 'استبدل نقاطه بكود ChatGPT', {
+              count: result.quantity,
+              stockMerchantId: result.fallbackUsed ? (await getReferralStockMerchant()).id : null,
+              stockRemainingText: result.fallbackUsed ? String(result.fallbackRemaining ?? 0) : 'من الموقع'
+            });
           } else {
             await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
           }
