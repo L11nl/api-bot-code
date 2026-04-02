@@ -12,6 +12,7 @@ const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
 const DATABASE_URL = process.env.DATABASE_URL;
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
+const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -779,6 +780,11 @@ async function setUserState(userId, state) {
 
 async function clearUserState(userId) {
   await User.update({ state: null }, { where: { id: userId } });
+}
+
+async function cancelUserStateAndReturnToMenu(userId) {
+  await clearUserState(userId);
+  await sendMainMenu(userId);
 }
 
 function generateReferralCode(userId) {
@@ -1945,6 +1951,8 @@ async function deleteDepositMethod(currency, index) {
 // -------------------------------------------------------------------
 // تعديل showCurrencyOptions لإضافة زر بايننس أوتوماتيكي
 async function showCurrencyOptions(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
   const keyboard = {
     inline_keyboard: [
       [{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }],
@@ -1954,14 +1962,90 @@ async function showCurrencyOptions(userId) {
     ]
   };
 
-  await bot.sendMessage(userId, await getText(userId, 'chooseCurrency'), { reply_markup: keyboard });
+  const extraText = lang === 'ar'
+    ? '\n\nللدفع التلقائي عبر بايننس اختر: ⚡ Binance Auto (USDT)'
+    : '\n\nFor automatic Binance payment choose: ⚡ Binance Auto (USDT)';
+
+  await bot.sendMessage(userId, `${await getText(userId, 'chooseCurrency')}${extraText}`, { reply_markup: keyboard });
 }
-// -------------------------------------------------------------------
+
+async function showBinanceAutoAmountOptions(userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const amounts = [1, 5, 10, 20, 35];
+  const buttons = amounts.map(amount => ([{ text: `${amount}$`, callback_data: `deposit_binance_amount_${amount}` }]));
+  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'deposit' }]);
+
+  const msg = lang === 'ar'
+    ? '⚡ اختر مبلغ الشحن عبر Binance Auto:'
+    : '⚡ Choose the Binance Auto deposit amount:';
+
+  await bot.sendMessage(userId, msg, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function sendBinanceAutoInstructions(userId, amount) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const msg = lang === 'ar'
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ ${amount}$ إلى رقم بايننس التالي:\n\n\`${BINANCE_PAY_ID}\`\n\nثم أرسل Order ID أو Transaction ID فقط لإتمام التحقق التلقائي.`
+    : `⚡ Binance Auto (USDT)\n\nPlease send ${amount}$ to the following Binance ID:\n\n\`${BINANCE_PAY_ID}\`\n\nThen send the Order ID or Transaction ID only so the system can verify the payment automatically.`;
+
+  await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
+  await setUserState(userId, { action: 'binance_auto_order_id', amount });
+}
 
 async function showPaymentMethodsForDeposit(userId, amount, currency) {
   const msg = await renderDepositMessage(userId, currency, amount);
   await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
   await setUserState(userId, { action: 'deposit_awaiting_proof', amount, currency });
+}
+
+// -------------------------------------------------------------------
+// أدوات التحقق من Binance Auto
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeBinanceIdentifier(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .toLowerCase();
+}
+
+function getBinanceHistoryAmountUSDT(item) {
+  const directCurrency = String(item?.currency || '').toUpperCase();
+  const directAmount = Math.abs(parseFloat(item?.amount || 0));
+  if (directCurrency === 'USDT' && Number.isFinite(directAmount) && directAmount > 0) {
+    return directAmount;
+  }
+
+  const funds = Array.isArray(item?.fundsDetail) ? item.fundsDetail : [];
+  const usdtPart = funds.find(part => String(part?.currency || '').toUpperCase() === 'USDT');
+  if (!usdtPart) return 0;
+
+  const detailedAmount = Math.abs(parseFloat(usdtPart.amount || 0));
+  return Number.isFinite(detailedAmount) ? detailedAmount : 0;
+}
+
+function itemMatchesBinanceOrder(item, orderNumber) {
+  const wanted = normalizeBinanceIdentifier(orderNumber);
+  if (!wanted) return false;
+
+  const candidates = [
+    item?.transactionId,
+    item?.orderId,
+    item?.merchantTradeNo,
+    item?.prepayId,
+    item?.bizNo,
+    item?.transferId,
+    item?.trxId,
+    item?.id
+  ];
+
+  return candidates.some(value => normalizeBinanceIdentifier(value) === wanted);
 }
 
 // -------------------------------------------------------------------
@@ -1972,34 +2056,64 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
     return { success: false, reason: 'Binance not configured' };
   }
 
-  const timestamp = Date.now();
-  const queryString = `coin=USDT&needTxid=true&timestamp=${timestamp}`;
-  const signature = crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
-  const url = `https://api.binance.com/sapi/v1/capital/deposit/history?${queryString}&signature=${signature}`;
-
-  try {
-    const response = await axios.get(url, {
-      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
-    });
-    const deposits = response.data;
-    if (!Array.isArray(deposits)) return { success: false, reason: 'Invalid response' };
-
-    const matched = deposits.find(dep =>
-      (dep.txId === orderNumber || dep.address === orderNumber || dep.memo === orderNumber) &&
-      parseFloat(dep.amount) >= expectedAmountUSDT - 0.01 &&
-      dep.status === 1
-    );
-
-    if (matched) {
-      return { success: true, amount: parseFloat(matched.amount), txId: matched.txId };
-    }
-    return { success: false, reason: 'No matching deposit found' };
-  } catch (err) {
-    console.error('Binance API error:', err.response?.data || err.message);
-    return { success: false, reason: 'API error' };
+  const expected = Number(expectedAmountUSDT || 0);
+  const wanted = normalizeBinanceIdentifier(orderNumber);
+  if (!wanted || !Number.isFinite(expected) || expected <= 0) {
+    return { success: false, reason: 'Invalid verification payload' };
   }
+
+  const now = Date.now();
+  const lookbackMs = 7 * 24 * 60 * 60 * 1000;
+  const attempts = 5;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const timestamp = Date.now();
+    const startTime = now - lookbackMs;
+    const queryString = `startTime=${startTime}&endTime=${timestamp}&limit=100&timestamp=${timestamp}`;
+    const signature = crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
+    const url = `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: { 'X-MBX-APIKEY': BINANCE_API_KEY },
+        timeout: 15000
+      });
+
+      const payload = response.data || {};
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+
+      const matched = rows.find(item => {
+        const amount = getBinanceHistoryAmountUSDT(item);
+        if (Math.abs(amount - expected) > 0.000001) return false;
+        if (!itemMatchesBinanceOrder(item, wanted)) return false;
+        return true;
+      });
+
+      if (matched) {
+        return {
+          success: true,
+          amount: getBinanceHistoryAmountUSDT(matched),
+          txId: matched.transactionId || matched.orderId || matched.prepayId || orderNumber,
+          rawOrderId: orderNumber,
+          currency: 'USDT',
+          transactionTime: matched.transactionTime || matched.transactTime || Date.now(),
+          orderType: matched.orderType || null
+        };
+      }
+    } catch (err) {
+      console.error('Binance Pay API error:', err.response?.data || err.message);
+      if (attempt === attempts) {
+        return { success: false, reason: 'API error' };
+      }
+    }
+
+    if (attempt < attempts) {
+      await sleep(4000);
+    }
+  }
+
+  return { success: false, reason: 'No matching Binance Pay transaction found' };
 }
-// -------------------------------------------------------------------
 
 async function sendMainMenu(userId) {
   const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
@@ -2889,6 +3003,12 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'cancel_state_and_menu') {
+      await cancelUserStateAndReturnToMenu(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'back_to_menu') {
       await sendMainMenu(userId);
       await bot.answerCallbackQuery(query.id);
@@ -3112,8 +3232,18 @@ bot.on('callback_query', async query => {
     // -------------------------------------------------------------------
     // زر الدفع التلقائي عبر Binance
     if (data === 'deposit_binance_auto') {
-      await setUserState(userId, { action: 'binance_auto_payment' });
-      await bot.sendMessage(userId, '🔑 Please send your Binance deposit order number (txid or memo) and the amount in USD, separated by space.\nExample: `ABC123 1`\n\nMake sure you have sent exactly the amount to the Binance deposit address.');
+      await showBinanceAutoAmountOptions(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('deposit_binance_amount_')) {
+      const amount = parseFloat(data.replace('deposit_binance_amount_', ''));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        await bot.answerCallbackQuery(query.id, { text: 'Invalid amount' });
+        return;
+      }
+      await sendBinanceAutoInstructions(userId, amount);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5027,42 +5157,115 @@ bot.on('message', async msg => {
 
     // -------------------------------------------------------------------
     // معالج الدفع التلقائي عبر Binance
-    if (state?.action === 'binance_auto_payment') {
-      const parts = String(text || '').trim().split(/\s+/);
-      if (parts.length < 2) {
-        await bot.sendMessage(userId, '❌ Please send order number and amount, e.g.: `ABC123 1`');
-        return;
-      }
-      const orderNumber = parts[0];
-      const amount = parseFloat(parts[1]);
-      if (isNaN(amount) || amount <= 0) {
-        await bot.sendMessage(userId, '❌ Invalid amount.');
+    if (state?.action === 'binance_auto_order_id') {
+      const orderNumber = String(text || '')
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '');
+      const expectedAmount = Number(state.amount || 0);
+
+      if (!orderNumber) {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ أرسل Order ID أو Transaction ID فقط.'
+          : '❌ Please send the Order ID or Transaction ID only.');
         return;
       }
 
-      const waitingMsg = await bot.sendMessage(userId, '⏳ Checking Binance deposit...');
-      const checkResult = await checkBinanceDeposit(orderNumber, amount);
+      const alreadyProcessed = await BalanceTransaction.findOne({
+        where: {
+          txid: orderNumber,
+          type: 'deposit',
+          status: 'completed'
+        }
+      });
+
+      if (alreadyProcessed) {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ هذا الـ Order ID تم استخدامه من قبل.'
+          : '❌ This Order ID has already been used before.');
+        return;
+      }
+
+      const waitingText = user.lang === 'ar'
+        ? '⏳ جاري التحقق من عملية Binance...'
+        : '⏳ Checking Binance transaction...';
+      const waitingMsg = await bot.sendMessage(userId, waitingText);
+      const waitStartedAt = Date.now();
+
+      const checkResult = await checkBinanceDeposit(orderNumber, expectedAmount);
+
+      const minVisibleMs = 1500;
+      const elapsedMs = Date.now() - waitStartedAt;
+      if (elapsedMs < minVisibleMs) {
+        await new Promise(resolve => setTimeout(resolve, minVisibleMs - elapsedMs));
+      }
+
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (checkResult.success) {
-        const user = await User.findByPk(userId);
-        const newBalance = parseFloat(user.balance) + amount;
+        const freshUser = await User.findByPk(userId);
+        const newBalance = parseFloat(freshUser.balance || 0) + expectedAmount;
+
         await User.update({ balance: newBalance }, { where: { id: userId } });
         await BalanceTransaction.create({
           userId,
-          amount,
+          amount: expectedAmount,
           type: 'deposit',
           status: 'completed',
-          txid: orderNumber,
-          caption: `Binance auto deposit ${orderNumber}`
+          txid: checkResult.txId || orderNumber,
+          caption: `Binance Auto ${orderNumber}`
         });
-        await bot.sendMessage(userId, `✅ Deposit successful! ${amount} USD added. New balance: ${newBalance.toFixed(2)} USD`);
-        await bot.sendMessage(ADMIN_ID, `💰 Binance auto deposit\nUser: ${userId}\nAmount: ${amount} USD\nTxID: ${orderNumber}`);
-      } else {
-        await bot.sendMessage(userId, `❌ Deposit verification failed: ${checkResult.reason}. Please contact support: @neeeee`);
+
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? `✅ تم التحقق من الدفع بنجاح. تمت إضافة ${expectedAmount}$ إلى رصيدك.
+
+رصيدك الجديد: ${newBalance.toFixed(2)}$`
+          : `✅ Payment verified successfully. ${expectedAmount}$ has been added to your balance.
+
+New balance: ${newBalance.toFixed(2)}$`);
+
+        const identity = await getTelegramIdentityById(userId);
+        await bot.sendMessage(ADMIN_ID,
+          `💰 Binance Auto Deposit
+
+` +
+          `Name: ${identity.fullName}
+` +
+          `Username: ${identity.usernameText}
+` +
+          `ID: ${userId}
+` +
+          `Amount: ${expectedAmount} USD
+` +
+          `Order ID: ${orderNumber}
+` +
+          `Matched Tx ID: ${checkResult.txId || '-'}
+` +
+          `Binance ID: ${BINANCE_PAY_ID}`
+        ).catch(() => {});
+
+        await clearUserState(userId);
+        await sendMainMenu(userId);
+        return;
       }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
+
+      const failedText = user.lang === 'ar'
+        ? `❌ لم يتم العثور على عملية مطابقة بهذا الـ Order ID والمبلغ المحدد. تأكد من إرسال المبلغ الصحيح ثم أرسل Order ID الصحيح
+
+اذا هنالك مشكلة تواصل مع الدعم: @Neeeee`
+        : `❌ No matching transaction was found for this Order ID and selected amount. Make sure you sent the correct amount, then send the correct Order ID.
+
+If there is a problem, contact support: @Neeeee`;
+
+      const failedKeyboard = {
+        inline_keyboard: [
+          [
+            { text: user.lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
+            { text: user.lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
+          ]
+        ]
+      };
+
+      await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
       return;
     }
     // -------------------------------------------------------------------
