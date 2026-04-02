@@ -782,6 +782,11 @@ async function clearUserState(userId) {
   await User.update({ state: null }, { where: { id: userId } });
 }
 
+async function cancelUserStateAndReturnToMenu(userId) {
+  await clearUserState(userId);
+  await sendMainMenu(userId);
+}
+
 function generateReferralCode(userId) {
   return `REF${userId}`;
 }
@@ -2931,6 +2936,12 @@ bot.on('callback_query', async query => {
 
     const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: false });
     if (!canUse) {
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'cancel_state_and_menu') {
+      await cancelUserStateAndReturnToMenu(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5109,11 +5120,20 @@ bot.on('message', async msg => {
         return;
       }
 
-      const waitingMsg = await bot.sendMessage(userId, user.lang === 'ar'
+      const waitingText = user.lang === 'ar'
         ? '⏳ جاري التحقق من عملية Binance...'
-        : '⏳ Checking Binance transaction...');
+        : '⏳ Checking Binance transaction...';
+      const waitingMsg = await bot.sendMessage(userId, waitingText);
+      const waitStartedAt = Date.now();
 
       const checkResult = await checkBinanceDeposit(orderNumber, expectedAmount);
+
+      const minVisibleMs = 1500;
+      const elapsedMs = Date.now() - waitStartedAt;
+      if (elapsedMs < minVisibleMs) {
+        await new Promise(resolve => setTimeout(resolve, minVisibleMs - elapsedMs));
+      }
+
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (checkResult.success) {
@@ -5131,28 +5151,54 @@ bot.on('message', async msg => {
         });
 
         await bot.sendMessage(userId, user.lang === 'ar'
-          ? `✅ تم التحقق من الدفع بنجاح. تمت إضافة ${expectedAmount}$ إلى رصيدك.\n\nرصيدك الجديد: ${newBalance.toFixed(2)}$`
-          : `✅ Payment verified successfully. ${expectedAmount}$ has been added to your balance.\n\nNew balance: ${newBalance.toFixed(2)}$`);
+          ? `✅ تم التحقق من الدفع بنجاح. تمت إضافة ${expectedAmount}$ إلى رصيدك.
+
+رصيدك الجديد: ${newBalance.toFixed(2)}$`
+          : `✅ Payment verified successfully. ${expectedAmount}$ has been added to your balance.
+
+New balance: ${newBalance.toFixed(2)}$`);
 
         const identity = await getTelegramIdentityById(userId);
         await bot.sendMessage(ADMIN_ID,
-          `💰 Binance Auto Deposit\n\n` +
-          `Name: ${identity.fullName}\n` +
-          `Username: ${identity.usernameText}\n` +
-          `ID: ${userId}\n` +
-          `Amount: ${expectedAmount} USD\n` +
-          `Order ID: ${orderNumber}\n` +
+          `💰 Binance Auto Deposit
+
+` +
+          `Name: ${identity.fullName}
+` +
+          `Username: ${identity.usernameText}
+` +
+          `ID: ${userId}
+` +
+          `Amount: ${expectedAmount} USD
+` +
+          `Order ID: ${orderNumber}
+` +
           `Binance ID: ${BINANCE_PAY_ID}`
         ).catch(() => {});
-      } else {
-        await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ لم يتم العثور على عملية مطابقة بهذا الـ Order ID والمبلغ المحدد. تأكد من إرسال المبلغ الصحيح ثم أرسل Order ID الصحيح.'
-          : '❌ No matching transaction was found for this Order ID and amount. Please make sure you sent the correct amount, then send the correct Order ID.');
+
+        await clearUserState(userId);
+        await sendMainMenu(userId);
         return;
       }
 
-      await clearUserState(userId);
-      await sendMainMenu(userId);
+      const failedText = user.lang === 'ar'
+        ? `❌ لم يتم العثور على عملية مطابقة بهذا الـ Order ID والمبلغ المحدد. تأكد من إرسال المبلغ الصحيح ثم أرسل Order ID الصحيح
+
+اذا هنالك مشكلة تواصل مع الدعم: @Neeeee`
+        : `❌ No matching transaction was found for this Order ID and selected amount. Make sure you sent the correct amount, then send the correct Order ID.
+
+If there is a problem, contact support: @Neeeee`;
+
+      const failedKeyboard = {
+        inline_keyboard: [
+          [
+            { text: user.lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
+            { text: user.lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
+          ]
+        ]
+      };
+
+      await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
       return;
     }
     // -------------------------------------------------------------------
