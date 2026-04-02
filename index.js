@@ -1989,8 +1989,8 @@ async function sendBinanceAutoInstructions(userId, amount) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ ${amount}$ إلى رقم بايننس التالي:\n\n\`${BINANCE_PAY_ID}\`\n\nثم أرسل معرّف الطلب أو Order ID فقط لإتمام التحقق التلقائي.`
-    : `⚡ Binance Auto (USDT)\n\nPlease send ${amount}$ to the following Binance ID:\n\n\`${BINANCE_PAY_ID}\`\n\nThen send the Order ID only so the system can verify the payment automatically.`;
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ ${amount}$ إلى رقم بايننس التالي:\n\n\`${BINANCE_PAY_ID}\`\n\nثم أرسل Order ID أو Transaction ID فقط لإتمام التحقق التلقائي.`
+    : `⚡ Binance Auto (USDT)\n\nPlease send ${amount}$ to the following Binance ID:\n\n\`${BINANCE_PAY_ID}\`\n\nThen send the Order ID or Transaction ID only so the system can verify the payment automatically.`;
 
   await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
   await setUserState(userId, { action: 'binance_auto_order_id', amount });
@@ -2048,26 +2048,6 @@ function itemMatchesBinanceOrder(item, orderNumber) {
   return candidates.some(value => normalizeBinanceIdentifier(value) === wanted);
 }
 
-function itemTargetsConfiguredBinancePayId(item) {
-  const configured = normalizeBinanceIdentifier(BINANCE_PAY_ID);
-  if (!configured) return true;
-
-  const receiver = item?.receiverInfo || {};
-  const payer = item?.payerInfo || {};
-  const candidates = [
-    receiver.accountId,
-    receiver.binanceId,
-    receiver.payId,
-    receiver.walletId,
-    payer.accountId,
-    payer.binanceId,
-    payer.payId,
-    payer.walletId
-  ];
-
-  return candidates.some(value => normalizeBinanceIdentifier(value) === configured);
-}
-
 // -------------------------------------------------------------------
 // دالة التحقق من إيداعات Binance (قراءة فقط)
 async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
@@ -2106,7 +2086,6 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT) {
         const amount = getBinanceHistoryAmountUSDT(item);
         if (Math.abs(amount - expected) > 0.000001) return false;
         if (!itemMatchesBinanceOrder(item, wanted)) return false;
-        if (!itemTargetsConfiguredBinancePayId(item)) return false;
         return true;
       });
 
@@ -5186,8 +5165,8 @@ bot.on('message', async msg => {
 
       if (!orderNumber) {
         await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ أرسل Order ID فقط.'
-          : '❌ Please send the Order ID only.');
+          ? '❌ أرسل Order ID أو Transaction ID فقط.'
+          : '❌ Please send the Order ID or Transaction ID only.');
         return;
       }
 
