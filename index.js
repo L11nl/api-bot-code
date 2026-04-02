@@ -43,6 +43,7 @@ const User = sequelize.define('User', {
   referralPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
   freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
   lastFreeCodeClaimAt: { type: DataTypes.DATE, allowNull: true },
+  forceFreeCodeButton: { type: DataTypes.BOOLEAN, defaultValue: false },
   creatorDiscountPercent: { type: DataTypes.INTEGER, defaultValue: 0 },
   adminGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
   referralMilestoneGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -222,6 +223,11 @@ const DEFAULT_TEXTS = {
     buttonOrderUpdated: '✅ Button order updated!',
     manageChannel: '📢 Manage Required Channel',
     manageDepositSettings: '💱 Manage Deposit Settings',
+    manageDepositOptions: '🧩 Manage Deposit Options',
+    depositOptionIQD: 'Iraqi Dinar button',
+    depositOptionUSD: 'USD button',
+    depositOptionBinanceAuto: 'Binance Auto button',
+    depositOptionsUpdated: '✅ Deposit options visibility updated!',
     referralSettings: '👥 Referral Settings',
     manageRedeemServices: '🔄 Manage Redeem Services',
     manageDiscountCodes: '🎟️ Manage Discount Codes',
@@ -325,6 +331,12 @@ const DEFAULT_TEXTS = {
     currentRedeemPoints: 'Current required points: {points}',
     currentReferralPercent: 'Current referral reward percentage: {percent}%',
     currentFreeCodeDays: 'Free-code cooldown: {days} day(s)',
+    manageFreeCodeAccess: '🎁 Manage Free Code Access',
+    enableFreeCodeForUser: '✅ Enable for User',
+    disableFreeCodeForUser: '⛔ Disable for User',
+    enterFreeCodeAccessUserId: 'Send the Telegram user ID:',
+    freeCodeAccessEnabledDone: '✅ Free-code feature enabled for user {userId}. It will stay visible for them.',
+    freeCodeAccessDisabledDone: '✅ Free-code feature disabled for user {userId}.',
     grantCreatorDiscount: '🎟️ Grant Creator Discount',
     editReferralMilestones: '🎯 Edit Referral Milestone Rewards',
     enterReferralMilestones: 'Send milestone rewards in this format:\n15:5,40:5,80:10,150:30',
@@ -516,6 +528,11 @@ const DEFAULT_TEXTS = {
     buttonOrderUpdated: '✅ تم تحديث ترتيب الزر!',
     manageChannel: '📢 إدارة القناة المطلوبة',
     manageDepositSettings: '💱 إعدادات الشحن',
+    manageDepositOptions: '🧩 إدارة ظهور طرق الدفع',
+    depositOptionIQD: 'زر الدينار العراقي',
+    depositOptionUSD: 'زر الدولار USD',
+    depositOptionBinanceAuto: 'زر Binance Auto',
+    depositOptionsUpdated: '✅ تم تحديث ظهور طرق الدفع!',
     referralSettings: '👥 إعدادات الإحالة',
     manageRedeemServices: '🔄 إدارة خدمات الاسترداد',
     manageDiscountCodes: '🎟️ إدارة كودات الخصم',
@@ -619,6 +636,12 @@ const DEFAULT_TEXTS = {
     currentRedeemPoints: 'عدد النقاط المطلوبة حالياً: {points}',
     currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
     currentFreeCodeDays: 'مدة ظهور الكود المجاني: {days} يوم',
+    manageFreeCodeAccess: '🎁 إدارة الكود المجاني',
+    enableFreeCodeForUser: '✅ تفعيل لمستخدم',
+    disableFreeCodeForUser: '⛔ إخفاء عن مستخدم',
+    enterFreeCodeAccessUserId: 'أرسل آيدي المستخدم:',
+    freeCodeAccessEnabledDone: '✅ تم تفعيل ميزة الكود المجاني للمستخدم {userId} وستبقى ظاهرة له.',
+    freeCodeAccessDisabledDone: '✅ تم إخفاء ميزة الكود المجاني عن المستخدم {userId}.',
     grantCreatorDiscount: '🎟️ منح خصم لصانع محتوى',
     editReferralMilestones: '🎯 تعديل مكافآت الإحالة المرحلية',
     enterReferralMilestones: 'أرسل مكافآت الإحالة بهذا الشكل:\n15:5,40:5,80:10,150:30',
@@ -1102,10 +1125,18 @@ async function getEffectiveRedeemPointsForUser(userId) {
 async function canUserClaimFreeCode(userId) {
   const user = await User.findByPk(userId);
   if (!user) return false;
+  if (user.forceFreeCodeButton) return true;
   if (!user.lastFreeCodeClaimAt) return true;
   const cooldownDays = await getFreeCodeCooldownDays();
   const nextAllowedAt = new Date(new Date(user.lastFreeCodeClaimAt).getTime() + (cooldownDays * 24 * 60 * 60 * 1000));
   return Date.now() >= nextAllowedAt.getTime();
+}
+
+async function shouldShowFreeCodeButton(userId) {
+  const user = await User.findByPk(userId);
+  if (!user) return false;
+  if (user.forceFreeCodeButton) return true;
+  return (await canUserClaimFreeCode(userId)) && !user.freeChatgptReceived;
 }
 
 function escapeHtml(value) {
@@ -1223,8 +1254,7 @@ async function showPrivateCodesChannelAdmin(userId) {
     `ملاحظة: أضف البوت مشرفًا في القناة الخاصة. يمكنك إرسال رابط دعوة خاص مثل t.me/+... ولكن للإرسال إلى القناة يجب أيضًا إعادة توجيه منشور واحد من نفس القناة ليتم حفظ chat_id.`;
 
   const keyboard = {
-    inline_keyboard: [
-      [{ text: config.enabled ? '⛔ إيقاف قناة الأكواد الخاصة' : '✅ تفعيل قناة الأكواد الخاصة', callback_data: 'admin_toggle_private_codes_channel' }],
+    inline_keyboard: [[{ text: config.enabled ? '⛔ إيقاف قناة الأكواد الخاصة' : '✅ تفعيل قناة الأكواد الخاصة', callback_data: 'admin_toggle_private_codes_channel' }],
       [{ text: '🔗 تعيين القناة الخاصة', callback_data: 'admin_set_private_codes_channel' }],
       [{ text: '📤 إرسال 100 كود للقناة الخاصة', callback_data: 'admin_send_100_codes_to_private_channel' }],
       [{ text: '🔙 رجوع', callback_data: 'admin' }]
@@ -1324,6 +1354,64 @@ async function getTelegramIdentityById(targetUserId) {
       usernameText: 'لا يوجد',
       fullName: String(targetUserId)
     };
+  }
+}
+
+
+
+async function getAdminCodeSourceLabel(userId, sourceKey, usedPoints = 0) {
+  const user = await User.findByPk(userId);
+  const adminGranted = Number(user?.adminGrantedPoints || 0);
+
+  if (sourceKey === 'free') return 'المجاني';
+  if (sourceKey === 'referral_stock') return 'من الإحالات';
+  if (sourceKey === 'balance') return 'من الرصيد';
+  if (sourceKey === 'admin_points') return 'من نقاط الأدمن';
+  if (sourceKey === 'points') {
+    if (usedPoints > 0 && adminGranted >= usedPoints) return 'من نقاط الأدمن';
+    return 'من النقاط';
+  }
+  return sourceKey || 'غير محدد';
+}
+
+async function sendAdminCodeActionNotice(userId, options = {}) {
+  try {
+    const {
+      sourceKey = 'غير محدد',
+      serviceType = 'غير محدد',
+      codesCount = 1,
+      usedPoints = 0,
+      remainingStockText = 'من الموقع',
+      extraCodeCount = null
+    } = options;
+
+    const user = await User.findByPk(userId);
+    const identity = await getTelegramIdentityById(userId);
+    const referrals = await getSuccessfulReferralCount(userId);
+    const sourceLabel = await getAdminCodeSourceLabel(userId, sourceKey, usedPoints);
+
+    const now = new Date();
+    const dateText = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const timeText = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+    const message =
+      `📢 ${sourceKey === 'balance' ? 'شخص اشترى كود' : 'شخص سحب/استبدل كود'}\n\n` +
+      `الاسم: ${identity.fullName}\n` +
+      `المعرف: ${identity.usernameText}\n` +
+      `الايدي: ${userId}\n` +
+      `الرصيد: ${Number(user?.balance || 0).toFixed(2)}\n` +
+      `عدد نقاطه: ${Number(user?.referralPoints || 0)}\n` +
+      `كم كود سحب: ${extraCodeCount ?? codesCount}\n` +
+      `كم عدد الدعوات: ${referrals}\n` +
+      `نوع الخدمة: ${serviceType}\n` +
+      `مصدر الكود: ${sourceLabel}\n` +
+      `الساعة: ${timeText}\n` +
+      `التاريخ: ${dateText}\n\n` +
+      `كم تبقى بالمخزون: ${remainingStockText}`;
+
+    await bot.sendMessage(ADMIN_ID, message).catch(() => {});
+  } catch (err) {
+    console.error('sendAdminCodeActionNotice error:', err);
   }
 }
 
@@ -2035,6 +2123,7 @@ async function showDepositSettingsAdmin(userId) {
       [{ text: await getText(userId, 'editDepositTemplates'), callback_data: 'admin_edit_deposit_instructions' }],
       [{ text: await getText(userId, 'manageIQDMethods'), callback_data: 'admin_manage_iqd_methods' }],
       [{ text: await getText(userId, 'manageUSDMethods'), callback_data: 'admin_manage_usd_methods' }],
+      [{ text: await getText(userId, 'manageDepositOptions'), callback_data: 'admin_manage_deposit_options' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
     ]
   };
@@ -2129,25 +2218,62 @@ async function deleteDepositMethod(currency, index) {
   return config;
 }
 
+
+const DEFAULT_DEPOSIT_OPTION_VISIBILITY = {
+  IQD: true,
+  USD: true,
+  BINANCE_AUTO: true
+};
+
+async function getDepositOptionVisibility() {
+  const setting = await Setting.findOne({ where: { key: 'deposit_option_visibility', lang: 'global' } });
+  if (!setting) return { ...DEFAULT_DEPOSIT_OPTION_VISIBILITY };
+  try {
+    return { ...DEFAULT_DEPOSIT_OPTION_VISIBILITY, ...JSON.parse(setting.value) };
+  } catch {
+    return { ...DEFAULT_DEPOSIT_OPTION_VISIBILITY };
+  }
+}
+
+async function setDepositOptionVisibility(visibility) {
+  await Setting.upsert({
+    key: 'deposit_option_visibility',
+    lang: 'global',
+    value: JSON.stringify(visibility)
+  });
+}
+
+async function showDepositOptionsAdmin(userId) {
+  const visibility = await getDepositOptionVisibility();
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `${visibility.IQD ? '✅' : '❌'} ${await getText(userId, 'depositOptionIQD')}`, callback_data: 'admin_toggle_deposit_option_IQD' }],
+      [{ text: `${visibility.USD ? '✅' : '❌'} ${await getText(userId, 'depositOptionUSD')}`, callback_data: 'admin_toggle_deposit_option_USD' }],
+      [{ text: `${visibility.BINANCE_AUTO ? '✅' : '❌'} ${await getText(userId, 'depositOptionBinanceAuto')}`, callback_data: 'admin_toggle_deposit_option_BINANCE_AUTO' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin_manage_deposit_settings' }]
+    ]
+  };
+  await bot.sendMessage(userId, await getText(userId, 'manageDepositOptions'), { reply_markup: keyboard });
+}
+
+
 // -------------------------------------------------------------------
 // تعديل showCurrencyOptions لإضافة زر بايننس أوتوماتيكي
 async function showCurrencyOptions(userId) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }],
-      [{ text: await getDepositDisplayName(userId, 'USD'), callback_data: 'deposit_currency_usd' }],
-      [{ text: '⚡ Binance Auto (USDT)', callback_data: 'deposit_binance_auto' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-    ]
-  };
+  const visibility = await getDepositOptionVisibility();
+  const rows = [];
+  if (visibility.IQD !== false) rows.push([{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }]);
+  if (visibility.USD !== false) rows.push([{ text: await getDepositDisplayName(userId, 'USD'), callback_data: 'deposit_currency_usd' }]);
+  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance Auto (USDT)', callback_data: 'deposit_binance_auto' }]);
+  rows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
-  const extraText = lang === 'ar'
+  const extraText = visibility.BINANCE_AUTO === false ? '' : (lang === 'ar'
     ? '\n\nللدفع التلقائي عبر بايننس اختر: ⚡ Binance Auto (USDT)'
-    : '\n\nFor automatic Binance payment choose: ⚡ Binance Auto (USDT)';
+    : '\n\nFor automatic Binance payment choose: ⚡ Binance Auto (USDT)');
 
-  await bot.sendMessage(userId, `${await getText(userId, 'chooseCurrency')}${extraText}`, { reply_markup: keyboard });
+  await bot.sendMessage(userId, `${await getText(userId, 'chooseCurrency')}${extraText}`, { reply_markup: { inline_keyboard: rows } });
 }
 
 async function showBinanceAutoAmountOptions(userId) {
@@ -2171,16 +2297,13 @@ async function sendBinanceAutoInstructions(userId, amount) {
   const lang = user?.lang || 'en';
   const credentials = await getBinanceCredentials();
   const payId = credentials?.payId || BINANCE_PAY_ID || '842505320';
-  const verificationCode = generateBinanceNoteCode(userId);
 
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\n<b>الطريقة الأولى:</b> بعد الدفع أرسل Order ID أو Transaction ID هنا.\n\n<b>الطريقة الثانية:</b> ضع كود التحقق التالي في خانة الملاحظات داخل Binance قبل الإرسال ثم اضغط زر التحقق بالكود:\n<code>${verificationCode}</code>\n\n<b>الطريقة الثالثة الاحتياطية:</b> إذا فشلت الطريقتان سيحاول النظام مطابقة احتياطية آمنة لأحدث عملية مطابقة بالمبلغ والوقت.`
-    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\n<b>Method 1:</b> after payment, send the Order ID or Transaction ID here.\n\n<b>Method 2:</b> put the following verification code in the Binance note field before sending, then press the note-code verification button:\n<code>${verificationCode}</code>\n\n<b>Method 3 fallback:</b> if both methods fail, the system will also try a safe recent-transaction fallback using amount and time.`;
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل <b>Order ID</b> فقط هنا ليتم التحقق تلقائياً.`
+    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>Order ID</b> only here for automatic verification.`;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: lang === 'ar' ? '✅ تحقق بالكود الآن' : '✅ Verify using note code now', callback_data: 'binance_verify_note' }],
-      [{ text: lang === 'ar' ? '🔄 إعادة التحقق' : '🔄 Re-check', callback_data: 'binance_verify_all' }],
       [{ text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }]
     ]
   };
@@ -2189,7 +2312,6 @@ async function sendBinanceAutoInstructions(userId, amount) {
   await setUserState(userId, {
     action: 'binance_auto_session',
     amount,
-    verificationCode,
     createdAt: Date.now()
   });
 }
@@ -2592,8 +2714,7 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
 
   const expected = Number(expectedAmountUSDT || 0);
   const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
-  const wantedCode = normalizeBinanceNoteCode(options.verificationCode);
-  if ((!wantedIdentifier && !wantedCode) || !Number.isFinite(expected) || expected <= 0) {
+  if (!wantedIdentifier || !Number.isFinite(expected) || expected <= 0) {
     return { success: false, reason: 'invalid_payload' };
   }
 
@@ -2681,7 +2802,7 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
       success: true,
       method: 'recent_unique_fallback',
       amount: getBinanceHistoryAmountUSDT(candidate),
-      txId: candidate.transactionId || candidate.orderId || candidate.prepayId || wantedCode || orderNumber,
+      txId: candidate.transactionId || candidate.orderId || candidate.prepayId || orderNumber,
       rawOrderId: orderNumber,
       currency: 'USDT',
       transactionTime: candidate.transactionTime || candidate.transactTime || Date.now(),
@@ -2707,10 +2828,9 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   const expectedAmount = Number(state?.amount || 0);
   const rawInput = String(options.rawInput || '').trim();
   const normalizedInput = normalizeBinanceIdentifier(rawInput);
-  const verificationCode = normalizeBinanceNoteCode(state?.verificationCode);
   const lang = user.lang === 'ar' ? 'ar' : 'en';
 
-  const duplicateCandidates = [normalizedInput, verificationCode]
+  const duplicateCandidates = [normalizedInput]
     .map(value => String(value || '').trim())
     .filter(Boolean);
 
@@ -2738,7 +2858,6 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   const waitStartedAt = Date.now();
 
   const checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
-    verificationCode,
     sessionCreatedAt: state?.createdAt,
     userId
   });
@@ -2780,7 +2899,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         type: 'deposit',
         status: 'completed',
         txid: txKey,
-        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | code=${verificationCode || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount}`
+        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount}`
       }, { transaction: t });
 
       await t.commit();
@@ -2797,8 +2916,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         `Username: ${identity.usernameText}\n` +
         `ID: ${userId}\n` +
         `Amount: ${expectedAmount} USD\n` +
-        `Input: ${rawInput || '-'}\n` +
-        `Note Code: ${verificationCode || '-'}\n` +
+        `Order ID: ${rawInput || '-'}\n` +
         `Matched Tx ID: ${checkResult.txId || '-'}\n` +
         `Method: ${checkResult.method}\n` +
         `Binance ID: ${checkResult.payId || BINANCE_PAY_ID || '-'}`
@@ -2817,23 +2935,25 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
     }
   }
 
-  const failureReasonText = getBinanceVerificationFailureReason(checkResult.reason, lang);
+  await setUserState(userId, {
+    action: 'binance_auto_waiting_proof',
+    amount: expectedAmount,
+    orderId: rawInput || '',
+    createdAt: state?.createdAt || Date.now()
+  });
+
   const failedText = lang === 'ar'
-    ? `${failureReasonText}\n\nطرق التحقق المتاحة الآن:\n1) أرسل Order ID أو Transaction ID الصحيح.\n2) أو اضغط زر التحقق بالكود بعد وضع الكود بالملاحظات.\n3) إن كانت هذه أحدث عملية 1:1 فسيحاول النظام مطابقة احتياطية تلقائية أيضًا.\n\nكود الملاحظات الحالي:\n<code>${verificationCode || '-'}</code>\n\nاذا هنالك مشكلة تواصل مع الدعم: @Neeeee`
-    : `${failureReasonText}\n\nAvailable verification methods now:\n1) Send the correct Order ID or Transaction ID.\n2) Or press the note-code verification button after putting the code in the Binance note.\n3) The system will also try a recent unique fallback automatically when safe.\n\nCurrent note code:\n<code>${verificationCode || '-'}</code>\n\nIf there is a problem, contact support: @Neeeee`;
+    ? '❌ فشل التحقق. قم بإرسال صورة الدفع ويمكنك كتابة ملاحظة معها، وسيقوم الأدمن بمراجعتها.'
+    : '❌ Verification failed. Please send the payment screenshot. You can include a note with it, and the admin will review it manually.';
 
   const failedKeyboard = {
-    inline_keyboard: [
-      [{ text: lang === 'ar' ? '✅ تحقق بالكود الآن' : '✅ Verify using note code now', callback_data: 'binance_verify_note' }],
-      [{ text: lang === 'ar' ? '🔄 إعادة التحقق' : '🔄 Re-check', callback_data: 'binance_verify_all' }],
-      [
-        { text: lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
-        { text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
+      { text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
+    ]]
   };
 
-  await bot.sendMessage(userId, failedText, { parse_mode: 'HTML', reply_markup: failedKeyboard });
+  await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
   return { handled: true, success: false, reason: checkResult.reason };
 }
 
@@ -2845,6 +2965,7 @@ async function sendMainMenu(userId) {
   const visibility = await getMenuButtonsVisibility();
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
+  const showFreeCode = await shouldShowFreeCodeButton(userId);
   const buttonLabels = {
     redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
@@ -2856,6 +2977,7 @@ async function sendMainMenu(userId) {
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
     chatgpt_code: await getText(userId, 'chatgptCode'),
+    free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
@@ -2863,6 +2985,7 @@ async function sendMainMenu(userId) {
   for (const id of order) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
+    if (id === 'free_code' && !showFreeCode) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
@@ -2927,6 +3050,7 @@ async function showReferralSettingsAdmin(userId) {
       [{ text: await getText(userId, 'grantPoints'), callback_data: 'admin_grant_points' }],
       [{ text: await getText(userId, 'deductReferralPoints'), callback_data: 'admin_deduct_points' }],
       [{ text: await getText(userId, 'grantCreatorDiscount'), callback_data: 'admin_grant_creator_discount' }],
+      [{ text: await getText(userId, 'manageFreeCodeAccess'), callback_data: 'admin_manage_free_code_access' }],
       [{ text: await getText(userId, 'referralStockSettings'), callback_data: 'admin_referral_stock_settings' }],
       [{ text: await getText(userId, 'toggleReferrals'), callback_data: 'admin_toggle_referrals' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
@@ -3508,7 +3632,7 @@ async function getOrCreateChatGptMerchant() {
 }
 
 async function processAutoChatGptCode(userId, options = {}) {
-  const { isFree = false, fromPoints = false, quantity = 1 } = options;
+  const { isFree = false, fromPoints = false, quantity = 1, allowFallbackStock = true } = options;
   const safeQuantity = Math.max(1, parseInt(quantity, 10) || 1);
   let merchant = null;
   let currentBalance = 0;
@@ -3542,10 +3666,12 @@ async function processAutoChatGptCode(userId, options = {}) {
 
     if (!result.success) {
       lastFailureReason = result.reason || 'Unknown error';
-      const remaining = safeQuantity - codes.length;
-      const fallbackCodes = await takeFallbackChatGptCodesFromReferralStock(userId, remaining);
-      if (fallbackCodes.length > 0) {
-        codes.push(...fallbackCodes);
+      if (allowFallbackStock) {
+        const remaining = safeQuantity - codes.length;
+        const fallbackCodes = await takeFallbackChatGptCodesFromReferralStock(userId, remaining);
+        if (fallbackCodes.length > 0) {
+          codes.push(...fallbackCodes);
+        }
       }
       break;
     }
@@ -3559,7 +3685,10 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   if (isFree) {
     if (!fromPoints) {
-      await User.update({ freeChatgptReceived: true, lastFreeCodeClaimAt: new Date() }, { where: { id: userId } });
+      const freeUser = await User.findByPk(userId);
+      if (!freeUser?.forceFreeCodeButton) {
+        await User.update({ freeChatgptReceived: true, lastFreeCodeClaimAt: new Date() }, { where: { id: userId } });
+      }
     }
   } else {
     const chargedAmount = price * codes.length;
@@ -3893,7 +4022,7 @@ bot.on('callback_query', async query => {
       const fallbackLink = (await User.findByPk(userId))?.lang === 'ar' ? 'رابط الإحالة غير متاح حالياً' : 'Referral link is currently unavailable';
       const info = await getText(userId, 'referralInfo', { link: escapeHtml(link || fallbackLink), points, requiredPoints, redeemableCodes });
 
-      const freeCodeButtonRow = (await canUserClaimFreeCode(userId)) && !user?.freeChatgptReceived
+      const freeCodeButtonRow = await shouldShowFreeCodeButton(userId)
         ? [[{ text: await getText(userId, 'getFreeCode'), callback_data: 'get_free_code' }]]
         : [];
 
@@ -3926,7 +4055,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'referral_free_code' || data === 'free_code') {
+    if (data === 'referral_free_code' || data === 'free_code' || data === 'get_free_code') {
       const canClaim = await canUserClaimFreeCode(userId);
 
       if (!canClaim) {
@@ -3936,7 +4065,7 @@ bot.on('callback_query', async query => {
       }
 
       const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false });
+      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false, allowFallbackStock: false });
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
@@ -3944,6 +4073,12 @@ bot.on('callback_query', async query => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'free',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : 1,
+          remainingStockText: 'من الموقع'
+        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -4016,24 +4151,7 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'binance_verify_note' || data === 'binance_verify_all') {
-      const freshUser = await User.findByPk(userId);
-      const freshState = safeParseState(freshUser?.state);
-      if (!freshState || freshState.action !== 'binance_auto_session') {
-        await bot.answerCallbackQuery(query.id, {
-          text: freshUser?.lang === 'ar' ? 'انتهت جلسة التحقق، اختر المبلغ من جديد.' : 'Verification session expired. Please select the amount again.'
-        }).catch(() => {});
-        return;
-      }
 
-      await bot.answerCallbackQuery(query.id, {
-        text: freshUser?.lang === 'ar' ? 'جاري التحقق...' : 'Verifying...'
-      }).catch(() => {});
-
-      const rawInput = data === 'binance_verify_note' ? (freshState.verificationCode || '') : '';
-      await processBinanceAutoVerification(userId, freshState, { rawInput });
-      return;
-    }
     // -------------------------------------------------------------------
 
     if (data === 'admin_manage_bots' && isAdmin(userId)) {
@@ -4190,6 +4308,23 @@ bot.on('callback_query', async query => {
       };
       await bot.sendMessage(userId, msg, { reply_markup: keyboard });
       await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+
+    if (data === 'admin_manage_deposit_options' && isAdmin(userId)) {
+      await showDepositOptionsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_toggle_deposit_option_') && isAdmin(userId)) {
+      const key = data.replace('admin_toggle_deposit_option_', '');
+      const visibility = await getDepositOptionVisibility();
+      visibility[key] = !(visibility[key] !== false);
+      await setDepositOptionVisibility(visibility);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'depositOptionsUpdated') });
+      await showDepositOptionsAdmin(userId);
       return;
     }
 
@@ -4542,6 +4677,34 @@ bot.on('callback_query', async query => {
       await Setting.upsert({ key: 'bot_enabled', lang: 'global', value: enabled ? 'false' : 'true' });
       await bot.sendMessage(userId, await getText(userId, enabled ? 'botTurnedOff' : 'botTurnedOn'));
       await showBotControlAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_manage_free_code_access' && isAdmin(userId)) {
+      await bot.sendMessage(userId, await getText(userId, 'manageFreeCodeAccess'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'enableFreeCodeForUser'), callback_data: 'admin_enable_free_code_for_user' }],
+            [{ text: await getText(userId, 'disableFreeCodeForUser'), callback_data: 'admin_disable_free_code_for_user' }],
+            [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_enable_free_code_for_user' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'toggle_free_code_for_user', mode: 'enable' });
+      await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeAccessUserId'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_disable_free_code_for_user' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'toggle_free_code_for_user', mode: 'disable' });
+      await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeAccessUserId'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5480,6 +5643,15 @@ bot.on('message', async msg => {
           count: result.count
         })).catch(() => {});
 
+        const referralMerchant = await getReferralStockMerchant();
+        const referralRemaining = await Code.count({ where: { merchantId: referralMerchant.id, isUsed: false } });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'referral_stock',
+          serviceType: 'جائزة الإحالات',
+          codesCount: result.count,
+          remainingStockText: String(referralRemaining)
+        });
+
         await clearUserState(userId);
         await sendMainMenu(userId);
         return;
@@ -5665,6 +5837,32 @@ bot.on('message', async msg => {
           await showReferralSettingsAdmin(userId);
           return;
         }
+      }
+
+      if (state.action === 'toggle_free_code_for_user') {
+        const targetUserId = parseInt(text, 10);
+        if (!Number.isInteger(targetUserId)) {
+          await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeAccessUserId'));
+          return;
+        }
+        const targetUser = await User.findByPk(targetUserId);
+        if (!targetUser) {
+          await bot.sendMessage(userId, await getText(userId, 'grantPointsUserNotFound'));
+          return;
+        }
+
+        if (state.mode === 'enable') {
+          targetUser.forceFreeCodeButton = true;
+          await targetUser.save();
+          await bot.sendMessage(userId, await getText(userId, 'freeCodeAccessEnabledDone', { userId: targetUserId }));
+        } else {
+          targetUser.forceFreeCodeButton = false;
+          await targetUser.save();
+          await bot.sendMessage(userId, await getText(userId, 'freeCodeAccessDisabledDone', { userId: targetUserId }));
+        }
+        await clearUserState(userId);
+        await showReferralSettingsAdmin(userId);
+        return;
       }
 
       if (state.action === 'grant_creator_discount') {
@@ -5873,9 +6071,34 @@ bot.on('message', async msg => {
       }
     }
 
+
+    if (state?.action === 'binance_auto_waiting_proof') {
+      const imageFileId = photo ? photo[photo.length - 1].file_id : null;
+      const captionText = String(msg.caption || text || '').trim();
+
+      if (!imageFileId) {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ يرجى إرسال صورة الدفع. ويمكنك كتابة رسالة معها.'
+          : '❌ Please send the payment screenshot. You may include a note with it.');
+        return;
+      }
+
+      const manualMessage = `Binance Auto Manual Review | Order ID: ${state.orderId || '-'} | ${captionText || 'No message'}`;
+      await requestDeposit(userId, state.amount, 'USD', manualMessage, imageFileId, msg.from || null);
+      await bot.sendMessage(userId, user.lang === 'ar'
+        ? '✅ تم استلام صورة الدفع وإرسالها للأدمن للمراجعة.'
+        : '✅ Payment screenshot received and sent to the admin for review.');
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
     if (state?.action === 'support') {
       const supportText = text || '';
       const photoFileId = photo ? photo[photo.length - 1].file_id : null;
+      const replyButton = {
+        inline_keyboard: [[{ text: await getText(ADMIN_ID, 'replyToSupport'), callback_data: `support_reply_${userId}` }]]
+      };
       const notifText = await getText(ADMIN_ID, 'supportNotification', {
         userId,
         username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
@@ -5883,12 +6106,10 @@ bot.on('message', async msg => {
         message: supportText || 'No message'
       });
       if (photoFileId) {
-        await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText });
+        await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText, reply_markup: replyButton });
       } else {
-        await bot.sendMessage(ADMIN_ID, notifText);
+        await bot.sendMessage(ADMIN_ID, notifText, { reply_markup: replyButton });
       }
-      const replyButton = { inline_keyboard: [[{ text: await getText(ADMIN_ID, 'replyToSupport'), callback_data: `support_reply_${userId}` }]] };
-      await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'replyToSupport'), { reply_markup: replyButton });
       await bot.sendMessage(userId, await getText(userId, 'supportMessageSent'));
       await clearUserState(userId);
       return;
@@ -5933,6 +6154,14 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${msgText}`, { parse_mode: 'HTML' });
       }
+
+        const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'balance',
+          serviceType: `${merchant.nameAr || merchant.nameEn}`,
+          codesCount: qty,
+          remainingStockText: String(remainingMerchantStock)
+        });
 
         const userObj = await User.findByPk(userId);
         if (userObj.referredBy) {
@@ -5993,8 +6222,8 @@ bot.on('message', async msg => {
       const rawInput = String(text || '').trim();
       if (!rawInput) {
         await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ أرسل Order ID أو Transaction ID، أو اضغط زر التحقق بالكود.'
-          : '❌ Send the Order ID or Transaction ID, or press the note-code verification button.');
+          ? '❌ أرسل Order ID فقط.'
+          : '❌ Send the Order ID only.');
         return;
       }
 
@@ -6054,6 +6283,12 @@ bot.on('message', async msg => {
         }
         await clearUserState(userId);
         await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes || [result.code]) }), { parse_mode: 'HTML' });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: state.fromPoints ? 'points' : 'free',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : 1,
+          remainingStockText: 'من الموقع'
+        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
         await clearUserState(userId);
@@ -6092,6 +6327,13 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+          usedPoints,
+          remainingStockText: 'من الموقع'
+        });
       } else {
         await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
       }
@@ -6123,6 +6365,12 @@ bot.on('message', async msg => {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
       }
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'balance',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+          remainingStockText: 'من الموقع'
+        });
       } else if (result.reason === 'INSUFFICIENT_BALANCE') {
         const freshUser = await User.findByPk(userId);
         const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
@@ -6146,6 +6394,13 @@ bot.on('message', async msg => {
             }
             const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
             await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
+            await sendAdminCodeActionNotice(userId, {
+              sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
+              serviceType: 'ChatGPT GO',
+              codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+              usedPoints,
+              remainingStockText: 'من الموقع'
+            });
           } else {
             await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
           }
