@@ -1045,6 +1045,17 @@ function extractChatGptUpCodes(textValue) {
   return [...new Set(found)];
 }
 
+
+function chunkArray(input, size) {
+  const arr = Array.isArray(input) ? input : [];
+  const chunkSize = Math.max(1, parseInt(size, 10) || 100);
+  const out = [];
+  for (let i = 0; i < arr.length; i += chunkSize) {
+    out.push(arr.slice(i, i + chunkSize));
+  }
+  return out;
+}
+
 function getReferralStockInputReplyMarkup() {
   return {
     inline_keyboard: [
@@ -6220,18 +6231,101 @@ bot.on('message', async msg => {
           return;
         }
 
-        const toCreate = values.map(value => ({ value, merchantId: merchant.id, isUsed: false }));
+        const loadingMsg = await bot.sendMessage(userId, '⏳ جار التحميل...');
+        let addedCount = 0;
 
-        if (toCreate.length) {
-          await Code.bulkCreate(toCreate);
+        try {
+          const chunks = chunkArray(values, 200);
+          for (const chunk of chunks) {
+            const rows = chunk.map(value => ({ value, merchantId: merchant.id, isUsed: false }));
+            await Code.bulkCreate(rows);
+            addedCount += rows.length;
+          }
+        } catch (bulkErr) {
+          console.error('Bulk insert referral stock error:', bulkErr);
+          for (const value of values) {
+            try {
+              await Code.create({ value, merchantId: merchant.id, isUsed: false });
+              addedCount += 1;
+            } catch (singleErr) {
+              console.error('Single insert referral stock error:', singleErr);
+            }
+          }
         }
 
         const totalCount = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+        await bot.deleteMessage(userId, loadingMsg.message_id).catch(() => {});
         await bot.sendMessage(
           userId,
-          `${await getText(userId, 'referralStockCodesAdded', { count: toCreate.length })}\n📦 إجمالي المخزون الآن: ${totalCount}`,
+          `${await getText(userId, 'referralStockCodesAdded', { count: addedCount })}\n📦 إجمالي المخزون الآن: ${totalCount}`,
           { reply_markup: getReferralStockInputReplyMarkup() }
         );
+        return;
+      }
+
+      if (state.action === 'delete_referral_stock_codes_by_input') {
+        const merchant = await getReferralStockMerchant();
+        const rawInput = String(text || msg.caption || '');
+
+        let values = extractChatGptUpCodes(rawInput);
+        if (!values.length) {
+          values = String(rawInput || '')
+            .split(/\r?\n|\s+/)
+            .map(v => normalizeChatGptUpCode(v))
+            .filter(Boolean);
+        }
+
+        values = [...new Set(values.filter(Boolean))];
+
+        if (!values.length) {
+          await bot.sendMessage(userId, await getText(userId, 'enterSearchDeleteReferralStockCodes'));
+          return;
+        }
+
+        const rows = await Code.findAll({
+          where: {
+            merchantId: merchant.id,
+            value: { [Op.in]: values }
+          },
+          attributes: ['id', 'value'],
+          order: [['id', 'ASC']]
+        });
+
+        const foundValues = new Set(rows.map(r => normalizeChatGptUpCode(r.value)).filter(Boolean));
+        const missingValues = values.filter(v => !foundValues.has(v));
+
+        let deletedCount = 0;
+        if (rows.length) {
+          deletedCount = await Code.destroy({
+            where: { id: rows.map(r => r.id) }
+          });
+        }
+
+        const detailsLines = [];
+        if (rows.length) {
+          detailsLines.push(`✅ الأكواد الموجودة والمحذوفة:`);
+          for (const code of [...foundValues].slice(0, 100)) {
+            detailsLines.push(code);
+          }
+        }
+        if (missingValues.length) {
+          detailsLines.push(``);
+          detailsLines.push(`❌ الأكواد غير الموجودة:`);
+          for (const code of missingValues.slice(0, 100)) {
+            detailsLines.push(code);
+          }
+        }
+
+        await bot.sendMessage(
+          userId,
+          await getText(userId, 'referralStockSearchDeleteResult', {
+            deleted: deletedCount,
+            missing: missingValues.length,
+            details: detailsLines.join('\n') || '-'
+          })
+        );
+        await clearUserState(userId);
+        await showReferralStockSettingsAdmin(userId);
         return;
       }
 
@@ -7252,7 +7346,7 @@ bot.on('message', async msg => {
 
   } catch (err) {
     console.error('Message handler error:', err);
-    await bot.sendMessage(userId, 'An error occurred. Please try again later.').catch(() => {});
+    await bot.sendMessage(userId, '⏳ جار التحميل...').catch(() => {});
   }
 });
 
