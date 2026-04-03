@@ -362,9 +362,14 @@ const DEFAULT_TEXTS = {
     referralsTurnedOff: '⛔ Referrals stopped.',
     addReferralStockCodes: '➕ Add Referral Stock Codes',
     viewReferralStockCount: '📦 View Referral Stock',
+    searchReferralStockDuplicates: '🔎 Search Duplicate Codes',
+    referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
+    referralStockDuplicatesFound: '🔎 Duplicate codes found: {count}\n\n{codes}',
+    deleteReferralStockDuplicates: '🗑️ Delete Duplicate Codes',
+    referralStockDuplicatesDeleted: '✅ Deleted {count} duplicate code(s) from referral stock.',
     referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
     enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces:',
-    referralStockCodesAdded: '✅ Referral stock codes added.',
+    referralStockCodesAdded: '✅ Referral stock codes added.\n📊 Added count: {count}',
     referralStockNotEnough: '❌ Not enough referral ChatGPT stock for this request.',
     referralStockNoCodesAvailable: '❌ No referral ChatGPT stock available right now.',
     referralClaimAskCount: 'Send the number of referral-stock codes you want to claim. Available by your points: {maxCodes}.',
@@ -667,9 +672,14 @@ const DEFAULT_TEXTS = {
     referralsTurnedOff: '⛔ تم إيقاف الإحالات.',
     addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
+    searchReferralStockDuplicates: '🔎 البحث عن الكودات المكررة',
+    referralStockDuplicatesNone: '✅ لا توجد كودات مكررة في مخزون الإحالات.',
+    referralStockDuplicatesFound: '🔎 تم العثور على كودات مكررة: {count}\n\n{codes}',
+    deleteReferralStockDuplicates: '🗑️ حذف الكودات المكررة',
+    referralStockDuplicatesDeleted: '✅ تم حذف {count} كود مكرر من مخزون الإحالات.',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
     enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
-    referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.',
+    referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.\n📊 عدد الأكواد المضافة: {count}',
     referralStockNotEnough: '❌ لا يوجد عدد كافٍ في مخزون ChatGPT الإحالات لهذا الطلب.',
     referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
     referralClaimAskCount: 'أرسل عدد كودات مخزون الإحالات التي تريد استلامها. المتاح حسب نقاطك: {maxCodes}.',
@@ -937,6 +947,51 @@ async function getReferralStockMerchant() {
   }
   return merchant;
 }
+
+async function getReferralStockDuplicateRows() {
+  const merchant = await getReferralStockMerchant();
+  const rows = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    order: [['id', 'ASC']]
+  });
+
+  const seen = new Map();
+  const duplicates = [];
+  for (const row of rows) {
+    const key = `${String(row.value || '').trim()}\n${String(row.extra || '').trim()}`;
+    if (!seen.has(key)) {
+      seen.set(key, row.id);
+    } else {
+      duplicates.push(row);
+    }
+  }
+
+  return duplicates;
+}
+
+function formatDuplicateCodesForAdmin(rows, limit = 40) {
+  const sliced = rows.slice(0, limit);
+  let output = sliced.map((row, i) => {
+    const body = row.extra ? `${row.value}\n${row.extra}` : `${row.value}`;
+    return `${i + 1}) ${body}`;
+  }).join('\n\n');
+
+  if (rows.length > limit) {
+    output += `\n\n... +${rows.length - limit} more`;
+  }
+
+  return output || '-';
+}
+
+async function deleteReferralStockDuplicateRows() {
+  const duplicates = await getReferralStockDuplicateRows();
+  if (!duplicates.length) return { count: 0 };
+
+  const ids = duplicates.map(row => row.id);
+  await Code.destroy({ where: { id: ids } });
+  return { count: ids.length };
+}
+
 
 async function getSuccessfulReferralCount(userId) {
   return await User.count({ where: { referredBy: userId, referralRewarded: true } });
@@ -3090,6 +3145,7 @@ async function showReferralStockSettingsAdmin(userId) {
     inline_keyboard: [
       [{ text: await getText(userId, 'addReferralStockCodes'), callback_data: 'admin_add_referral_stock_codes' }],
       [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
+      [{ text: await getText(userId, 'searchReferralStockDuplicates'), callback_data: 'admin_search_referral_stock_duplicates' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -4536,6 +4592,37 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_search_referral_stock_duplicates' && isAdmin(userId)) {
+      const duplicates = await getReferralStockDuplicateRows();
+      if (!duplicates.length) {
+        await bot.sendMessage(userId, await getText(userId, 'referralStockDuplicatesNone'));
+      } else {
+        const codesText = formatDuplicateCodesForAdmin(duplicates);
+        await bot.sendMessage(
+          userId,
+          await getText(userId, 'referralStockDuplicatesFound', { count: duplicates.length, codes: codesText }),
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: await getText(userId, 'deleteReferralStockDuplicates'), callback_data: 'admin_delete_referral_stock_duplicates' }],
+                [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_stock_settings' }]
+              ]
+            }
+          }
+        );
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_delete_referral_stock_duplicates' && isAdmin(userId)) {
+      const result = await deleteReferralStockDuplicateRows();
+      await bot.sendMessage(userId, await getText(userId, 'referralStockDuplicatesDeleted', { count: result.count }));
+      await showReferralStockSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_toggle_referrals' && isAdmin(userId)) {
       const current = await getReferralEnabled();
       await Setting.upsert({ key: 'referral_enabled', lang: 'global', value: String(!current) });
@@ -5554,7 +5641,7 @@ bot.on('message', async msg => {
           return;
         }
         await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
-        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded'));
+        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded', { count: lines.length }));
         await clearUserState(userId);
         await showReferralStockSettingsAdmin(userId);
         return;
