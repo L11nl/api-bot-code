@@ -377,6 +377,7 @@ const DEFAULT_TEXTS = {
     viewReferralStockCount: '📦 View Referral Stock',
     searchReferralStockDuplicates: '🔎 Search Duplicate Codes',
     importReferralStockFromPrivateChannel: '📥 Add Codes From Private Channel',
+    privateReferralChannelButton: '📦 Codes Channel',
     searchDeleteReferralStockCodes: '🔍 Search Codes And Delete',
     enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
     referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
@@ -694,6 +695,7 @@ const DEFAULT_TEXTS = {
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
     searchReferralStockDuplicates: '🔎 البحث عن الكودات المكررة',
     importReferralStockFromPrivateChannel: '📥 إضافة كودات من القناة الخاصة',
+    privateReferralChannelButton: '📦 قناة الكودات',
     searchDeleteReferralStockCodes: '🔍 البحث عن الكودات وحذفها',
     enterSearchDeleteReferralStockCodes: 'أرسل الكودات التي تريد البحث عنها وحذفها من مخزون الإحالات.',
     referralStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n\n{details}',
@@ -1022,32 +1024,46 @@ async function deleteReferralStockDuplicateRows() {
 
 
 function normalizeChatGptUpCode(rawValue) {
-  const match = String(rawValue || '').match(/https?:\/\/(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/i);
-  if (!match) return String(rawValue || '').trim();
-  return `http://www.chatgpt.com/up/${match[1]}`;
+  const cleaned = String(rawValue || '').trim();
+  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/i);
+  if (!match) return '';
+  return `http://www.chatgpt.com/up/${match[1].toUpperCase()}`;
 }
 
 function extractChatGptUpCodes(textValue) {
   const text = String(textValue || '');
-  const regex = /https?:\/\/(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/ig;
+  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/ig;
   const found = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
-    found.push(`http://www.chatgpt.com/up/${match[1]}`);
+    found.push(`http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`);
   }
   return [...new Set(found)];
 }
 
 async function cachePrivateChannelPostMessage(message) {
   try {
-    const config = await getPrivateCodesChannelConfig();
-    if (!config.chatId) return false;
-    if (String(message?.chat?.id || '') !== String(config.chatId)) return false;
-
     const content = String(message.text || message.caption || '').trim();
     if (!content) return false;
 
     const extractedCodes = extractChatGptUpCodes(content);
+    if (!extractedCodes.length) return false;
+
+    const config = await getPrivateCodesChannelConfig();
+
+    if (!config.chatId) {
+      if (!config.enabled) return false;
+      await savePrivateCodesChannelConfig({
+        ...config,
+        enabled: true,
+        chatId: String(message?.chat?.id || ''),
+        title: message?.chat?.title || config.title || '',
+        username: message?.chat?.username ? `@${message.chat.username}` : (config.username || '')
+      });
+    } else if (String(message?.chat?.id || '') !== String(config.chatId)) {
+      return false;
+    }
+
     await PrivateChannelCodePostCache.upsert({
       channelChatId: String(message.chat.id),
       messageId: Number(message.message_id),
@@ -1110,7 +1126,7 @@ async function importReferralStockCodesFromPrivateChannel() {
   let skippedDuplicates = 0;
 
   for (const post of cachedPosts) {
-    const extracted = extractChatGptUpCodes(post.content || '');
+    const extracted = Array.isArray(post.extractedCodes) && post.extractedCodes.length ? post.extractedCodes : extractChatGptUpCodes(post.content || '');
     let addedForPost = 0;
 
     for (const code of extracted) {
@@ -1509,9 +1525,7 @@ async function showPrivateCodesChannelAdmin(userId) {
   const config = await getPrivateCodesChannelConfig();
   const status = config.enabled ? '✅ مفعل' : '⛔ متوقف';
   const msg =
-    `📦 إعدادات قناة الأكواد الخاصة
-
-` +
+    `📦 إعدادات قناة الكودات الخاصة\n\n` +
     `الحالة: ${status}
 ` +
     `العنوان: ${config.title || 'غير محدد'}
@@ -1521,7 +1535,7 @@ async function showPrivateCodesChannelAdmin(userId) {
     `المعرف: ${config.username || config.chatId || 'غير محدد'}
 
 ` +
-    `ملاحظة: أضف البوت مشرفًا في القناة الخاصة. يمكنك إرسال رابط دعوة خاص مثل t.me/+... ولكن للإرسال إلى القناة يجب أيضًا إعادة توجيه منشور واحد من نفس القناة ليتم حفظ chat_id.`;
+    `ملاحظة: أضف البوت مشرفًا في القناة الخاصة. يمكنك إرسال رابط دعوة خاص مثل t.me/+... وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل.`;
 
   const keyboard = {
     inline_keyboard: [[{ text: config.enabled ? '⛔ إيقاف قناة الأكواد الخاصة' : '✅ تفعيل قناة الأكواد الخاصة', callback_data: 'admin_toggle_private_codes_channel' }],
@@ -3274,7 +3288,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
-      [{ text: '📦 قناة الأكواد الخاصة', callback_data: 'admin_private_codes_channel' }],
+      [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
@@ -3363,6 +3377,7 @@ async function showReferralStockSettingsAdmin(userId) {
       [{ text: await getText(userId, 'searchReferralStockDuplicates'), callback_data: 'admin_search_referral_stock_duplicates' }],
       [{ text: await getText(userId, 'importReferralStockFromPrivateChannel'), callback_data: 'admin_import_referral_stock_from_private_channel' }],
       [{ text: await getText(userId, 'searchDeleteReferralStockCodes'), callback_data: 'admin_prompt_delete_referral_stock_codes' }],
+      [{ text: await getText(userId, 'privateReferralChannelButton'), callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -5310,9 +5325,13 @@ bot.on('message', async msg => {
 
     if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
       const config = await getPrivateCodesChannelConfig();
-      if (config.chatId && String(msg.forward_from_chat.id) === String(config.chatId)) {
+      if (!config.chatId || String(msg.forward_from_chat.id) === String(config.chatId)) {
         await cachePrivateChannelPostMessage({
-          chat: { id: msg.forward_from_chat.id },
+          chat: { 
+            id: msg.forward_from_chat.id,
+            title: msg.forward_from_chat.title,
+            username: msg.forward_from_chat.username
+          },
           message_id: msg.forward_from_message_id || msg.message_id,
           text: msg.text || '',
           caption: msg.caption || ''
@@ -5901,13 +5920,34 @@ bot.on('message', async msg => {
 
       if (state.action === 'add_referral_stock_codes') {
         const merchant = await getReferralStockMerchant();
-        const lines = String(text || '').split(/\r?\n|\s+/).filter(v => String(v).trim());
-        if (!lines.length) {
+        let values = extractChatGptUpCodes(text || '');
+        if (!values.length) {
+          values = String(text || '')
+            .split(/\r?\n|\s+/)
+            .map(v => normalizeChatGptUpCode(v))
+            .filter(Boolean);
+        }
+
+        values = [...new Set(values)];
+        if (!values.length) {
           await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
           return;
         }
-        await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
-        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded', { count: lines.length }));
+
+        const existingRows = await Code.findAll({
+          where: { merchantId: merchant.id, value: { [Op.in]: values } },
+          attributes: ['value']
+        });
+        const existingSet = new Set(existingRows.map(row => normalizeChatGptUpCode(row.value)));
+        const toCreate = values
+          .filter(v => !existingSet.has(v))
+          .map(value => ({ value, merchantId: merchant.id, isUsed: false }));
+
+        if (toCreate.length) {
+          await Code.bulkCreate(toCreate);
+        }
+
+        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded', { count: toCreate.length }));
         await clearUserState(userId);
         await showReferralStockSettingsAdmin(userId);
         return;
