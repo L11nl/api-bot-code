@@ -378,10 +378,11 @@ const DEFAULT_TEXTS = {
     searchReferralStockDuplicates: '🔎 Search Duplicate Codes',
     importReferralStockFromPrivateChannel: '📥 Add Codes From Private Channel',
     privateReferralChannelButton: '📦 Codes Channel',
+    referralCodesChannelButton: '📦 Codes Channel',
     searchDeleteReferralStockCodes: '🔍 Search Codes And Delete',
     enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
     referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
-    referralStockImportNoPosts: '❌ No cached posts were found from the private channel yet. Add the bot as admin in the channel, then publish or forward channel posts first.',
+    referralStockImportNoPosts: '❌ No cached posts were found from the codes channel yet. Add the bot as admin in that channel, then publish or forward channel posts first.',
     referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached private-channel posts.',
     referralStockImportedFromPrivateChannel: '✅ Imported {added} code(s) from the private channel.\n♻️ Skipped duplicates: {duplicates}\n📚 Cached posts scanned: {posts}',
     referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
@@ -696,6 +697,7 @@ const DEFAULT_TEXTS = {
     searchReferralStockDuplicates: '🔎 البحث عن الكودات المكررة',
     importReferralStockFromPrivateChannel: '📥 إضافة كودات من القناة الخاصة',
     privateReferralChannelButton: '📦 قناة الكودات',
+    referralCodesChannelButton: '📦 قناة الكودات',
     searchDeleteReferralStockCodes: '🔍 البحث عن الكودات وحذفها',
     enterSearchDeleteReferralStockCodes: 'أرسل الكودات التي تريد البحث عنها وحذفها من مخزون الإحالات.',
     referralStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n\n{details}',
@@ -1049,7 +1051,7 @@ async function cachePrivateChannelPostMessage(message) {
     const extractedCodes = extractChatGptUpCodes(content);
     if (!extractedCodes.length) return false;
 
-    const config = await getPrivateCodesChannelConfig();
+    const config = await getReferralCodesChannelConfig();
 
     if (!config.chatId) {
       if (!config.enabled) return false;
@@ -1078,6 +1080,43 @@ async function cachePrivateChannelPostMessage(message) {
   }
 }
 
+async function cacheReferralCodesChannelPostMessage(message) {
+  try {
+    const content = String(message.text || message.caption || '').trim();
+    if (!content) return false;
+
+    const extractedCodes = extractChatGptUpCodes(content);
+    if (!extractedCodes.length) return false;
+
+    const config = await getReferralCodesChannelConfig();
+
+    if (!config.chatId) {
+      if (!config.enabled) return false;
+      await saveReferralCodesChannelConfig({
+        ...config,
+        enabled: true,
+        chatId: String(message?.chat?.id || ''),
+        title: message?.chat?.title || config.title || '',
+        username: message?.chat?.username ? `@${message.chat.username}` : (config.username || '')
+      });
+    } else if (String(message?.chat?.id || '') !== String(config.chatId)) {
+      return false;
+    }
+
+    await PrivateChannelCodePostCache.upsert({
+      channelChatId: String(message.chat.id),
+      messageId: Number(message.message_id),
+      content,
+      isCaption: Boolean(message.caption && !message.text),
+      extractedCodes
+    });
+    return true;
+  } catch (err) {
+    console.error('cacheReferralCodesChannelPostMessage error:', err);
+    return false;
+  }
+}
+
 async function markPrivateChannelPostImported(chatId, messageId, originalContent, isCaption = false) {
   const note = '✅ تم نقله الى المخزون';
   const content = String(originalContent || '').trim();
@@ -1098,7 +1137,7 @@ async function markPrivateChannelPostImported(chatId, messageId, originalContent
 }
 
 async function importReferralStockCodesFromPrivateChannel() {
-  const config = await getPrivateCodesChannelConfig();
+  const config = await getReferralCodesChannelConfig();
   if (!config.enabled || !config.chatId) {
     return { success: false, reason: 'channel_not_configured' };
   }
@@ -1520,6 +1559,69 @@ async function savePrivateCodesChannelConfig(config = {}) {
     await Setting.upsert({ key, lang: 'global', value: String(value) });
   }
 }
+
+
+async function getReferralCodesChannelConfig() {
+  const values = await Setting.findAll({
+    where: {
+      lang: 'global',
+      key: {
+        [Op.in]: [
+          'referral_codes_channel_enabled',
+          'referral_codes_channel_chat_id',
+          'referral_codes_channel_link',
+          'referral_codes_channel_title',
+          'referral_codes_channel_username'
+        ]
+      }
+    }
+  });
+
+  const map = Object.fromEntries(values.map(v => [v.key, v.value]));
+  return {
+    enabled: String(map.referral_codes_channel_enabled || 'false').toLowerCase() === 'true',
+    chatId: map.referral_codes_channel_chat_id || '',
+    link: map.referral_codes_channel_link || '',
+    title: map.referral_codes_channel_title || '',
+    username: map.referral_codes_channel_username || ''
+  };
+}
+
+async function saveReferralCodesChannelConfig(config = {}) {
+  const pairs = {
+    referral_codes_channel_enabled: config.enabled ? 'true' : 'false',
+    referral_codes_channel_chat_id: config.chatId || '',
+    referral_codes_channel_link: config.link || '',
+    referral_codes_channel_title: config.title || '',
+    referral_codes_channel_username: config.username || ''
+  };
+  for (const [key, value] of Object.entries(pairs)) {
+    await Setting.upsert({ key, lang: 'global', value: String(value) });
+  }
+}
+
+async function showReferralCodesChannelAdmin(userId) {
+  const config = await getReferralCodesChannelConfig();
+  const status = config.enabled ? '✅ مفعل' : '⛔ متوقف';
+  const msg =
+    `📦 قناة الكودات\n\n` +
+    `الحالة: ${status}\n` +
+    `العنوان: ${config.title || 'غير محدد'}\n` +
+    `الرابط: ${config.link || 'غير محدد'}\n` +
+    `المعرف: ${config.username || config.chatId || 'غير محدد'}\n\n` +
+    `ملاحظة: هذه القناة مخصصة فقط لزر 📥 إضافة كودات من القناة الخاصة، وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل.`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: config.enabled ? '⛔ إيقاف قناة الكودات' : '✅ تفعيل قناة الكودات', callback_data: 'admin_toggle_referral_codes_channel' }],
+      [{ text: '🔗 تعيين قناة الكودات', callback_data: 'admin_set_referral_codes_channel' }],
+      [{ text: '🔙 رجوع', callback_data: 'admin_referral_stock_settings' }]
+    ]
+  };
+
+  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
+}
+
 
 async function showPrivateCodesChannelAdmin(userId) {
   const config = await getPrivateCodesChannelConfig();
@@ -3377,7 +3479,7 @@ async function showReferralStockSettingsAdmin(userId) {
       [{ text: await getText(userId, 'searchReferralStockDuplicates'), callback_data: 'admin_search_referral_stock_duplicates' }],
       [{ text: await getText(userId, 'importReferralStockFromPrivateChannel'), callback_data: 'admin_import_referral_stock_from_private_channel' }],
       [{ text: await getText(userId, 'searchDeleteReferralStockCodes'), callback_data: 'admin_prompt_delete_referral_stock_codes' }],
-      [{ text: await getText(userId, 'privateReferralChannelButton'), callback_data: 'admin_private_codes_channel' }],
+      [{ text: await getText(userId, 'privateReferralChannelButton'), callback_data: 'admin_referral_codes_channel' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -4809,6 +4911,28 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_referral_codes_channel' && isAdmin(userId)) {
+      await showReferralCodesChannelAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_referral_codes_channel' && isAdmin(userId)) {
+      const config = await getReferralCodesChannelConfig();
+      config.enabled = !config.enabled;
+      await saveReferralCodesChannelConfig(config);
+      await showReferralCodesChannelAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_set_referral_codes_channel' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'set_referral_codes_channel' });
+      await bot.sendMessage(userId, 'أرسل رابط أو آيدي قناة الكودات، أو قم بإعادة توجيه منشور منها. هذه القناة تخص فقط زر 📥 إضافة كودات من القناة الخاصة.');
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_add_referral_stock_codes' && isAdmin(userId)) {
       await setUserState(userId, { action: 'add_referral_stock_codes' });
       await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
@@ -5303,6 +5427,7 @@ bot.on('callback_query', async query => {
 bot.on('channel_post', async msg => {
   try {
     await cachePrivateChannelPostMessage(msg);
+    await cacheReferralCodesChannelPostMessage(msg);
   } catch (err) {
     console.error('channel_post cache error:', err);
   }
@@ -5324,18 +5449,25 @@ bot.on('message', async msg => {
     let state = safeParseState(user.state);
 
     if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
-      const config = await getPrivateCodesChannelConfig();
-      if (!config.chatId || String(msg.forward_from_chat.id) === String(config.chatId)) {
-        await cachePrivateChannelPostMessage({
-          chat: { 
-            id: msg.forward_from_chat.id,
-            title: msg.forward_from_chat.title,
-            username: msg.forward_from_chat.username
-          },
-          message_id: msg.forward_from_message_id || msg.message_id,
-          text: msg.text || '',
-          caption: msg.caption || ''
-        });
+      const forwardedPayload = {
+        chat: { 
+          id: msg.forward_from_chat.id,
+          title: msg.forward_from_chat.title,
+          username: msg.forward_from_chat.username
+        },
+        message_id: msg.forward_from_message_id || msg.message_id,
+        text: msg.text || '',
+        caption: msg.caption || ''
+      };
+
+      const privateCfg = await getPrivateCodesChannelConfig();
+      if (!privateCfg.chatId || String(msg.forward_from_chat.id) === String(privateCfg.chatId)) {
+        await cachePrivateChannelPostMessage(forwardedPayload);
+      }
+
+      const referralCfg = await getReferralCodesChannelConfig();
+      if (!referralCfg.chatId || String(msg.forward_from_chat.id) === String(referralCfg.chatId)) {
+        await cacheReferralCodesChannelPostMessage(forwardedPayload);
       }
     }
 
@@ -5423,6 +5555,52 @@ bot.on('message', async msg => {
             : '✅ تم حفظ القناة الخاصة وتفعيلها.'
         );
         await showPrivateCodesChannelAdmin(userId);
+        return;
+      }
+
+      if (state.action === 'set_referral_codes_channel') {
+        let resolved = null;
+        const existingCfg = await getReferralCodesChannelConfig();
+
+        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+          const forwardedChat = msg.forward_from_chat;
+          resolved = {
+            ok: true,
+            inviteOnly: false,
+            chatId: String(forwardedChat.id),
+            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
+            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
+            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
+            type: 'channel'
+          };
+        } else {
+          resolved = await resolvePrivateCodesChannelTarget(String(text || '').trim());
+        }
+
+        if (!resolved || !resolved.ok) {
+          await bot.sendMessage(userId, `❌ ${resolved?.message || 'تعذر حفظ قناة الكودات.'}`);
+          return;
+        }
+        if (resolved.type && resolved.type !== 'channel') {
+          await bot.sendMessage(userId, '❌ الهدف يجب أن يكون قناة تيليجرام وليس مجموعة.');
+          return;
+        }
+
+        await saveReferralCodesChannelConfig({
+          enabled: true,
+          chatId: resolved.chatId || existingCfg.chatId || '',
+          link: resolved.link || existingCfg.link || '',
+          title: resolved.title || existingCfg.title || '',
+          username: resolved.username || existingCfg.username || ''
+        });
+        await clearUserState(userId);
+        await bot.sendMessage(
+          userId,
+          resolved.inviteOnly
+            ? (resolved.message || '✅ تم حفظ رابط دعوة قناة الكودات.')
+            : '✅ تم حفظ قناة الكودات وتفعيلها.'
+        );
+        await showReferralCodesChannelAdmin(userId);
         return;
       }
 
@@ -6888,6 +7066,8 @@ sequelize.sync({ alter: true }).then(async () => {
   await refreshChatGPTCookies(false);
 
   await getOrCreateChatGptMerchant();
+  await getPrivateCodesChannelConfig();
+  await getReferralCodesChannelConfig();
   await getBotUsername();
 
   const PORT = process.env.PORT || 3000;
