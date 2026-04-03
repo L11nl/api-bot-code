@@ -1227,16 +1227,8 @@ async function importReferralStockCodesFromPrivateChannel() {
   }
 
   const merchant = await getReferralStockMerchant();
-  const existingRows = await Code.findAll({
-    where: { merchantId: merchant.id, isUsed: false },
-    attributes: ['value']
-  });
-
-  const existingSet = new Set(existingRows.map(row => normalizeChatGptUpCode(row.value)));
   const toCreate = [];
-  const createdSet = new Set();
   const perPostImported = new Map();
-  let skippedDuplicates = 0;
 
   for (const post of cachedPosts) {
     const extracted = Array.isArray(post.extractedCodes) && post.extractedCodes.length ? post.extractedCodes : extractChatGptUpCodes(post.content || '');
@@ -1246,13 +1238,6 @@ async function importReferralStockCodesFromPrivateChannel() {
       const normalized = normalizeChatGptUpCode(code);
       if (!normalized) continue;
 
-      if (existingSet.has(normalized) || createdSet.has(normalized)) {
-        skippedDuplicates += 1;
-        continue;
-      }
-
-      existingSet.add(normalized);
-      createdSet.add(normalized);
       toCreate.push({ value: normalized, merchantId: merchant.id, isUsed: false });
       addedForPost += 1;
     }
@@ -1263,7 +1248,7 @@ async function importReferralStockCodesFromPrivateChannel() {
   }
 
   if (!toCreate.length) {
-    return { success: false, reason: 'no_codes', posts: cachedPosts.length, duplicates: skippedDuplicates };
+    return { success: false, reason: 'no_codes', posts: cachedPosts.length, duplicates: 0 };
   }
 
   await Code.bulkCreate(toCreate);
@@ -5491,7 +5476,11 @@ bot.on('callback_query', async query => {
 
     if (data === 'chatgpt_code') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
-      await bot.sendMessage(userId, `${await getText(userId, 'askQuantity')}\n\n${await getBulkDiscountInfoText(userId)}`);
+      await bot.sendMessage(userId, await getText(userId, 'askQuantity'), {
+        reply_markup: {
+          inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+        }
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -6223,7 +6212,7 @@ bot.on('message', async msg => {
             .filter(Boolean);
         }
 
-        values = [...new Set(values.filter(Boolean))];
+        values = values.filter(Boolean);
         if (!values.length) {
           await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'), {
             reply_markup: getReferralStockInputReplyMarkup()
@@ -6231,14 +6220,7 @@ bot.on('message', async msg => {
           return;
         }
 
-        const existingRows = await Code.findAll({
-          where: { merchantId: merchant.id, isUsed: false, value: { [Op.in]: values } },
-          attributes: ['value']
-        });
-        const existingSet = new Set(existingRows.map(row => normalizeChatGptUpCode(row.value)));
-        const toCreate = values
-          .filter(v => !existingSet.has(v))
-          .map(value => ({ value, merchantId: merchant.id, isUsed: false }));
+        const toCreate = values.map(value => ({ value, merchantId: merchant.id, isUsed: false }));
 
         if (toCreate.length) {
           await Code.bulkCreate(toCreate);
