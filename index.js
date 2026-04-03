@@ -383,7 +383,7 @@ const DEFAULT_TEXTS = {
     enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
     referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
     referralStockImportNoPosts: '❌ No cached posts were found from the codes channel yet. Add the bot as admin in that channel, then publish new posts there or forward old channel posts to the bot once. Telegram bots do not receive old channel history automatically.',
-    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached code-channel posts. Publish a new post in the configured channel, or forward old channel posts to the bot once, then try again.',
+    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached code-channel posts. If those posts were published before the bot was added or before the channel was linked, forward them to the bot once and try again.',
     referralStockImportedFromPrivateChannel: '✅ Imported {added} code(s) from the private channel.\n♻️ Skipped duplicates: {duplicates}\n📚 Cached posts scanned: {posts}',
     referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
     referralStockDuplicatesFound: '🔎 Duplicate codes found: {count}\n\n{codes}',
@@ -1043,6 +1043,38 @@ function extractChatGptUpCodes(textValue) {
   return [...new Set(found)];
 }
 
+
+function getForwardedChannelMeta(msg) {
+  try {
+    if (msg?.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+      return {
+        chatId: String(msg.forward_from_chat.id || ''),
+        title: msg.forward_from_chat.title || '',
+        username: msg.forward_from_chat.username ? `@${msg.forward_from_chat.username}` : '',
+        messageId: Number(msg.forward_from_message_id || msg.message_id || 0),
+        text: String(msg.text || ''),
+        caption: String(msg.caption || '')
+      };
+    }
+
+    const origin = msg?.forward_origin;
+    if (origin && origin.type === 'channel') {
+      const chat = origin.chat || {};
+      return {
+        chatId: String(chat.id || ''),
+        title: chat.title || '',
+        username: chat.username ? `@${chat.username}` : '',
+        messageId: Number(origin.message_id || msg.message_id || 0),
+        text: String(msg.text || ''),
+        caption: String(msg.caption || '')
+      };
+    }
+  } catch (err) {
+    console.error('getForwardedChannelMeta error:', err);
+  }
+  return null;
+}
+
 async function cachePrivateChannelPostMessage(message) {
   try {
     const content = String(message.text || message.caption || '').trim();
@@ -1609,7 +1641,7 @@ async function showReferralCodesChannelAdmin(userId) {
     `العنوان: ${config.title || 'غير محدد'}\n` +
     `الرابط: ${config.link || 'غير محدد'}\n` +
     `المعرف: ${config.username || config.chatId || 'غير محدد'}\n\n` +
-    `ملاحظة: هذه القناة مخصصة فقط لزر 📥 إضافة كودات من القناة الخاصة، وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل.`;
+    `ملاحظة: هذه القناة مخصصة فقط لزر 📥 إضافة كودات من القناة الخاصة، وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل. إذا كانت المنشورات قديمة، أعد توجيهها إلى البوت مرة واحدة ليتم حفظها.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -5457,25 +5489,26 @@ bot.on('message', async msg => {
     }
     let state = safeParseState(user.state);
 
-    if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+    const forwardedMeta = getForwardedChannelMeta(msg);
+    if (forwardedMeta) {
       const forwardedPayload = {
-        chat: { 
-          id: msg.forward_from_chat.id,
-          title: msg.forward_from_chat.title,
-          username: msg.forward_from_chat.username
+        chat: {
+          id: forwardedMeta.chatId,
+          title: forwardedMeta.title,
+          username: forwardedMeta.username ? forwardedMeta.username.replace(/^@/, '') : ''
         },
-        message_id: msg.forward_from_message_id || msg.message_id,
-        text: msg.text || '',
-        caption: msg.caption || ''
+        message_id: forwardedMeta.messageId || msg.message_id,
+        text: forwardedMeta.text || '',
+        caption: forwardedMeta.caption || ''
       };
 
       const privateCfg = await getPrivateCodesChannelConfig();
-      if (!privateCfg.chatId || String(msg.forward_from_chat.id) === String(privateCfg.chatId)) {
+      if (!privateCfg.chatId || String(forwardedMeta.chatId) === String(privateCfg.chatId)) {
         await cachePrivateChannelPostMessage(forwardedPayload);
       }
 
       const referralCfg = await getReferralCodesChannelConfig();
-      if (!referralCfg.chatId || String(msg.forward_from_chat.id) === String(referralCfg.chatId)) {
+      if (!referralCfg.chatId || String(forwardedMeta.chatId) === String(referralCfg.chatId)) {
         await cacheReferralCodesChannelPostMessage(forwardedPayload);
       }
     }
@@ -5525,15 +5558,15 @@ bot.on('message', async msg => {
         let resolved = null;
         const existingCfg = await getPrivateCodesChannelConfig();
 
-        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
-          const forwardedChat = msg.forward_from_chat;
+        const forwardedMeta = getForwardedChannelMeta(msg);
+        if (forwardedMeta) {
           resolved = {
             ok: true,
             inviteOnly: false,
-            chatId: String(forwardedChat.id),
-            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
-            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
-            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
+            chatId: String(forwardedMeta.chatId),
+            username: forwardedMeta.username || '',
+            title: forwardedMeta.title || forwardedMeta.username || String(forwardedMeta.chatId),
+            link: existingCfg.link || (forwardedMeta.username ? `https://t.me/${String(forwardedMeta.username).replace(/^@/, '')}` : ''),
             type: 'channel'
           };
         } else {
@@ -5572,26 +5605,26 @@ bot.on('message', async msg => {
         const existingCfg = await getReferralCodesChannelConfig();
         let forwardedPayload = null;
 
-        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
-          const forwardedChat = msg.forward_from_chat;
+        const forwardedMeta = getForwardedChannelMeta(msg);
+        if (forwardedMeta) {
           resolved = {
             ok: true,
             inviteOnly: false,
-            chatId: String(forwardedChat.id),
-            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
-            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
-            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
+            chatId: String(forwardedMeta.chatId),
+            username: forwardedMeta.username || '',
+            title: forwardedMeta.title || forwardedMeta.username || String(forwardedMeta.chatId),
+            link: existingCfg.link || (forwardedMeta.username ? `https://t.me/${String(forwardedMeta.username).replace(/^@/, '')}` : ''),
             type: 'channel'
           };
           forwardedPayload = {
             chat: {
-              id: forwardedChat.id,
-              title: forwardedChat.title,
-              username: forwardedChat.username
+              id: forwardedMeta.chatId,
+              title: forwardedMeta.title,
+              username: String(forwardedMeta.username || '').replace(/^@/, '')
             },
-            message_id: msg.forward_from_message_id || msg.message_id,
-            text: msg.text || '',
-            caption: msg.caption || ''
+            message_id: forwardedMeta.messageId || msg.message_id,
+            text: forwardedMeta.text || '',
+            caption: forwardedMeta.caption || ''
           };
         } else {
           resolved = await resolvePrivateCodesChannelTarget(String(text || '').trim());
