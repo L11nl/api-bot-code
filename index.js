@@ -182,6 +182,19 @@ const Captcha = sequelize.define('Captcha', {
   expiresAt: { type: DataTypes.DATE, allowNull: false }
 });
 
+const PrivateChannelCodePostCache = sequelize.define('PrivateChannelCodePostCache', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  channelChatId: { type: DataTypes.STRING, allowNull: false },
+  messageId: { type: DataTypes.BIGINT, allowNull: false },
+  content: { type: DataTypes.TEXT, allowNull: true },
+  isCaption: { type: DataTypes.BOOLEAN, defaultValue: false },
+  extractedCodes: { type: DataTypes.JSONB, defaultValue: [] },
+  importedAt: { type: DataTypes.DATE, allowNull: true },
+  importedCount: { type: DataTypes.INTEGER, defaultValue: 0 }
+}, {
+  indexes: [{ unique: true, fields: ['channelChatId', 'messageId'] }]
+});
+
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant);
 BalanceTransaction.belongsTo(User, { foreignKey: 'userId' });
@@ -363,6 +376,13 @@ const DEFAULT_TEXTS = {
     addReferralStockCodes: '➕ Add Referral Stock Codes',
     viewReferralStockCount: '📦 View Referral Stock',
     searchReferralStockDuplicates: '🔎 Search Duplicate Codes',
+    importReferralStockFromPrivateChannel: '📥 Add Codes From Private Channel',
+    searchDeleteReferralStockCodes: '🔍 Search Codes And Delete',
+    enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
+    referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
+    referralStockImportNoPosts: '❌ No cached posts were found from the private channel yet. Add the bot as admin in the channel, then publish or forward channel posts first.',
+    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached private-channel posts.',
+    referralStockImportedFromPrivateChannel: '✅ Imported {added} code(s) from the private channel.\n♻️ Skipped duplicates: {duplicates}\n📚 Cached posts scanned: {posts}',
     referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
     referralStockDuplicatesFound: '🔎 Duplicate codes found: {count}\n\n{codes}',
     deleteReferralStockDuplicates: '🗑️ Delete Duplicate Codes',
@@ -673,6 +693,13 @@ const DEFAULT_TEXTS = {
     addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
     viewReferralStockCount: '📦 عرض مخزون الإحالات',
     searchReferralStockDuplicates: '🔎 البحث عن الكودات المكررة',
+    importReferralStockFromPrivateChannel: '📥 إضافة كودات من القناة الخاصة',
+    searchDeleteReferralStockCodes: '🔍 البحث عن الكودات وحذفها',
+    enterSearchDeleteReferralStockCodes: 'أرسل الكودات التي تريد البحث عنها وحذفها من مخزون الإحالات.',
+    referralStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n\n{details}',
+    referralStockImportNoPosts: '❌ لا توجد منشورات محفوظة من القناة الخاصة حتى الآن. أضف البوت مشرفًا في القناة ثم انشر أو أعد توجيه المنشورات أولاً.',
+    referralStockImportNoCodes: '❌ لم يتم العثور على روابط أكواد ChatGPT صحيحة داخل منشورات القناة الخاصة المحفوظة.',
+    referralStockImportedFromPrivateChannel: '✅ تمت إضافة {added} كود من القناة الخاصة.\n♻️ تم تجاهل المكرر: {duplicates}\n📚 عدد المنشورات المفحوصة: {posts}',
     referralStockDuplicatesNone: '✅ لا توجد كودات مكررة في مخزون الإحالات.',
     referralStockDuplicatesFound: '🔎 تم العثور على كودات مكررة: {count}\n\n{codes}',
     deleteReferralStockDuplicates: '🗑️ حذف الكودات المكررة',
@@ -990,6 +1017,194 @@ async function deleteReferralStockDuplicateRows() {
   const ids = duplicates.map(row => row.id);
   await Code.destroy({ where: { id: ids } });
   return { count: ids.length };
+}
+
+
+
+function normalizeChatGptUpCode(rawValue) {
+  const match = String(rawValue || '').match(/https?:\/\/(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/i);
+  if (!match) return String(rawValue || '').trim();
+  return `http://www.chatgpt.com/up/${match[1]}`;
+}
+
+function extractChatGptUpCodes(textValue) {
+  const text = String(textValue || '');
+  const regex = /https?:\/\/(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/ig;
+  const found = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    found.push(`http://www.chatgpt.com/up/${match[1]}`);
+  }
+  return [...new Set(found)];
+}
+
+async function cachePrivateChannelPostMessage(message) {
+  try {
+    const config = await getPrivateCodesChannelConfig();
+    if (!config.chatId) return false;
+    if (String(message?.chat?.id || '') !== String(config.chatId)) return false;
+
+    const content = String(message.text || message.caption || '').trim();
+    if (!content) return false;
+
+    const extractedCodes = extractChatGptUpCodes(content);
+    await PrivateChannelCodePostCache.upsert({
+      channelChatId: String(message.chat.id),
+      messageId: Number(message.message_id),
+      content,
+      isCaption: Boolean(message.caption && !message.text),
+      extractedCodes
+    });
+    return true;
+  } catch (err) {
+    console.error('cachePrivateChannelPostMessage error:', err);
+    return false;
+  }
+}
+
+async function markPrivateChannelPostImported(chatId, messageId, originalContent, isCaption = false) {
+  const note = '✅ تم نقله الى المخزون';
+  const content = String(originalContent || '').trim();
+  if (!content || content.includes(note)) return false;
+
+  const updated = `${content}\n\n${note}`;
+  try {
+    if (isCaption) {
+      await bot.editMessageCaption(updated, { chat_id: chatId, message_id: messageId });
+    } else {
+      await bot.editMessageText(updated, { chat_id: chatId, message_id: messageId });
+    }
+    return true;
+  } catch (err) {
+    console.error('markPrivateChannelPostImported error:', err.response?.body || err.message);
+    return false;
+  }
+}
+
+async function importReferralStockCodesFromPrivateChannel() {
+  const config = await getPrivateCodesChannelConfig();
+  if (!config.enabled || !config.chatId) {
+    return { success: false, reason: 'channel_not_configured' };
+  }
+
+  const cachedPosts = await PrivateChannelCodePostCache.findAll({
+    where: { channelChatId: String(config.chatId) },
+    order: [['messageId', 'DESC']],
+    limit: 500
+  });
+
+  if (!cachedPosts.length) {
+    return { success: false, reason: 'no_posts' };
+  }
+
+  const merchant = await getReferralStockMerchant();
+  const existingRows = await Code.findAll({
+    where: { merchantId: merchant.id },
+    attributes: ['value']
+  });
+
+  const existingSet = new Set(existingRows.map(row => normalizeChatGptUpCode(row.value)));
+  const toCreate = [];
+  const createdSet = new Set();
+  const perPostImported = new Map();
+  let skippedDuplicates = 0;
+
+  for (const post of cachedPosts) {
+    const extracted = extractChatGptUpCodes(post.content || '');
+    let addedForPost = 0;
+
+    for (const code of extracted) {
+      const normalized = normalizeChatGptUpCode(code);
+      if (!normalized) continue;
+
+      if (existingSet.has(normalized) || createdSet.has(normalized)) {
+        skippedDuplicates += 1;
+        continue;
+      }
+
+      existingSet.add(normalized);
+      createdSet.add(normalized);
+      toCreate.push({ value: normalized, merchantId: merchant.id, isUsed: false });
+      addedForPost += 1;
+    }
+
+    if (addedForPost > 0) {
+      perPostImported.set(post.id, addedForPost);
+    }
+  }
+
+  if (!toCreate.length) {
+    return { success: false, reason: 'no_codes', posts: cachedPosts.length, duplicates: skippedDuplicates };
+  }
+
+  await Code.bulkCreate(toCreate);
+
+  for (const post of cachedPosts) {
+    const importedCount = perPostImported.get(post.id) || 0;
+    if (importedCount > 0) {
+      await PrivateChannelCodePostCache.update(
+        { importedAt: new Date(), importedCount: Number(post.importedCount || 0) + importedCount },
+        { where: { id: post.id } }
+      );
+      await markPrivateChannelPostImported(post.channelChatId, post.messageId, post.content, post.isCaption);
+    }
+  }
+
+  return {
+    success: true,
+    added: toCreate.length,
+    duplicates: skippedDuplicates,
+    posts: cachedPosts.length
+  };
+}
+
+async function deleteReferralStockCodesByInput(inputText) {
+  const merchant = await getReferralStockMerchant();
+  const codeLinks = extractChatGptUpCodes(inputText || '');
+  let values = codeLinks;
+
+  if (!values.length) {
+    values = String(inputText || '')
+      .split(/\r?\n+/)
+      .map(v => v.trim())
+      .filter(Boolean)
+      .map(normalizeChatGptUpCode);
+  }
+
+  values = [...new Set(values.filter(Boolean))];
+  if (!values.length) {
+    return { deleted: 0, missing: 0, details: '-' };
+  }
+
+  const rows = await Code.findAll({
+    where: {
+      merchantId: merchant.id,
+      value: { [Op.in]: values }
+    }
+  });
+
+  const foundSet = new Set(rows.map(row => normalizeChatGptUpCode(row.value)));
+  const missingValues = values.filter(v => !foundSet.has(v));
+
+  if (rows.length) {
+    await Code.destroy({ where: { id: rows.map(row => row.id) } });
+  }
+
+  let details = '';
+  if (missingValues.length) {
+    details = missingValues.slice(0, 30).join('\n');
+    if (missingValues.length > 30) {
+      details += `\n... +${missingValues.length - 30} more`;
+    }
+  } else {
+    details = '-';
+  }
+
+  return {
+    deleted: rows.length,
+    missing: missingValues.length,
+    details
+  };
 }
 
 
@@ -3146,6 +3361,8 @@ async function showReferralStockSettingsAdmin(userId) {
       [{ text: await getText(userId, 'addReferralStockCodes'), callback_data: 'admin_add_referral_stock_codes' }],
       [{ text: await getText(userId, 'viewReferralStockCount'), callback_data: 'admin_view_referral_stock_count' }],
       [{ text: await getText(userId, 'searchReferralStockDuplicates'), callback_data: 'admin_search_referral_stock_duplicates' }],
+      [{ text: await getText(userId, 'importReferralStockFromPrivateChannel'), callback_data: 'admin_import_referral_stock_from_private_channel' }],
+      [{ text: await getText(userId, 'searchDeleteReferralStockCodes'), callback_data: 'admin_prompt_delete_referral_stock_codes' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_referral_settings' }]
     ]
   };
@@ -4623,6 +4840,35 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_import_referral_stock_from_private_channel' && isAdmin(userId)) {
+      const result = await importReferralStockCodesFromPrivateChannel();
+      if (!result.success) {
+        if (result.reason === 'channel_not_configured') {
+          await bot.sendMessage(userId, '❌ القناة الخاصة غير محفوظة أو غير مفعلة.');
+        } else if (result.reason === 'no_posts') {
+          await bot.sendMessage(userId, await getText(userId, 'referralStockImportNoPosts'));
+        } else {
+          await bot.sendMessage(userId, await getText(userId, 'referralStockImportNoCodes'));
+        }
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'referralStockImportedFromPrivateChannel', {
+          added: result.added,
+          duplicates: result.duplicates,
+          posts: result.posts
+        }));
+      }
+      await showReferralStockSettingsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_prompt_delete_referral_stock_codes' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'delete_referral_stock_codes_by_input' });
+      await bot.sendMessage(userId, await getText(userId, 'enterSearchDeleteReferralStockCodes'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_toggle_referrals' && isAdmin(userId)) {
       const current = await getReferralEnabled();
       await Setting.upsert({ key: 'referral_enabled', lang: 'global', value: String(!current) });
@@ -5039,6 +5285,14 @@ bot.on('callback_query', async query => {
   }
 });
 
+bot.on('channel_post', async msg => {
+  try {
+    await cachePrivateChannelPostMessage(msg);
+  } catch (err) {
+    console.error('channel_post cache error:', err);
+  }
+});
+
 bot.on('message', async msg => {
   const userId = msg.chat.id;
   const text = msg.text;
@@ -5053,6 +5307,18 @@ bot.on('message', async msg => {
       return;
     }
     let state = safeParseState(user.state);
+
+    if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+      const config = await getPrivateCodesChannelConfig();
+      if (config.chatId && String(msg.forward_from_chat.id) === String(config.chatId)) {
+        await cachePrivateChannelPostMessage({
+          chat: { id: msg.forward_from_chat.id },
+          message_id: msg.forward_from_message_id || msg.message_id,
+          text: msg.text || '',
+          caption: msg.caption || ''
+        });
+      }
+    }
 
     const verificationRequired = await isVerificationRequiredForUser(userId);
 
