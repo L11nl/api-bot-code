@@ -382,8 +382,8 @@ const DEFAULT_TEXTS = {
     searchDeleteReferralStockCodes: '🔍 Search Codes And Delete',
     enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
     referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
-    referralStockImportNoPosts: '❌ No cached posts were found from the codes channel yet. Add the bot as admin in that channel, then publish or forward channel posts first.',
-    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached private-channel posts.',
+    referralStockImportNoPosts: '❌ No cached posts were found from the codes channel yet. Add the bot as admin in that channel, then publish new posts there or forward old channel posts to the bot once. Telegram bots do not receive old channel history automatically.',
+    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached code-channel posts. Publish a new post in the configured channel, or forward old channel posts to the bot once, then try again.',
     referralStockImportedFromPrivateChannel: '✅ Imported {added} code(s) from the private channel.\n♻️ Skipped duplicates: {duplicates}\n📚 Cached posts scanned: {posts}',
     referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
     referralStockDuplicatesFound: '🔎 Duplicate codes found: {count}\n\n{codes}',
@@ -702,7 +702,7 @@ const DEFAULT_TEXTS = {
     enterSearchDeleteReferralStockCodes: 'أرسل الكودات التي تريد البحث عنها وحذفها من مخزون الإحالات.',
     referralStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n\n{details}',
     referralStockImportNoPosts: '❌ لا توجد منشورات محفوظة من القناة الخاصة حتى الآن. أضف البوت مشرفًا في القناة ثم انشر أو أعد توجيه المنشورات أولاً.',
-    referralStockImportNoCodes: '❌ لم يتم العثور على روابط أكواد ChatGPT صحيحة داخل منشورات القناة الخاصة المحفوظة.',
+    referralStockImportNoCodes: '❌ لم يتم العثور على روابط أكواد ChatGPT صحيحة داخل منشورات قناة الكودات المحفوظة. انشر منشورًا جديدًا في القناة أو أعد توجيه المنشورات القديمة إلى البوت مرة واحدة ثم أعد المحاولة.',
     referralStockImportedFromPrivateChannel: '✅ تمت إضافة {added} كود من القناة الخاصة.\n♻️ تم تجاهل المكرر: {duplicates}\n📚 عدد المنشورات المفحوصة: {posts}',
     referralStockDuplicatesNone: '✅ لا توجد كودات مكررة في مخزون الإحالات.',
     referralStockDuplicatesFound: '🔎 تم العثور على كودات مكررة: {count}\n\n{codes}',
@@ -5433,6 +5433,15 @@ bot.on('channel_post', async msg => {
   }
 });
 
+bot.on('edited_channel_post', async msg => {
+  try {
+    await cachePrivateChannelPostMessage(msg);
+    await cacheReferralCodesChannelPostMessage(msg);
+  } catch (err) {
+    console.error('edited_channel_post cache error:', err);
+  }
+});
+
 bot.on('message', async msg => {
   const userId = msg.chat.id;
   const text = msg.text;
@@ -5561,6 +5570,7 @@ bot.on('message', async msg => {
       if (state.action === 'set_referral_codes_channel') {
         let resolved = null;
         const existingCfg = await getReferralCodesChannelConfig();
+        let forwardedPayload = null;
 
         if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
           const forwardedChat = msg.forward_from_chat;
@@ -5572,6 +5582,16 @@ bot.on('message', async msg => {
             title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
             link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
             type: 'channel'
+          };
+          forwardedPayload = {
+            chat: {
+              id: forwardedChat.id,
+              title: forwardedChat.title,
+              username: forwardedChat.username
+            },
+            message_id: msg.forward_from_message_id || msg.message_id,
+            text: msg.text || '',
+            caption: msg.caption || ''
           };
         } else {
           resolved = await resolvePrivateCodesChannelTarget(String(text || '').trim());
@@ -5593,12 +5613,28 @@ bot.on('message', async msg => {
           title: resolved.title || existingCfg.title || '',
           username: resolved.username || existingCfg.username || ''
         });
+
+        let importedHint = '';
+        if (forwardedPayload) {
+          const cached = await cacheReferralCodesChannelPostMessage(forwardedPayload);
+          if (cached) {
+            const extractedNow = extractChatGptUpCodes((forwardedPayload.text || forwardedPayload.caption || ''));
+            importedHint = `
+
+✅ تم أيضًا حفظ المنشور الذي قمت بإعادة توجيهه للقناة، وعدد الأكواد التي تم التقاطها منه: ${extractedNow.length}`;
+          } else {
+            importedHint = `
+
+ℹ️ تم حفظ القناة. إذا أردت استيراد الأكواد القديمة، أعد توجيه منشورات القناة التي تحتوي على الأكواد إلى البوت مرة واحدة ثم اضغط زر الاستيراد.`;
+          }
+        }
+
         await clearUserState(userId);
         await bot.sendMessage(
           userId,
-          resolved.inviteOnly
+          (resolved.inviteOnly
             ? (resolved.message || '✅ تم حفظ رابط دعوة قناة الكودات.')
-            : '✅ تم حفظ قناة الكودات وتفعيلها.'
+            : '✅ تم حفظ قناة الكودات وتفعيلها.') + importedHint
         );
         await showReferralCodesChannelAdmin(userId);
         return;
