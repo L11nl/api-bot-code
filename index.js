@@ -666,10 +666,12 @@ const DEFAULT_TEXTS = {
     referralsTurnedOn: '✅ تم تفعيل الإحالات.',
     referralsTurnedOff: '⛔ تم إيقاف الإحالات.',
     addReferralStockCodes: '➕ إضافة أكواد لمخزون الإحالات',
-    viewReferralStockCount: '📦 عرض مخزون الإحالات',
+    viewReferralStockCount: '📦 عرض مخزون الإحالات
+🔍 البحث عن الكودات وحذفها',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
     enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
-    referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.',
+    referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.
+📊 عدد الأكواد المضافة: {count}',
     referralStockNotEnough: '❌ لا يوجد عدد كافٍ في مخزون ChatGPT الإحالات لهذا الطلب.',
     referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
     referralClaimAskCount: 'أرسل عدد كودات مخزون الإحالات التي تريد استلامها. المتاح حسب نقاطك: {maxCodes}.',
