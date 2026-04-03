@@ -1228,7 +1228,7 @@ async function importReferralStockCodesFromPrivateChannel() {
 
   const merchant = await getReferralStockMerchant();
   const existingRows = await Code.findAll({
-    where: { merchantId: merchant.id },
+    where: { merchantId: merchant.id, isUsed: false },
     attributes: ['value']
   });
 
@@ -6232,7 +6232,7 @@ bot.on('message', async msg => {
         }
 
         const existingRows = await Code.findAll({
-          where: { merchantId: merchant.id, value: { [Op.in]: values } },
+          where: { merchantId: merchant.id, isUsed: false, value: { [Op.in]: values } },
           attributes: ['value']
         });
         const existingSet = new Set(existingRows.map(row => normalizeChatGptUpCode(row.value)));
