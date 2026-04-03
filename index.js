@@ -383,7 +383,7 @@ const DEFAULT_TEXTS = {
     enterSearchDeleteReferralStockCodes: 'Send the codes you want to search for and delete from referral stock.',
     referralStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n\n{details}',
     referralStockImportNoPosts: '❌ No cached posts were found from the codes channel yet. Add the bot as admin in that channel, then publish new posts there or forward old channel posts to the bot once. Telegram bots do not receive old channel history automatically.',
-    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached code-channel posts. If those posts were published before the bot was added or before the channel was linked, forward them to the bot once and try again.',
+    referralStockImportNoCodes: '❌ No valid ChatGPT code links were found in cached code-channel posts. Publish a new post in the configured channel, or forward old channel posts to the bot once, then try again.',
     referralStockImportedFromPrivateChannel: '✅ Imported {added} code(s) from the private channel.\n♻️ Skipped duplicates: {duplicates}\n📚 Cached posts scanned: {posts}',
     referralStockDuplicatesNone: '✅ No duplicate codes were found in referral stock.',
     referralStockDuplicatesFound: '🔎 Duplicate codes found: {count}\n\n{codes}',
@@ -1027,14 +1027,14 @@ async function deleteReferralStockDuplicateRows() {
 
 function normalizeChatGptUpCode(rawValue) {
   const cleaned = String(rawValue || '').trim();
-  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/i);
+  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/i);
   if (!match) return '';
-  return `http://www.chatgpt.com/up/${match[1].toUpperCase()}`;
+  return `http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`;
 }
 
 function extractChatGptUpCodes(textValue) {
   const text = String(textValue || '');
-  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]+)/ig;
+  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/ig;
   const found = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
@@ -1043,36 +1043,76 @@ function extractChatGptUpCodes(textValue) {
   return [...new Set(found)];
 }
 
+function getReferralStockInputReplyMarkup() {
+  return {
+    inline_keyboard: [
+      [{ text: 'تــــــم', callback_data: 'admin_finish_add_referral_stock_codes' }]
+    ]
+  };
+}
 
-function getForwardedChannelMeta(msg) {
-  try {
-    if (msg?.forward_from_chat && msg.forward_from_chat.type === 'channel') {
-      return {
-        chatId: String(msg.forward_from_chat.id || ''),
-        title: msg.forward_from_chat.title || '',
-        username: msg.forward_from_chat.username ? `@${msg.forward_from_chat.username}` : '',
-        messageId: Number(msg.forward_from_message_id || msg.message_id || 0),
-        text: String(msg.text || ''),
-        caption: String(msg.caption || '')
-      };
+async function takeExactReferralStockCodes(userId, quantity) {
+  const count = Math.max(0, parseInt(quantity, 10) || 0);
+  if (count <= 0) return { codes: [], remainingStock: 0 };
+
+  const merchant = await getReferralStockMerchant();
+  const rows = await Code.findAll({
+    where: { merchantId: merchant.id, isUsed: false },
+    order: [['id', 'ASC']],
+    limit: Math.max(count * 5, 200)
+  });
+
+  const selectedCodes = [];
+  const rowIdsToConsume = [];
+  const leftoverCodes = [];
+
+  for (const row of rows) {
+    if (selectedCodes.length >= count) break;
+
+    let extracted = extractChatGptUpCodes(`${String(row.value || '')}\n${String(row.extra || '')}`);
+    if (!extracted.length) {
+      const single = normalizeChatGptUpCode(row.value);
+      if (single) extracted = [single];
     }
 
-    const origin = msg?.forward_origin;
-    if (origin && origin.type === 'channel') {
-      const chat = origin.chat || {};
-      return {
-        chatId: String(chat.id || ''),
-        title: chat.title || '',
-        username: chat.username ? `@${chat.username}` : '',
-        messageId: Number(origin.message_id || msg.message_id || 0),
-        text: String(msg.text || ''),
-        caption: String(msg.caption || '')
-      };
-    }
-  } catch (err) {
-    console.error('getForwardedChannelMeta error:', err);
+    if (!extracted.length) continue;
+
+    rowIdsToConsume.push(row.id);
+
+    const needed = count - selectedCodes.length;
+    selectedCodes.push(...extracted.slice(0, needed));
+    leftoverCodes.push(...extracted.slice(needed));
   }
-  return null;
+
+  if (selectedCodes.length < count) {
+    return { codes: [], remainingStock: await Code.count({ where: { merchantId: merchant.id, isUsed: false } }) };
+  }
+
+  const t = await sequelize.transaction();
+  try {
+    await Code.update(
+      { isUsed: true, usedBy: userId, soldAt: new Date() },
+      { where: { id: rowIdsToConsume }, transaction: t }
+    );
+
+    if (leftoverCodes.length) {
+      const dedupLeftovers = [...new Set(leftoverCodes.map(normalizeChatGptUpCode).filter(Boolean))];
+      if (dedupLeftovers.length) {
+        await Code.bulkCreate(
+          dedupLeftovers.map(value => ({ value, merchantId: merchant.id, isUsed: false })),
+          { transaction: t }
+        );
+      }
+    }
+
+    await t.commit();
+    const remainingStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+    return { codes: selectedCodes, remainingStock };
+  } catch (err) {
+    await t.rollback();
+    console.error('takeExactReferralStockCodes error:', err);
+    return { codes: [], remainingStock: 0 };
+  }
 }
 
 async function cachePrivateChannelPostMessage(message) {
@@ -1346,29 +1386,19 @@ async function claimReferralStockCodes(userId, requestedCodes) {
   }
 
   const claimedBefore = Number(user.referralStockClaimedCodes || 0);
-  const merchant = await getReferralStockMerchant();
-  const codes = await Code.findAll({
-    where: { merchantId: merchant.id, isUsed: false },
-    limit: count,
-    order: [['id', 'ASC']]
-  });
-
-  if (codes.length < count) {
+  const takeResult = await takeExactReferralStockCodes(userId, count);
+  if (!takeResult.codes.length || takeResult.codes.length < count) {
     return { success: false, reason: 'not_enough_stock' };
   }
 
   const t = await sequelize.transaction();
   try {
-    await Code.update(
-      { isUsed: true, usedBy: userId, soldAt: new Date() },
-      { where: { id: codes.map(c => c.id) }, transaction: t }
-    );
     user.referralPoints = Number(user.referralPoints || 0) - (count * requiredPoints);
     user.referralStockClaimedCodes = claimedBefore + count;
     await user.save({ transaction: t });
     await t.commit();
 
-    const codeText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
+    const codeText = takeResult.codes.join('\n\n');
     return {
       success: true,
       codes: codeText,
@@ -1379,7 +1409,8 @@ async function claimReferralStockCodes(userId, requestedCodes) {
       points: Number(user.referralPoints || 0),
       adminGranted: Number(user.adminGrantedPoints || 0),
       referralCount,
-      milestoneRewards: Number(user.referralMilestoneGrantedPoints || 0)
+      milestoneRewards: Number(user.referralMilestoneGrantedPoints || 0),
+      remainingStock: takeResult.remainingStock
     };
   } catch (err) {
     await t.rollback();
@@ -1391,29 +1422,8 @@ async function claimReferralStockCodes(userId, requestedCodes) {
 async function takeFallbackChatGptCodesFromReferralStock(userId, quantity) {
   const count = Math.max(0, parseInt(quantity, 10) || 0);
   if (count <= 0) return [];
-
-  const merchant = await getReferralStockMerchant();
-  const codes = await Code.findAll({
-    where: { merchantId: merchant.id, isUsed: false },
-    limit: count,
-    order: [['id', 'ASC']]
-  });
-
-  if (!codes.length) return [];
-
-  const t = await sequelize.transaction();
-  try {
-    await Code.update(
-      { isUsed: true, usedBy: userId, soldAt: new Date() },
-      { where: { id: codes.map(c => c.id) }, transaction: t }
-    );
-    await t.commit();
-    return codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
-  } catch (err) {
-    await t.rollback();
-    console.error('takeFallbackChatGptCodesFromReferralStock error:', err);
-    return [];
-  }
+  const result = await takeExactReferralStockCodes(userId, count);
+  return result.codes || [];
 }
 
 async function getBulkDiscountThreshold() {
@@ -1641,7 +1651,7 @@ async function showReferralCodesChannelAdmin(userId) {
     `العنوان: ${config.title || 'غير محدد'}\n` +
     `الرابط: ${config.link || 'غير محدد'}\n` +
     `المعرف: ${config.username || config.chatId || 'غير محدد'}\n\n` +
-    `ملاحظة: هذه القناة مخصصة فقط لزر 📥 إضافة كودات من القناة الخاصة، وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل. إذا كانت المنشورات قديمة، أعد توجيهها إلى البوت مرة واحدة ليتم حفظها.`;
+    `ملاحظة: هذه القناة مخصصة فقط لزر 📥 إضافة كودات من القناة الخاصة، وسيتم تجاهل أي منشور لا يحتوي على روابط الأكواد المطلوبة. المنشور الواحد يمكن أن يحتوي على عدة أكواد، وسيتم استخراج كل كود بشكل مستقل.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -4967,7 +4977,17 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_add_referral_stock_codes' && isAdmin(userId)) {
       await setUserState(userId, { action: 'add_referral_stock_codes' });
-      await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
+      await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'), {
+        reply_markup: getReferralStockInputReplyMarkup()
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_finish_add_referral_stock_codes' && isAdmin(userId)) {
+      await clearUserState(userId);
+      await bot.sendMessage(userId, '✅ تم إغلاق وضع إضافة أكواد مخزون الإحالات.');
+      await showReferralStockSettingsAdmin(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5489,26 +5509,25 @@ bot.on('message', async msg => {
     }
     let state = safeParseState(user.state);
 
-    const forwardedMeta = getForwardedChannelMeta(msg);
-    if (forwardedMeta) {
+    if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
       const forwardedPayload = {
-        chat: {
-          id: forwardedMeta.chatId,
-          title: forwardedMeta.title,
-          username: forwardedMeta.username ? forwardedMeta.username.replace(/^@/, '') : ''
+        chat: { 
+          id: msg.forward_from_chat.id,
+          title: msg.forward_from_chat.title,
+          username: msg.forward_from_chat.username
         },
-        message_id: forwardedMeta.messageId || msg.message_id,
-        text: forwardedMeta.text || '',
-        caption: forwardedMeta.caption || ''
+        message_id: msg.forward_from_message_id || msg.message_id,
+        text: msg.text || '',
+        caption: msg.caption || ''
       };
 
       const privateCfg = await getPrivateCodesChannelConfig();
-      if (!privateCfg.chatId || String(forwardedMeta.chatId) === String(privateCfg.chatId)) {
+      if (!privateCfg.chatId || String(msg.forward_from_chat.id) === String(privateCfg.chatId)) {
         await cachePrivateChannelPostMessage(forwardedPayload);
       }
 
       const referralCfg = await getReferralCodesChannelConfig();
-      if (!referralCfg.chatId || String(forwardedMeta.chatId) === String(referralCfg.chatId)) {
+      if (!referralCfg.chatId || String(msg.forward_from_chat.id) === String(referralCfg.chatId)) {
         await cacheReferralCodesChannelPostMessage(forwardedPayload);
       }
     }
@@ -5558,15 +5577,15 @@ bot.on('message', async msg => {
         let resolved = null;
         const existingCfg = await getPrivateCodesChannelConfig();
 
-        const forwardedMeta = getForwardedChannelMeta(msg);
-        if (forwardedMeta) {
+        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+          const forwardedChat = msg.forward_from_chat;
           resolved = {
             ok: true,
             inviteOnly: false,
-            chatId: String(forwardedMeta.chatId),
-            username: forwardedMeta.username || '',
-            title: forwardedMeta.title || forwardedMeta.username || String(forwardedMeta.chatId),
-            link: existingCfg.link || (forwardedMeta.username ? `https://t.me/${String(forwardedMeta.username).replace(/^@/, '')}` : ''),
+            chatId: String(forwardedChat.id),
+            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
+            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
+            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
             type: 'channel'
           };
         } else {
@@ -5605,26 +5624,26 @@ bot.on('message', async msg => {
         const existingCfg = await getReferralCodesChannelConfig();
         let forwardedPayload = null;
 
-        const forwardedMeta = getForwardedChannelMeta(msg);
-        if (forwardedMeta) {
+        if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+          const forwardedChat = msg.forward_from_chat;
           resolved = {
             ok: true,
             inviteOnly: false,
-            chatId: String(forwardedMeta.chatId),
-            username: forwardedMeta.username || '',
-            title: forwardedMeta.title || forwardedMeta.username || String(forwardedMeta.chatId),
-            link: existingCfg.link || (forwardedMeta.username ? `https://t.me/${String(forwardedMeta.username).replace(/^@/, '')}` : ''),
+            chatId: String(forwardedChat.id),
+            username: forwardedChat.username ? `@${forwardedChat.username}` : '',
+            title: forwardedChat.title || forwardedChat.username || String(forwardedChat.id),
+            link: existingCfg.link || (forwardedChat.username ? `https://t.me/${forwardedChat.username}` : ''),
             type: 'channel'
           };
           forwardedPayload = {
             chat: {
-              id: forwardedMeta.chatId,
-              title: forwardedMeta.title,
-              username: String(forwardedMeta.username || '').replace(/^@/, '')
+              id: forwardedChat.id,
+              title: forwardedChat.title,
+              username: forwardedChat.username
             },
-            message_id: forwardedMeta.messageId || msg.message_id,
-            text: forwardedMeta.text || '',
-            caption: forwardedMeta.caption || ''
+            message_id: msg.forward_from_message_id || msg.message_id,
+            text: msg.text || '',
+            caption: msg.caption || ''
           };
         } else {
           resolved = await resolvePrivateCodesChannelTarget(String(text || '').trim());
@@ -6167,17 +6186,21 @@ bot.on('message', async msg => {
 
       if (state.action === 'add_referral_stock_codes') {
         const merchant = await getReferralStockMerchant();
-        let values = extractChatGptUpCodes(text || '');
+        const rawInput = String(text || msg.caption || '');
+        let values = extractChatGptUpCodes(rawInput);
+
         if (!values.length) {
-          values = String(text || '')
+          values = String(rawInput || '')
             .split(/\r?\n|\s+/)
             .map(v => normalizeChatGptUpCode(v))
             .filter(Boolean);
         }
 
-        values = [...new Set(values)];
+        values = [...new Set(values.filter(Boolean))];
         if (!values.length) {
-          await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'));
+          await bot.sendMessage(userId, await getText(userId, 'enterReferralStockCodes'), {
+            reply_markup: getReferralStockInputReplyMarkup()
+          });
           return;
         }
 
@@ -6194,9 +6217,12 @@ bot.on('message', async msg => {
           await Code.bulkCreate(toCreate);
         }
 
-        await bot.sendMessage(userId, await getText(userId, 'referralStockCodesAdded', { count: toCreate.length }));
-        await clearUserState(userId);
-        await showReferralStockSettingsAdmin(userId);
+        const totalCount = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+        await bot.sendMessage(
+          userId,
+          `${await getText(userId, 'referralStockCodesAdded', { count: toCreate.length })}\n📦 إجمالي المخزون الآن: ${totalCount}`,
+          { reply_markup: getReferralStockInputReplyMarkup() }
+        );
         return;
       }
 
