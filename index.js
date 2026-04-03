@@ -219,6 +219,7 @@ const DEFAULT_TEXTS = {
     enterQty: '✍️ Enter quantity:',
     noCodes: '❌ Not enough codes in stock',
     back: '🔙 Back',
+    cancel: '❌ Cancel',
     adminPanel: '🔧 Admin Panel',
     addMerchant: '➕ Add Merchant',
     listMerchants: '📋 List Merchants',
@@ -447,14 +448,14 @@ const DEFAULT_TEXTS = {
     askEmail: 'Please enter your email address:',
     freeCodeSuccess: '🎉 Here is your free ChatGPT GO code:\n\n{code}',
     alreadyGotFree: 'You have already received your free code. You can purchase more codes.',
-    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.',
+    askQuantity: 'How many ChatGPT codes would you like to buy? Send the number only.\n\n🔥 Quantity discount: if you buy 20 codes or more, the price becomes 1 USD per code.',
     enterEmailForPurchase: 'Enter your email to receive the code:',
     purchaseSuccess: '✅ Purchase successful! Here are your ChatGPT GO code(s):\n\n{code}',
     insufficientBalance: '❌ Insufficient balance. Your balance: {balance} USD. Price per code: {price} USD\n\nYou need: {needed} USD to get this quantity of codes.',
     depositNow: '💳 Deposit Balance',
     bulkDiscountInfo: '🔥 Quantity discount: if you buy {threshold} codes or more, the price becomes {price} USD per code.',
     referralMilestoneBonus: '🎁 Referral milestone reached! You received {bonus} bonus points. Total points: {points}',
-    invalidQuantity: '❌ Invalid quantity. Please send a valid positive number.',
+    invalidQuantity: '❌ Invalid quantity. Please send a valid positive number. Maximum allowed is 70 codes per request.',
     mustJoinChannel: '🔒 Please join our channel first\n\n{message}\n\nThen press the check button.',
     joinChannel: '📢 Join Channel',
     checkSubscription: '🔄 Check Subscription',
@@ -538,6 +539,7 @@ const DEFAULT_TEXTS = {
     enterQty: '✍️ أرسل الكمية:',
     noCodes: '❌ لا يوجد عدد كافٍ من الأكواد في المخزون',
     back: '🔙 رجوع',
+    cancel: '❌ إلغاء',
     adminPanel: '🔧 لوحة التحكم',
     addMerchant: '➕ إضافة تاجر',
     listMerchants: '📋 قائمة التجار',
@@ -766,14 +768,14 @@ const DEFAULT_TEXTS = {
     askEmail: 'يرجى إدخال بريدك الإلكتروني:',
     freeCodeSuccess: '🎉 إليك كود ChatGPT GO المجاني:\n\n{code}',
     alreadyGotFree: 'لقد حصلت بالفعل على كودك المجاني. يمكنك شراء أكواد إضافية.',
-    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.',
+    askQuantity: 'كم عدد أكواد ChatGPT التي تريد شراءها؟ أرسل الرقم فقط.\n\n🔥 خصم على الكمية: إذا اشتريت 20 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
     enterEmailForPurchase: 'أدخل بريدك الإلكتروني لاستلام الكود:',
     purchaseSuccess: '✅ تم الشراء بنجاح! إليك كودات ChatGPT GO:\n\n{code}',
     insufficientBalance: '❌ رصيد غير كاف. رصيدك: {balance} دولار. سعر الكود: {price} دولار\n\nتحتاج إلى: {needed} دولار كي يمكنك الحصول على هذا العدد من الكودات',
     depositNow: '💳 شحن الرصيد',
     bulkDiscountInfo: '🔥 خصم على الكمية: إذا اشتريت {threshold} كودًا أو أكثر يصبح سعر الكود الواحد {price} دولار.',
     referralMilestoneBonus: '🎁 تم تحقيق مستوى إحالة جديد! حصلت على {bonus} نقاط إضافية. مجموع نقاطك الآن: {points}',
-    invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقمًا موجبًا صحيحًا.',
+    invalidQuantity: '❌ كمية غير صالحة. يرجى إرسال رقمًا موجبًا صحيحًا. الحد الأقصى 70 كود في الطلب الواحد.',
     mustJoinChannel: '🔒 يرجى الاشتراك في القناة أولاً\n\n{message}\n\nثم اضغط زر التحقق.',
     joinChannel: '📢 اشترك الآن',
     checkSubscription: '🔄 تحقق من الاشتراك',
@@ -1527,6 +1529,24 @@ async function getPerCodePriceForQuantity(basePrice, quantity) {
   const discountPrice = await getBulkDiscountPrice();
   if (safeQty >= threshold && safeBasePrice > discountPrice) return discountPrice;
   return safeBasePrice;
+}
+
+
+function extractChatGptUpLinks(rawText) {
+  const text = String(rawText || '');
+  const matches = [];
+  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/[A-Z0-9]{16}/gi;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    let link = m[0].trim();
+    if (!/^https?:\/\//i.test(link)) {
+      link = `http://${link.replace(/^\/+/, '')}`;
+    }
+    link = link.replace(/^http:\/\/www\./i, 'http://www.');
+    link = link.replace(/^http:\/\/(?!www\.)/i, 'http://');
+    matches.push(link);
+  }
+  return [...new Set(matches)];
 }
 
 function formatDateParts(date) {
@@ -4299,6 +4319,13 @@ bot.on('callback_query', async query => {
       await bot.answerCallbackQuery(query.id);
       return;
     }
+    if (data === 'cancel_action') {
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
 
     if (data === 'support') {
       await setUserState(userId, { action: 'support' });
@@ -6855,7 +6882,81 @@ bot.on('message', async msg => {
           }
         );
       } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        const reasonText = String(result.reason || '').toLowerCase();
+        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
+          const fallbackMerchant = await getReferralStockMerchant();
+          const fallbackCodes = await Code.findAll({
+            where: { merchantId: fallbackMerchant.id, isUsed: false },
+            limit: qty,
+            order: [['id', 'ASC']]
+          });
+
+          if (fallbackCodes.length > 0) {
+            const t = await sequelize.transaction();
+            try {
+              await Code.update(
+                { isUsed: true, usedBy: userId, soldAt: new Date() },
+                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
+              );
+
+              const merchant = await getOrCreateChatGptMerchant();
+              const userObj = await User.findByPk(userId, { transaction: t });
+              const currentBalance = parseFloat(userObj.balance);
+              const unitPrice = await getPerCodePriceForQuantity(merchant.price, fallbackCodes.length);
+              const totalCost = unitPrice * fallbackCodes.length;
+
+              if (currentBalance < totalCost) {
+                await t.rollback();
+                await bot.sendMessage(
+                  userId,
+                  await getText(userId, 'insufficientBalance', {
+                    balance: currentBalance.toFixed(2),
+                    price: unitPrice.toFixed(2),
+                    needed: totalCost.toFixed(2)
+                  }),
+                  {
+                    reply_markup: {
+                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+                    }
+                  }
+                );
+              } else {
+                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
+                await BalanceTransaction.create({
+                  userId,
+                  amount: -totalCost,
+                  type: 'purchase',
+                  status: 'completed'
+                }, { transaction: t });
+                await t.commit();
+
+                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
+                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+                await bot.sendMessage(
+                  userId,
+                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
+                  { parse_mode: 'HTML' }
+                );
+
+                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
+                await sendAdminCodeActionNotice(userId, {
+                  sourceKey: 'balance',
+                  serviceType: 'ChatGPT GO',
+                  codesCount: deliveredCodes.length,
+                  remainingStockText: String(remainingFallback)
+                });
+              }
+            } catch (err) {
+              await t.rollback().catch(() => {});
+              console.error('chatgpt referral fallback error:', err);
+              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+            }
+          } else {
+            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+          }
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
       }
       await clearUserState(userId);
       await sendMainMenu(userId);
@@ -7011,7 +7112,7 @@ bot.on('message', async msg => {
 
     if (state?.action === 'chatgpt_buy_quantity') {
       const qty = parseInt(text, 10);
-      if (Number.isNaN(qty) || qty <= 0) {
+      if (Number.isNaN(qty) || qty <= 0 || qty > 70) {
         await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'));
         return;
       }
@@ -7086,7 +7187,81 @@ bot.on('message', async msg => {
           );
         }
       } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        const reasonText = String(result.reason || '').toLowerCase();
+        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
+          const fallbackMerchant = await getReferralStockMerchant();
+          const fallbackCodes = await Code.findAll({
+            where: { merchantId: fallbackMerchant.id, isUsed: false },
+            limit: qty,
+            order: [['id', 'ASC']]
+          });
+
+          if (fallbackCodes.length > 0) {
+            const t = await sequelize.transaction();
+            try {
+              await Code.update(
+                { isUsed: true, usedBy: userId, soldAt: new Date() },
+                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
+              );
+
+              const merchant = await getOrCreateChatGptMerchant();
+              const userObj = await User.findByPk(userId, { transaction: t });
+              const currentBalance = parseFloat(userObj.balance);
+              const unitPrice = await getPerCodePriceForQuantity(merchant.price, fallbackCodes.length);
+              const totalCost = unitPrice * fallbackCodes.length;
+
+              if (currentBalance < totalCost) {
+                await t.rollback();
+                await bot.sendMessage(
+                  userId,
+                  await getText(userId, 'insufficientBalance', {
+                    balance: currentBalance.toFixed(2),
+                    price: unitPrice.toFixed(2),
+                    needed: totalCost.toFixed(2)
+                  }),
+                  {
+                    reply_markup: {
+                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+                    }
+                  }
+                );
+              } else {
+                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
+                await BalanceTransaction.create({
+                  userId,
+                  amount: -totalCost,
+                  type: 'purchase',
+                  status: 'completed'
+                }, { transaction: t });
+                await t.commit();
+
+                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
+                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+                await bot.sendMessage(
+                  userId,
+                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
+                  { parse_mode: 'HTML' }
+                );
+
+                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
+                await sendAdminCodeActionNotice(userId, {
+                  sourceKey: 'balance',
+                  serviceType: 'ChatGPT GO',
+                  codesCount: deliveredCodes.length,
+                  remainingStockText: String(remainingFallback)
+                });
+              }
+            } catch (err) {
+              await t.rollback().catch(() => {});
+              console.error('chatgpt referral fallback error:', err);
+              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+            }
+          } else {
+            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+          }
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
       }
       await clearUserState(userId);
       await sendMainMenu(userId);
