@@ -71,6 +71,14 @@ const Merchant = sequelize.define('Merchant', {
   description: { type: DataTypes.JSONB, allowNull: true }
 });
 
+const DigitalSection = sequelize.define('DigitalSection', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  nameEn: { type: DataTypes.STRING, allowNull: false },
+  nameAr: { type: DataTypes.STRING, allowNull: false },
+  sortOrder: { type: DataTypes.INTEGER, defaultValue: 0 },
+  isActive: { type: DataTypes.BOOLEAN, defaultValue: true }
+});
+
 const PaymentMethod = sequelize.define('PaymentMethod', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   nameEn: { type: DataTypes.STRING, allowNull: false },
@@ -219,7 +227,7 @@ const DEFAULT_TEXTS = {
     enterQty: '✍️ Enter quantity:',
     noCodes: '❌ Not enough codes in stock',
     back: '🔙 Back',
-    cancel: 'الــغـــاء',
+    cancel: 'Cancel',
     adminPanel: '🔧 Admin Panel',
     addMerchant: '➕ Add Merchant',
     listMerchants: '📋 List Merchants',
@@ -524,7 +532,45 @@ const DEFAULT_TEXTS = {
     supportMessageSent: '📨 Your message has been sent to support. You will receive a reply soon.',
     supportNotification: '📩 New support message\n\nUsername: {username}\nName: {name}\nUser ID: {userId}\n\nMessage: {message}',
     replyToSupport: 'Reply to this user:',
-    replyMessage: 'Your reply from support:'
+    replyMessage: 'Your reply from support:',
+    confirm: '✅ Confirm',
+    buyNow: '🛒 Buy',
+    digitalSubscriptions: '🧩 Add Digital Subscriptions',
+    digitalSubscriptionsMenu: '🧩 Digital Subscriptions',
+    addDigitalSectionToMainMenu: '➕ Add section to: 👋 Main menu',
+    askDigitalSectionNameEn: 'Send the section name in English:',
+    askDigitalSectionNameAr: 'Send the section name in Arabic:',
+    digitalSectionCreated: '✅ The section was added to the main menu successfully!',
+    digitalSubscriptionsChooseSection: 'Choose the digital section you want to manage:',
+    digitalSectionManageTitle: '🧩 Manage section: {name}',
+    addDigitalProductInSection: '➕ Add item inside {name}',
+    askDigitalProductNameEn: 'Send the item name in English:',
+    askDigitalProductNameAr: 'Send the item name in Arabic:',
+    askDigitalProductPrice: 'Send the item price in USD:',
+    askDigitalProductDescription: 'Send the item details (text, photo, video, or /skip):',
+    digitalProductCreated: '✅ The digital item was created successfully! ID: {id}',
+    digitalProductManageText: '🧾 {name}\nPrice: {price} USD\nRemaining stock: {stock}\nType: {type}',
+    addDigitalProductStock: '📦 Add stock/accounts',
+    digitalStockInputPrompt: 'Send the stock/accounts now.\n\nFor account items, send the email on one line and the password on the next line for each account.',
+    digitalSectionEmpty: 'No subscriptions are available in this section yet.',
+    digitalSectionChooseProduct: 'Choose the subscription you want:',
+    digitalProductListButton: '{name} - {price} USD ({stock})',
+    digitalProductDetailsText: '🧩 {name}\n\nRemaining stock: {stock}\nPrice: {price} USD\n\nDetails:\n{details}',
+    attachedDetailsNote: 'See the attached media for the full details.',
+    productQuantityPrompt: 'How many subscriptions would you like to buy? Send the number only.',
+    remainingStockLine: 'Remaining stock: {stock}',
+    itemPriceLine: 'Price: {price} USD',
+    chatgptStockLine: 'Remaining stock: {stock}',
+    chatgptPriceLine: 'Code price: {price} USD',
+    chatgptDiscountLine: 'Quantity discount: if you buy 20 codes or more, the price becomes 1 USD per code.',
+    chatgptDetailsLine: 'Code details: This code is a Mexican promotional offer. You must enable a Mexico VPN, copy the code link, open it in the browser with the VPN enabled, then activate the subscription.',
+    chatgptNoteLine: 'Note: At the moment there is no BIN guessing or fake BIN that works with it.',
+    chatgptTermsTitle: 'Terms:',
+    chatgptTerms1: '1- The expiry time of the code is unknown. If it expires, it is not refundable.',
+    chatgptTerms2: '2- The code is not refundable if it works and has no issue. Only if the code does not work will it be replaced.',
+    chatgptAgreementLine: 'If you press Confirm & Buy, you agree to the terms.',
+    invalidPrice: '❌ Invalid price.',
+    sendValidDescription: 'Please send text, photo, video, or /skip.'
   },
   ar: {
     start: '🌍 اختر اللغة',
@@ -824,7 +870,45 @@ const DEFAULT_TEXTS = {
     supportMessageSent: '📨 تم إرسال رسالتك إلى الدعم الفني. ستتلقى رداً قريباً.',
     supportNotification: '📩 رسالة دعم جديدة\n\nالمعرف: {username}\nالاسم: {name}\nايدي المستخدم: {userId}\n\nالرسالة: {message}',
     replyToSupport: 'رد على هذا المستخدم:',
-    replyMessage: 'ردك من الدعم الفني:'
+    replyMessage: 'ردك من الدعم الفني:',
+    confirm: '✅ موافق',
+    buyNow: '🛒 شراء',
+    digitalSubscriptions: '🧩 إضافة اشتراكات رقمية',
+    digitalSubscriptionsMenu: '🧩 الاشتراكات الرقمية',
+    addDigitalSectionToMainMenu: '➕ أضف خانة إلى: 👋 القائمة الرئيسية',
+    askDigitalSectionNameEn: 'أرسل اسم الخانة بالإنجليزية:',
+    askDigitalSectionNameAr: 'أرسل اسم الخانة بالعربية:',
+    digitalSectionCreated: '✅ تم إضافة الخانة إلى القائمة الرئيسية بنجاح!',
+    digitalSubscriptionsChooseSection: 'اختر الخانة الرقمية التي تريد إدارتها:',
+    digitalSectionManageTitle: '🧩 إدارة الخانة: {name}',
+    addDigitalProductInSection: '➕ اضف خانة في داخل {name}',
+    askDigitalProductNameEn: 'أرسل اسم الاشتراك بالإنجليزية:',
+    askDigitalProductNameAr: 'أرسل اسم الاشتراك بالعربية:',
+    askDigitalProductPrice: 'أرسل سعر الاشتراك بالدولار:',
+    askDigitalProductDescription: 'أرسل تفاصيل الاشتراك (نص، صورة، فيديو، أو /skip):',
+    digitalProductCreated: '✅ تم إنشاء الاشتراك الرقمي بنجاح! المعرف: {id}',
+    digitalProductManageText: '🧾 {name}\nالسعر: {price} دولار\nالمخزون المتبقي: {stock}\nالنوع: {type}',
+    addDigitalProductStock: '📦 إضافة مخزون/حسابات',
+    digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nإذا كان المنتج حسابات، فأرسل الإيميل في سطر والباسورد في السطر الذي بعده لكل حساب.',
+    digitalSectionEmpty: 'لا توجد اشتراكات متاحة داخل هذه الخانة حالياً.',
+    digitalSectionChooseProduct: 'اختر الاشتراك الذي تريد:',
+    digitalProductListButton: '{name} - {price} دولار ({stock})',
+    digitalProductDetailsText: '🧩 {name}\n\nالمخزون المتبقي: {stock}\nالسعر: {price} دولار\n\nالتفاصيل:\n{details}',
+    attachedDetailsNote: 'شاهد الوسائط المرفقة لمعرفة التفاصيل كاملة.',
+    productQuantityPrompt: 'كم عدد الاشتراكات التي تريد شراءها؟ أرسل الرقم فقط.',
+    remainingStockLine: 'المخزون المتبقي: {stock}',
+    itemPriceLine: 'السعر: {price} دولار',
+    chatgptStockLine: 'كم تبقى في المخزون: {stock}',
+    chatgptPriceLine: 'سعر الكود: {price} دولار',
+    chatgptDiscountLine: 'الخصم على الكمية: إذا اشتريت 20 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
+    chatgptDetailsLine: 'تفاصيل الكود: الكود هذا هو عرض ترويجي مكسيكي يجب تشغيل vpn على المكسيك وتنسخ رابط الكود وتذهب الى المتصفح مع تشغيل vpn وتقوم بتفعيل الاشتراك.',
+    chatgptNoteLine: 'ملاحظة: حتى الآن لا يوجد Bin تخمين أو وهمي يعمل عليه.',
+    chatgptTermsTitle: 'الشروط:',
+    chatgptTerms1: '1- الكود غير معلوم متى تنتهي صلاحيته فـ اذا انتهت صلاحيته لا يسترجع.',
+    chatgptTerms2: '2- الكود لا يسترجع يعمل ولا مشكل فيه، الا في حال اذا الكود لا يعمل سوف يتم استبدال الكود لك.',
+    chatgptAgreementLine: 'اذا ضغطت موافق وشراء فـ انت توافق على الشروط.',
+    invalidPrice: '❌ السعر غير صالح.',
+    sendValidDescription: 'أرسل نصًا أو صورة أو فيديو أو /skip.'
   }
 };
 
@@ -1525,6 +1609,282 @@ async function getPerCodePriceForQuantity(basePrice, quantity) {
   const discountPrice = await getBulkDiscountPrice();
   if (safeQty >= threshold && safeBasePrice > discountPrice) return discountPrice;
   return safeBasePrice;
+}
+
+function formatUsdPrice(value) {
+  const numeric = parseFloat(value);
+  if (!Number.isFinite(numeric)) return '0';
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2).replace(/\.00$/, '');
+}
+
+function getDigitalSectionCategory(sectionId) {
+  return `digital_section_${parseInt(sectionId, 10)}`;
+}
+
+function parseDigitalSectionIdFromCategory(category) {
+  const match = String(category || '').match(/^digital_section_(\d+)$/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function isDigitalSectionCategory(category) {
+  return Number.isInteger(parseDigitalSectionIdFromCategory(category));
+}
+
+async function getDigitalSections() {
+  return await DigitalSection.findAll({
+    where: { isActive: true },
+    order: [['sortOrder', 'ASC'], ['id', 'ASC']]
+  });
+}
+
+async function getDigitalSectionDisplayName(section, userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  return lang === 'ar' ? (section?.nameAr || section?.nameEn || '') : (section?.nameEn || section?.nameAr || '');
+}
+
+async function getMerchantDisplayName(merchant, userId) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  return lang === 'ar' ? (merchant?.nameAr || merchant?.nameEn || '') : (merchant?.nameEn || merchant?.nameAr || '');
+}
+
+async function getMerchantAvailableStock(merchantId) {
+  return await Code.count({ where: { merchantId, isUsed: false } });
+}
+
+async function getDigitalProductsForSection(sectionId) {
+  return await Merchant.findAll({
+    where: { category: getDigitalSectionCategory(sectionId) },
+    order: [['id', 'ASC']]
+  });
+}
+
+async function getChatGptDiscountThreshold() {
+  return 20;
+}
+
+async function getChatGptDiscountPrice() {
+  return 1;
+}
+
+async function getChatGptUnitPrice(quantity) {
+  const merchant = await getOrCreateChatGptMerchant();
+  const basePrice = parseFloat(merchant?.price || 0) || 0;
+  const threshold = await getChatGptDiscountThreshold();
+  const discountPrice = await getChatGptDiscountPrice();
+  if ((parseInt(quantity, 10) || 0) >= threshold && basePrice > discountPrice) {
+    return discountPrice;
+  }
+  return basePrice;
+}
+
+async function getChatGptPriceValue() {
+  const merchant = await getOrCreateChatGptMerchant();
+  return parseFloat(merchant?.price || 0) || 0;
+}
+
+async function getChatGptMenuLabel(userId) {
+  const baseLabel = await getText(userId, 'chatgptCode');
+  const price = formatUsdPrice(await getChatGptPriceValue());
+  return `${baseLabel} - ${price} USD`;
+}
+
+async function buildChatGptPurchaseInfoText(userId) {
+  const fallbackMerchant = await getReferralStockMerchant();
+  const stock = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
+  const price = formatUsdPrice(await getChatGptPriceValue());
+
+  return [
+    await getText(userId, 'chatgptStockLine', { stock }),
+    await getText(userId, 'chatgptPriceLine', { price }),
+    await getText(userId, 'chatgptDiscountLine'),
+    await getText(userId, 'chatgptDetailsLine'),
+    await getText(userId, 'chatgptNoteLine'),
+    '',
+    await getText(userId, 'chatgptTermsTitle'),
+    await getText(userId, 'chatgptTerms1'),
+    await getText(userId, 'chatgptTerms2'),
+    '',
+    await getText(userId, 'chatgptAgreementLine')
+  ].join('\n\n');
+}
+
+function getMerchantPlainDescription(merchant) {
+  if (!merchant?.description) return '';
+  if (merchant.description.type === 'text') return String(merchant.description.content || '').trim();
+  return '';
+}
+
+async function showChatGptPurchaseInfo(userId) {
+  const messageText = await buildChatGptPurchaseInfoText(userId);
+  await bot.sendMessage(userId, messageText, {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: await getText(userId, 'confirm'), callback_data: 'chatgpt_buy_accept' },
+        { text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }
+      ]]
+    }
+  });
+}
+
+async function showDigitalSubscriptionsAdmin(userId) {
+  const sections = await getDigitalSections();
+  const keyboard = [
+    [{ text: await getText(userId, 'addDigitalSectionToMainMenu'), callback_data: 'admin_digital_add_section' }]
+  ];
+
+  for (const section of sections) {
+    keyboard.push([{
+      text: `🧩 ${section.nameEn} / ${section.nameAr}`,
+      callback_data: `admin_digital_section_${section.id}`
+    }]);
+  }
+
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
+
+  await bot.sendMessage(userId, await getText(userId, 'digitalSubscriptionsChooseSection'), {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function showDigitalSectionAdmin(userId, sectionId) {
+  const section = await DigitalSection.findByPk(sectionId);
+  if (!section) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const sectionName = `${section.nameEn} / ${section.nameAr}`;
+  const products = await getDigitalProductsForSection(section.id);
+  const keyboard = [
+    [{ text: await getText(userId, 'addDigitalProductInSection', { name: sectionName }), callback_data: `admin_digital_add_product_${section.id}` }]
+  ];
+
+  for (const product of products) {
+    const stock = await getMerchantAvailableStock(product.id);
+    keyboard.push([{
+      text: `${product.nameEn} / ${product.nameAr} - ${formatUsdPrice(product.price)} USD (${stock})`,
+      callback_data: `admin_digital_product_${product.id}`
+    }]);
+  }
+
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin_digital_subscriptions' }]);
+
+  await bot.sendMessage(userId, await getText(userId, 'digitalSectionManageTitle', { name: sectionName }), {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function showDigitalProductAdmin(userId, merchantId) {
+  const merchant = await Merchant.findByPk(merchantId);
+  if (!merchant) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
+  const stock = await getMerchantAvailableStock(merchant.id);
+  const typeText = merchant.type === 'bulk'
+    ? await getText(userId, 'typeBulk')
+    : await getText(userId, 'typeSingle');
+
+  await bot.sendMessage(
+    userId,
+    await getText(userId, 'digitalProductManageText', {
+      name: `${merchant.nameEn} / ${merchant.nameAr}`,
+      price: formatUsdPrice(merchant.price),
+      stock,
+      type: typeText
+    }),
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'addDigitalProductStock'), callback_data: `admin_digital_add_stock_${merchant.id}` }],
+          [{ text: await getText(userId, 'back'), callback_data: `admin_digital_section_${sectionId}` }]
+        ]
+      }
+    }
+  );
+}
+
+async function showDigitalSectionForUser(userId, sectionId) {
+  const section = await DigitalSection.findByPk(sectionId);
+  if (!section) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const products = await getDigitalProductsForSection(section.id);
+  if (!products.length) {
+    await bot.sendMessage(userId, await getText(userId, 'digitalSectionEmpty'), {
+      reply_markup: { inline_keyboard: [[{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]] }
+    });
+    return;
+  }
+
+  const buttons = [];
+  for (const product of products) {
+    const stock = await getMerchantAvailableStock(product.id);
+    const name = await getMerchantDisplayName(product, userId);
+    buttons.push([{
+      text: await getText(userId, 'digitalProductListButton', {
+        name,
+        price: formatUsdPrice(product.price),
+        stock
+      }),
+      callback_data: `digital_product_${product.id}`
+    }]);
+  }
+
+  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
+
+  await bot.sendMessage(userId, await getText(userId, 'digitalSectionChooseProduct'), {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showDigitalProductDetails(userId, merchantId) {
+  const merchant = await Merchant.findByPk(merchantId);
+  if (!merchant) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
+  const stock = await getMerchantAvailableStock(merchant.id);
+  const name = await getMerchantDisplayName(merchant, userId);
+  let details = getMerchantPlainDescription(merchant);
+
+  if (!details) {
+    details = merchant?.description?.type === 'photo' || merchant?.description?.type === 'video'
+      ? await getText(userId, 'attachedDetailsNote')
+      : '-';
+  }
+
+  if (merchant?.description?.type === 'photo' && merchant.description.fileId) {
+    await bot.sendPhoto(userId, merchant.description.fileId);
+  } else if (merchant?.description?.type === 'video' && merchant.description.fileId) {
+    await bot.sendVideo(userId, merchant.description.fileId);
+  }
+
+  await bot.sendMessage(
+    userId,
+    await getText(userId, 'digitalProductDetailsText', {
+      name,
+      stock,
+      price: formatUsdPrice(merchant.price),
+      details
+    }),
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }],
+          [{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]
+        ]
+      }
+    }
+  );
 }
 
 
@@ -2360,7 +2720,7 @@ async function getMenuButtonItems(userId) {
     { id: 'discount', name: '🎟️ Discount' },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'chatgpt_code', name: await getText(userId, 'chatgptCode') },
+    { id: 'chatgpt_code', name: await getChatGptMenuLabel(userId) },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
@@ -3420,7 +3780,7 @@ async function sendMainMenu(userId) {
     discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
     support: await getText(userId, 'support'),
-    chatgpt_code: await getText(userId, 'chatgptCode'),
+    chatgpt_code: await getChatGptMenuLabel(userId),
     free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
@@ -3433,6 +3793,14 @@ async function sendMainMenu(userId) {
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
+  }
+
+  const digitalSections = await getDigitalSections();
+  for (const section of digitalSections) {
+    buttons.push([{
+      text: `🧩 ${await getDigitalSectionDisplayName(section, userId)}`,
+      callback_data: `digital_section_${section.id}`
+    }]);
   }
 
   await bot.sendMessage(userId, await getText(userId, 'menu'), {
@@ -3450,6 +3818,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
       [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
+      [{ text: await getText(userId, 'digitalSubscriptions'), callback_data: 'admin_digital_subscriptions' }],
       [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
       [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
       [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
@@ -3608,7 +3977,10 @@ async function showChannelConfigAdmin(userId) {
 }
 
 async function showMerchantsForBuy(userId) {
-  const merchants = await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] });
+  const merchants = (await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] }))
+    .filter(merchant => !isDigitalSectionCategory(merchant.category))
+    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Code');
+
   if (!merchants.length) {
     await bot.sendMessage(userId, await getText(userId, 'noCodes'));
     return sendMainMenu(userId);
@@ -4088,7 +4460,7 @@ async function processAutoChatGptCode(userId, options = {}) {
 
   if (!isFree) {
     merchant = await getOrCreateChatGptMerchant();
-    price = await getPerCodePriceForQuantity(merchant.price, safeQuantity);
+    price = await getChatGptUnitPrice(safeQuantity);
     const userObj = await User.findByPk(userId);
     currentBalance = parseFloat(userObj.balance);
 
@@ -5476,16 +5848,112 @@ bot.on('callback_query', async query => {
 
     if (data === 'merchant_type_single' || data === 'merchant_type_bulk') {
       const state = safeParseState((await User.findByPk(userId)).state);
-      if (state?.action === 'add_merchant' && state.step === 'type') {
+      if ((state?.action === 'add_merchant' || state?.action === 'add_digital_product') && state.step === 'type') {
         const selectedType = data === 'merchant_type_single' ? 'single' : 'bulk';
+        const nextPrompt = state.action === 'add_digital_product'
+          ? await getText(userId, 'askDigitalProductDescription')
+          : await getText(userId, 'askDescription');
         await setUserState(userId, { ...state, selectedType, step: 'description' });
-        await bot.sendMessage(userId, await getText(userId, 'askDescription'));
+        await bot.sendMessage(userId, nextPrompt);
       }
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
+    if (data === 'admin_digital_subscriptions' && isAdmin(userId)) {
+      await showDigitalSubscriptionsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_digital_add_section' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'add_digital_section', step: 'nameEn' });
+      await bot.sendMessage(userId, await getText(userId, 'askDigitalSectionNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_digital_section_') && isAdmin(userId)) {
+      const sectionId = parseInt(data.split('_')[3], 10);
+      await showDigitalSectionAdmin(userId, sectionId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_digital_add_product_') && isAdmin(userId)) {
+      const sectionId = parseInt(data.split('_')[4], 10);
+      await setUserState(userId, { action: 'add_digital_product', sectionId, step: 'nameEn' });
+      await bot.sendMessage(userId, await getText(userId, 'askDigitalProductNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_digital_product_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[3], 10);
+      await showDigitalProductAdmin(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('admin_digital_add_stock_') && isAdmin(userId)) {
+      const merchantId = parseInt(data.split('_')[4], 10);
+      await setUserState(userId, { action: 'add_codes', merchantId, returnTo: 'digital_product_admin' });
+      await bot.sendMessage(userId, await getText(userId, 'digitalStockInputPrompt'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('digital_section_')) {
+      const sectionId = parseInt(data.split('_')[2], 10);
+      await showDigitalSectionForUser(userId, sectionId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('digital_product_')) {
+      const merchantId = parseInt(data.split('_')[2], 10);
+      await showDigitalProductDetails(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('digital_buy_')) {
+      const merchantId = parseInt(data.split('_')[2], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      const available = await getMerchantAvailableStock(merchantId);
+
+      if (!merchant || !available) {
+        await bot.sendMessage(userId, await getText(userId, 'noCodes'));
+        await sendMainMenu(userId);
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+
+      const currentState = safeParseState((await User.findByPk(userId)).state);
+      const discountCode = currentState?.discountCode || null;
+      await setUserState(userId, { action: 'buy', merchantId, discountCode });
+      await bot.sendMessage(
+        userId,
+        `${await getText(userId, 'productQuantityPrompt')}
+${await getText(userId, 'remainingStockLine', { stock: available })}
+${await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) })}`,
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+          }
+        }
+      );
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'chatgpt_code') {
+      await showChatGptPurchaseInfo(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'chatgpt_buy_accept') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
       await bot.sendMessage(userId, await getText(userId, 'askQuantity'), {
         reply_markup: {
@@ -5904,6 +6372,87 @@ bot.on('message', async msg => {
         }
       }
 
+      if (state.action === 'add_digital_section') {
+        if (state.step === 'nameEn') {
+          await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
+          await bot.sendMessage(userId, await getText(userId, 'askDigitalSectionNameAr'));
+          return;
+        }
+
+        if (state.step === 'nameAr') {
+          const maxSortOrder = await DigitalSection.max('sortOrder');
+          const section = await DigitalSection.create({
+            nameEn: state.nameEn,
+            nameAr: text,
+            sortOrder: Number.isFinite(Number(maxSortOrder)) ? Number(maxSortOrder) + 1 : 1,
+            isActive: true
+          });
+
+          await bot.sendMessage(userId, await getText(userId, 'digitalSectionCreated'));
+          await clearUserState(userId);
+          await showDigitalSectionAdmin(userId, section.id);
+          return;
+        }
+      }
+
+      if (state.action === 'add_digital_product') {
+        if (state.step === 'nameEn') {
+          await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
+          await bot.sendMessage(userId, await getText(userId, 'askDigitalProductNameAr'));
+          return;
+        }
+
+        if (state.step === 'nameAr') {
+          await setUserState(userId, { ...state, nameAr: text, step: 'price' });
+          await bot.sendMessage(userId, await getText(userId, 'askDigitalProductPrice'));
+          return;
+        }
+
+        if (state.step === 'price') {
+          const price = parseFloat(text);
+          if (Number.isNaN(price) || price <= 0) {
+            await bot.sendMessage(userId, await getText(userId, 'invalidPrice'));
+            return;
+          }
+          await setUserState(userId, { ...state, price, step: 'type' });
+          await bot.sendMessage(userId, await getText(userId, 'askMerchantType'), {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: await getText(userId, 'typeSingle'), callback_data: 'merchant_type_single' }],
+                [{ text: await getText(userId, 'typeBulk'), callback_data: 'merchant_type_bulk' }]
+              ]
+            }
+          });
+          return;
+        }
+
+        if (state.step === 'description') {
+          let description = null;
+          if (text === '/skip') description = null;
+          else if (text) description = { type: 'text', content: text };
+          else if (photo) description = { type: 'photo', fileId: photo[photo.length - 1].file_id };
+          else if (video) description = { type: 'video', fileId: video.file_id };
+          else {
+            await bot.sendMessage(userId, await getText(userId, 'sendValidDescription'));
+            return;
+          }
+
+          const merchant = await Merchant.create({
+            nameEn: state.nameEn,
+            nameAr: state.nameAr,
+            price: state.price,
+            category: getDigitalSectionCategory(state.sectionId),
+            type: state.selectedType || 'bulk',
+            description
+          });
+
+          await bot.sendMessage(userId, await getText(userId, 'digitalProductCreated', { id: merchant.id }));
+          await clearUserState(userId);
+          await showDigitalSectionAdmin(userId, state.sectionId);
+          return;
+        }
+      }
+
       if (state.action === 'set_chatgpt_price') {
         const price = parseFloat(text);
         if (Number.isNaN(price) || price <= 0) {
@@ -5956,8 +6505,15 @@ bot.on('message', async msg => {
         }
 
         await bot.sendMessage(userId, await getText(userId, 'codesAdded'));
+        const returnTo = state.returnTo || '';
+        const merchantId = state.merchantId;
         await clearUserState(userId);
-        await showAdminPanel(userId);
+
+        if (returnTo === 'digital_product_admin') {
+          await showDigitalProductAdmin(userId, merchantId);
+        } else {
+          await showAdminPanel(userId);
+        }
         return;
       }
 
@@ -6978,7 +7534,7 @@ bot.on('message', async msg => {
               const merchant = await getOrCreateChatGptMerchant();
               const userObj = await User.findByPk(userId, { transaction: t });
               const currentBalance = parseFloat(userObj.balance);
-              const unitPrice = await getPerCodePriceForQuantity(merchant.price, fallbackCodes.length);
+              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
               const totalCost = unitPrice * fallbackCodes.length;
 
               if (currentBalance < totalCost) {
@@ -7283,7 +7839,7 @@ bot.on('message', async msg => {
               const merchant = await getOrCreateChatGptMerchant();
               const userObj = await User.findByPk(userId, { transaction: t });
               const currentBalance = parseFloat(userObj.balance);
-              const unitPrice = await getPerCodePriceForQuantity(merchant.price, fallbackCodes.length);
+              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
               const totalCost = unitPrice * fallbackCodes.length;
 
               if (currentBalance < totalCost) {
