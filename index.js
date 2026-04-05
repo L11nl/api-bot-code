@@ -3736,6 +3736,18 @@ function flattenBinanceItemStrings(value, seen = new Set()) {
   return parts;
 }
 
+let BINANCE_SERVER_TIME_OFFSET_MS = 0;
+
+function getBinanceClientNowMs() {
+  return Date.now() + BINANCE_SERVER_TIME_OFFSET_MS;
+}
+
+function normalizeBinanceDigits(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\D/g, '');
+}
+
 function getBinanceIdentifierCandidates(item) {
   return [
     item?.transactionId,
@@ -3756,26 +3768,86 @@ function getBinanceIdentifierCandidates(item) {
     item?.extendInfo?.merchantTradeNo,
     item?.extendInfo?.orderId,
     item?.extend?.merchantTradeNo,
-    item?.extend?.orderId
+    item?.extend?.orderId,
+    item?.paymentInfo?.payerId,
+    item?.paymentInfo?.channel,
+    item?.receiverInfo?.accountId,
+    item?.receiverInfo?.binanceId,
+    item?.payerInfo?.accountId,
+    item?.payerInfo?.binanceId
   ].filter(Boolean);
+}
+
+function getBinanceFlattenedNormalizedData(item) {
+  const rawStrings = flattenBinanceItemStrings(item);
+  return {
+    identifierStrings: [...new Set(rawStrings.map(normalizeBinanceIdentifier).filter(Boolean))],
+    noteStrings: [...new Set(rawStrings.map(normalizeBinanceNoteCode).filter(Boolean))],
+    digitStrings: [...new Set(rawStrings.map(normalizeBinanceDigits).filter(Boolean))]
+  };
+}
+
+function itemMatchesBinanceOrder(item, orderNumber) {
+  const wanted = normalizeBinanceIdentifier(orderNumber);
+  const wantedDigits = normalizeBinanceDigits(orderNumber);
+  if (!wanted && !wantedDigits) return false;
+
+  const candidates = getBinanceIdentifierCandidates(item)
+    .map(normalizeBinanceIdentifier)
+    .filter(Boolean);
+
+  if (wanted && candidates.some(value => value === wanted)) {
+    return true;
+  }
+
+  const flattened = getBinanceFlattenedNormalizedData(item);
+  if (wanted && flattened.identifierStrings.some(value => value === wanted)) {
+    return true;
+  }
+
+  if (wantedDigits && flattened.digitStrings.some(value => value === wantedDigits)) {
+    return true;
+  }
+
+  return false;
 }
 
 function itemMatchesBinanceOrderRelaxed(item, orderNumber) {
   const wanted = normalizeBinanceIdentifier(orderNumber);
-  if (!wanted || wanted.length < 6) return false;
+  const wantedDigits = normalizeBinanceDigits(orderNumber);
+  if ((!wanted || wanted.length < 6) && (!wantedDigits || wantedDigits.length < 8)) return false;
 
-  return getBinanceIdentifierCandidates(item).some(value => {
-    const candidate = normalizeBinanceIdentifier(value);
-    return candidate && (candidate.includes(wanted) || wanted.includes(candidate));
-  });
+  const candidateIdentifiers = getBinanceIdentifierCandidates(item)
+    .map(normalizeBinanceIdentifier)
+    .filter(Boolean);
+
+  if (wanted && candidateIdentifiers.some(value => value.includes(wanted) || wanted.includes(value))) {
+    return true;
+  }
+
+  const flattened = getBinanceFlattenedNormalizedData(item);
+  if (wanted && flattened.identifierStrings.some(value => value.includes(wanted) || wanted.includes(value))) {
+    return true;
+  }
+
+  if (wantedDigits && wantedDigits.length >= 8 && flattened.digitStrings.some(value => value.includes(wantedDigits) || wantedDigits.includes(value))) {
+    return true;
+  }
+
+  return false;
 }
 
 function itemMatchesBinanceNoteCode(item, verificationCode) {
   const wanted = normalizeBinanceNoteCode(verificationCode);
   if (!wanted) return false;
 
-  const blobs = flattenBinanceItemStrings(item).map(normalizeBinanceNoteCode).filter(Boolean);
-  return blobs.some(value => value === wanted || value.includes(wanted));
+  const flattened = getBinanceFlattenedNormalizedData(item);
+  return flattened.noteStrings.some(value => value === wanted || (wanted.length >= 8 && (value.includes(wanted) || wanted.includes(value))));
+}
+
+function getBinanceTransactionTime(item) {
+  const txTime = Number(item?.transactionTime || item?.transactTime || item?.createTime || 0);
+  return Number.isFinite(txTime) && txTime > 0 ? txTime : 0;
 }
 
 function getBinanceTransactionUniqueKey(item) {
@@ -3790,7 +3862,8 @@ function getBinanceTransactionUniqueKey(item) {
     item?.currency,
     item?.payerInfo?.binanceId,
     item?.receiverInfo?.accountId,
-    item?.receiverInfo?.binanceId
+    item?.receiverInfo?.binanceId,
+    item?.paymentInfo?.payerId
   ].filter(Boolean).join('-'));
 }
 
@@ -3800,10 +3873,26 @@ function getBinanceReceiverIdentifiers(item) {
     item?.receiverInfo?.binanceId,
     item?.receiverInfo?.email,
     item?.receiverInfo?.name,
+    item?.receiverInfo?.phoneNumber,
     item?.receiver,
     item?.payId,
     item?.merchantId
   ].map(normalizeBinanceIdentifier).filter(Boolean);
+}
+
+function getBinancePayIdMatchLevel(item, payId) {
+  const normalizedPayId = normalizeBinanceIdentifier(payId);
+  if (!normalizedPayId) return 0;
+
+  const receiverIds = getBinanceReceiverIdentifiers(item);
+  if (receiverIds.some(value => value === normalizedPayId)) return 4;
+  if (receiverIds.some(value => value.includes(normalizedPayId) || normalizedPayId.includes(value))) return 3;
+
+  const flattened = getBinanceFlattenedNormalizedData(item);
+  if (flattened.identifierStrings.some(value => value === normalizedPayId)) return 2;
+  if (flattened.identifierStrings.some(value => value.includes(normalizedPayId) || normalizedPayId.includes(value))) return 1;
+
+  return 0;
 }
 
 function isLikelyIncomingBinancePayment(item, payId) {
@@ -3813,52 +3902,96 @@ function isLikelyIncomingBinancePayment(item, payId) {
   if (!Number.isFinite(resolvedAmount) || resolvedAmount <= 0) return false;
   if (Number.isFinite(directAmount) && directAmount < 0) return false;
 
+  const orderType = String(item?.orderType || '').toUpperCase();
+  if (['PAY_REFUND', 'C2C_HOLDING_RF', 'CRYPTO_BOX_RF', 'REFUND', 'FULL_REFUNDED'].includes(orderType)) {
+    return false;
+  }
+
   const normalizedPayId = normalizeBinanceIdentifier(payId);
   if (!normalizedPayId) return true;
 
   const receiverIds = getBinanceReceiverIdentifiers(item);
   if (!receiverIds.length) return true;
 
-  return receiverIds.some(value => value === normalizedPayId || value.endsWith(normalizedPayId) || normalizedPayId.endsWith(value));
+  return getBinancePayIdMatchLevel(item, payId) > 0;
+}
+
+function doesBinanceAmountMatch(item, expectedAmountUSDT) {
+  const amount = getBinanceHistoryAmountUSDT(item);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  return Math.abs(amount - Number(expectedAmountUSDT || 0)) <= 0.0001;
 }
 
 function buildBinanceHistoryWindows(sessionCreatedAt) {
-  const now = Date.now();
+  const now = getBinanceClientNowMs();
   const sessionMs = Number(sessionCreatedAt || 0);
-  const anchor = Number.isFinite(sessionMs) && sessionMs > 0 ? sessionMs : now - (30 * 60 * 1000);
+  const anchor = Number.isFinite(sessionMs) && sessionMs > 0 ? Math.min(sessionMs, now) : now - (5 * 60 * 1000);
 
   const rawWindows = [
-    [Math.max(now - (45 * 60 * 1000), anchor - (5 * 60 * 1000)), now],
-    [Math.max(now - (6 * 60 * 60 * 1000), anchor - (15 * 60 * 1000)), now],
-    [Math.max(now - (24 * 60 * 60 * 1000), anchor - (60 * 60 * 1000)), now],
-    [Math.max(now - (7 * 24 * 60 * 60 * 1000), anchor - (2 * 60 * 60 * 1000)), now]
+    { mode: 'latest' },
+    { startTime: Math.max(now - (10 * 60 * 1000), anchor - (2 * 60 * 1000)), endTime: now },
+    { startTime: Math.max(now - (30 * 60 * 1000), anchor - (5 * 60 * 1000)), endTime: now },
+    { startTime: Math.max(now - (2 * 60 * 60 * 1000), anchor - (15 * 60 * 1000)), endTime: now },
+    { startTime: Math.max(now - (12 * 60 * 60 * 1000), anchor - (30 * 60 * 1000)), endTime: now },
+    { startTime: Math.max(now - (24 * 60 * 60 * 1000), anchor - (60 * 60 * 1000)), endTime: now },
+    { startTime: Math.max(now - (7 * 24 * 60 * 60 * 1000), anchor - (2 * 60 * 60 * 1000)), endTime: now }
   ];
 
   const unique = [];
   const seen = new Set();
-  for (const [startTime, endTime] of rawWindows) {
-    const key = `${startTime}-${endTime}`;
+  for (const entry of rawWindows) {
+    const key = entry.mode === 'latest'
+      ? 'latest'
+      : `${Number(entry.startTime || 0)}-${Number(entry.endTime || 0)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    unique.push({ startTime, endTime });
+    unique.push(entry);
   }
 
   return unique;
 }
 
-async function fetchBinancePayTransactionsWindow(credentials, startTime, endTime) {
-  const attempts = 3;
+function isBinanceTimestampError(errorValue) {
+  const haystack = JSON.stringify(errorValue || '').toLowerCase();
+  return haystack.includes('invalid_timestamp')
+    || haystack.includes('timestamp for this request is outside the time window')
+    || haystack.includes('outside of the time window')
+    || haystack.includes('-1021');
+}
+
+async function syncBinanceServerTimeOffset() {
+  try {
+    const response = await axios.get('https://api.binance.com/api/v3/time', { timeout: 10000 });
+    const serverTime = Number(response?.data?.serverTime || 0);
+    if (!Number.isFinite(serverTime) || serverTime <= 0) return false;
+    BINANCE_SERVER_TIME_OFFSET_MS = serverTime - Date.now();
+    return true;
+  } catch (err) {
+    console.error('Binance server time sync error:', err.response?.data || err.message || err);
+    return false;
+  }
+}
+
+async function fetchBinancePayTransactionsWindow(credentials, startTime = null, endTime = null) {
+  const attempts = 4;
   let lastError = null;
+  let syncedServerTime = false;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const timestamp = Date.now();
-    const queryString = new URLSearchParams({
-      startTime: String(startTime),
-      endTime: String(endTime),
+    const params = new URLSearchParams({
       limit: '100',
       recvWindow: '60000',
-      timestamp: String(timestamp)
-    }).toString();
+      timestamp: String(getBinanceClientNowMs())
+    });
+
+    if (Number.isFinite(Number(startTime)) && Number(startTime) > 0) {
+      params.set('startTime', String(Number(startTime)));
+    }
+    if (Number.isFinite(Number(endTime)) && Number(endTime) > 0) {
+      params.set('endTime', String(Number(endTime)));
+    }
+
+    const queryString = params.toString();
     const signature = crypto.createHmac('sha256', credentials.apiSecret).update(queryString).digest('hex');
     const url = `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`;
 
@@ -3874,6 +4007,14 @@ async function fetchBinancePayTransactionsWindow(credentials, startTime, endTime
     } catch (err) {
       lastError = err.response?.data || err.message || 'API error';
       console.error('Binance Pay API error:', lastError);
+
+      if (!syncedServerTime && isBinanceTimestampError(lastError)) {
+        syncedServerTime = await syncBinanceServerTimeOffset();
+        if (syncedServerTime) {
+          continue;
+        }
+      }
+
       if (attempt < attempts) {
         await sleep(2500);
       }
@@ -3890,7 +4031,12 @@ async function fetchCandidateBinanceTransactions(credentials, sessionCreatedAt) 
   let lastError = null;
 
   for (const window of buildBinanceHistoryWindows(sessionCreatedAt)) {
-    const result = await fetchBinancePayTransactionsWindow(credentials, window.startTime, window.endTime);
+    const result = await fetchBinancePayTransactionsWindow(
+      credentials,
+      window.mode === 'latest' ? null : window.startTime,
+      window.mode === 'latest' ? null : window.endTime
+    );
+
     if (!result.ok) {
       lastError = result.error || lastError;
       continue;
@@ -3904,6 +4050,8 @@ async function fetchCandidateBinanceTransactions(credentials, sessionCreatedAt) 
       allRows.push(row);
     }
   }
+
+  allRows.sort((a, b) => getBinanceTransactionTime(b) - getBinanceTransactionTime(a));
 
   return {
     ok: hadSuccess,
@@ -3923,10 +4071,164 @@ function getBinanceVerificationFailureReason(reason, lang) {
       return ar ? '⚠️ تعذر الاتصال بـ Binance API حاليًا، حاول مرة أخرى بعد قليل.' : '⚠️ Binance API is currently unavailable. Please try again shortly.';
     case 'duplicate_tx':
       return ar ? '❌ هذه العملية مستخدمة مسبقًا.' : '❌ This transaction has already been used.';
+    case 'ambiguous_match':
+      return ar ? '⚠️ تم العثور على أكثر من عملية محتملة بنفس البيانات، لذلك يلزم التحقق اليدوي.' : '⚠️ More than one possible matching transaction was found, so manual verification is required.';
     case 'no_match':
     default:
       return ar ? '❌ لم يتم العثور على عملية مطابقة حتى الآن.' : '❌ No matching transaction was found yet.';
   }
+}
+
+function pickBestBinanceMatch(rows, orderNumber, verificationCode, options = {}) {
+  const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
+  const wantedCode = normalizeBinanceNoteCode(verificationCode || orderNumber);
+  const sessionCreatedAt = Number(options.sessionCreatedAt || 0);
+  const payId = options.payId || '';
+  const now = getBinanceClientNowMs();
+
+  const candidates = rows.map(item => {
+    const txTime = getBinanceTransactionTime(item);
+    const payIdLevel = getBinancePayIdMatchLevel(item, payId);
+    const identifierExact = wantedIdentifier ? itemMatchesBinanceOrder(item, wantedIdentifier) : false;
+    const noteExact = wantedCode ? itemMatchesBinanceNoteCode(item, wantedCode) : false;
+    const identifierRelaxed = !identifierExact && wantedIdentifier ? itemMatchesBinanceOrderRelaxed(item, wantedIdentifier) : false;
+
+    let timeScore = 0;
+    let deltaScore = 0;
+    let deltaMs = Number.MAX_SAFE_INTEGER;
+    if (sessionCreatedAt > 0 && txTime > 0) {
+      deltaMs = Math.abs(txTime - sessionCreatedAt);
+      if (txTime >= (sessionCreatedAt - (10 * 60 * 1000)) && txTime <= (now + (5 * 60 * 1000))) {
+        timeScore = 1;
+      }
+      if (deltaMs <= (2 * 60 * 1000)) {
+        deltaScore = 4;
+      } else if (deltaMs <= (10 * 60 * 1000)) {
+        deltaScore = 3;
+      } else if (deltaMs <= (30 * 60 * 1000)) {
+        deltaScore = 2;
+      } else if (deltaMs <= (6 * 60 * 60 * 1000)) {
+        deltaScore = 1;
+      }
+    }
+
+    let method = null;
+    let score = 0;
+
+    if (identifierExact) {
+      method = 'identifier_exact';
+      score += 120;
+    } else if (noteExact) {
+      method = 'note_code';
+      score += 108;
+    } else if (identifierRelaxed) {
+      method = 'identifier_relaxed';
+      score += 82;
+    }
+
+    if (payIdLevel > 0) {
+      score += payIdLevel * 8;
+    }
+
+    if (timeScore > 0) {
+      score += 12;
+    }
+    score += deltaScore * 4;
+
+    if (!method && payIdLevel >= 3 && timeScore > 0 && deltaScore >= 2) {
+      method = 'payid_recent';
+      score += 52;
+    } else if (!method && payIdLevel >= 1 && timeScore > 0 && deltaScore >= 3) {
+      method = 'payid_recent_loose';
+      score += 44;
+    } else if (!method && timeScore > 0 && deltaScore >= 3) {
+      method = 'recent_unique_fallback';
+      score += 36;
+    } else if (!method && payIdLevel >= 4) {
+      method = 'payid_exact_only';
+      score += 28;
+    }
+
+    if (txTime > 0) {
+      const ageMs = now - txTime;
+      if (ageMs >= 0 && ageMs <= (10 * 60 * 1000)) {
+        score += 3;
+      } else if (ageMs <= (60 * 60 * 1000)) {
+        score += 1;
+      }
+    }
+
+    return {
+      item,
+      txTime,
+      deltaMs,
+      score,
+      method,
+      payIdLevel,
+      identifierExact,
+      noteExact,
+      identifierRelaxed
+    };
+  }).filter(candidate => candidate.method);
+
+  if (!candidates.length) {
+    return { candidate: null, reason: 'no_match', candidates: [] };
+  }
+
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.payIdLevel !== a.payIdLevel) return b.payIdLevel - a.payIdLevel;
+    if (a.deltaMs !== b.deltaMs) return a.deltaMs - b.deltaMs;
+    return b.txTime - a.txTime;
+  });
+
+  const top = candidates[0];
+  const second = candidates[1] || null;
+  const scoreGap = second ? (top.score - second.score) : Number.POSITIVE_INFINITY;
+
+  if (top.identifierExact || top.noteExact) {
+    return { candidate: top, reason: null, candidates };
+  }
+
+  if (top.identifierRelaxed && scoreGap >= 8) {
+    return { candidate: top, reason: null, candidates };
+  }
+
+  if ((top.method === 'payid_recent' || top.method === 'payid_recent_loose') && scoreGap >= 10) {
+    return { candidate: top, reason: null, candidates };
+  }
+
+  if (rows.length === 1 && top.method && (top.payIdLevel > 0 || top.deltaMs <= (10 * 60 * 1000))) {
+    return { candidate: top, reason: null, candidates };
+  }
+
+  if (candidates.length === 1 && (top.method === 'recent_unique_fallback' || top.method === 'payid_exact_only')) {
+    return { candidate: top, reason: null, candidates };
+  }
+
+  return {
+    candidate: null,
+    reason: candidates.length > 1 ? 'ambiguous_match' : 'no_match',
+    candidates
+  };
+}
+
+function buildBinanceDuplicateCandidates(rawInput, checkResult = {}) {
+  const matchedItem = checkResult?.matchedItem || null;
+  const values = [
+    rawInput,
+    checkResult?.rawOrderId,
+    checkResult?.txId,
+    matchedItem?.transactionId,
+    matchedItem?.orderId,
+    matchedItem?.prepayId,
+    matchedItem?.merchantTradeNo,
+    matchedItem?.transactionNo,
+    matchedItem?.tradeNo,
+    matchedItem ? getBinanceTransactionUniqueKey(matchedItem) : null
+  ];
+
+  return [...new Set(values.map(normalizeBinanceIdentifier).filter(Boolean))];
 }
 
 async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}) {
@@ -3949,131 +4251,48 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const rows = fetched.rows || [];
-  const amountMatchedAll = rows.filter(item => {
-    const amount = getBinanceHistoryAmountUSDT(item);
-    if (Math.abs(amount - expected) > 0.000001) return false;
-
-    const directAmount = parseFloat(item?.amount || 0);
-    if (Number.isFinite(directAmount) && directAmount < 0) return false;
-    return true;
-  });
-
-  const amountMatchedPayId = credentials.payId
+  const amountMatchedAll = rows.filter(item => doesBinanceAmountMatch(item, expected) && isLikelyIncomingBinancePayment(item, null));
+  const payIdMatchedRows = credentials.payId
     ? amountMatchedAll.filter(item => isLikelyIncomingBinancePayment(item, credentials.payId))
     : amountMatchedAll;
 
-  const preferredRows = amountMatchedPayId.length ? amountMatchedPayId : amountMatchedAll;
+  const orderedCandidates = payIdMatchedRows.length
+    ? [...payIdMatchedRows, ...amountMatchedAll.filter(item => !payIdMatchedRows.includes(item))]
+    : amountMatchedAll;
 
-  const exactIdentifierMatch = wantedIdentifier
-    ? (preferredRows.find(item => itemMatchesBinanceOrder(item, wantedIdentifier))
-      || amountMatchedAll.find(item => itemMatchesBinanceOrder(item, wantedIdentifier)))
-    : null;
-
-  if (exactIdentifierMatch) {
-    return {
-      success: true,
-      method: 'identifier_exact',
-      amount: getBinanceHistoryAmountUSDT(exactIdentifierMatch),
-      txId: exactIdentifierMatch.transactionId || exactIdentifierMatch.orderId || exactIdentifierMatch.prepayId || orderNumber,
-      rawOrderId: orderNumber,
-      currency: 'USDT',
-      transactionTime: exactIdentifierMatch.transactionTime || exactIdentifierMatch.transactTime || Date.now(),
-      orderType: exactIdentifierMatch.orderType || null,
-      payId: credentials.payId || null,
-      matchedItem: exactIdentifierMatch
-    };
-  }
-
-  const noteCodeMatch = wantedCode
-    ? (preferredRows.find(item => itemMatchesBinanceNoteCode(item, wantedCode))
-      || amountMatchedAll.find(item => itemMatchesBinanceNoteCode(item, wantedCode)))
-    : null;
-
-  if (noteCodeMatch) {
-    return {
-      success: true,
-      method: 'note_code',
-      amount: getBinanceHistoryAmountUSDT(noteCodeMatch),
-      txId: noteCodeMatch.transactionId || noteCodeMatch.orderId || noteCodeMatch.prepayId || wantedCode,
-      rawOrderId: orderNumber,
-      currency: 'USDT',
-      transactionTime: noteCodeMatch.transactionTime || noteCodeMatch.transactTime || Date.now(),
-      orderType: noteCodeMatch.orderType || null,
-      payId: credentials.payId || null,
-      matchedItem: noteCodeMatch
-    };
-  }
-
-  const relaxedIdentifierMatches = wantedIdentifier
-    ? preferredRows.filter(item => itemMatchesBinanceOrderRelaxed(item, wantedIdentifier))
-    : [];
-
-  if (relaxedIdentifierMatches.length === 1) {
-    const relaxedMatch = relaxedIdentifierMatches[0];
-    return {
-      success: true,
-      method: 'identifier_relaxed',
-      amount: getBinanceHistoryAmountUSDT(relaxedMatch),
-      txId: relaxedMatch.transactionId || relaxedMatch.orderId || relaxedMatch.prepayId || orderNumber,
-      rawOrderId: orderNumber,
-      currency: 'USDT',
-      transactionTime: relaxedMatch.transactionTime || relaxedMatch.transactTime || Date.now(),
-      orderType: relaxedMatch.orderType || null,
-      payId: credentials.payId || null,
-      matchedItem: relaxedMatch
-    };
-  }
-
-  const relaxedFallbackMatches = !relaxedIdentifierMatches.length && wantedIdentifier
-    ? amountMatchedAll.filter(item => itemMatchesBinanceOrderRelaxed(item, wantedIdentifier))
-    : [];
-
-  if (relaxedFallbackMatches.length === 1) {
-    const relaxedMatch = relaxedFallbackMatches[0];
-    return {
-      success: true,
-      method: 'identifier_relaxed_amount_only',
-      amount: getBinanceHistoryAmountUSDT(relaxedMatch),
-      txId: relaxedMatch.transactionId || relaxedMatch.orderId || relaxedMatch.prepayId || orderNumber,
-      rawOrderId: orderNumber,
-      currency: 'USDT',
-      transactionTime: relaxedMatch.transactionTime || relaxedMatch.transactTime || Date.now(),
-      orderType: relaxedMatch.orderType || null,
-      payId: credentials.payId || null,
-      matchedItem: relaxedMatch
-    };
-  }
-
-  const sessionCreatedAt = Number(options.sessionCreatedAt || 0);
-  const recentCandidates = preferredRows.filter(item => {
-    const txTime = Number(item?.transactionTime || item?.transactTime || 0);
-    if (!Number.isFinite(txTime) || txTime <= 0) return false;
-    if (!Number.isFinite(sessionCreatedAt) || sessionCreatedAt <= 0) return false;
-    return txTime >= (sessionCreatedAt - (2 * 60 * 1000));
+  const picked = pickBestBinanceMatch(orderedCandidates, orderNumber, options.verificationCode || orderNumber, {
+    sessionCreatedAt: options.sessionCreatedAt,
+    payId: credentials.payId || null
   });
 
-  if (recentCandidates.length === 1) {
-    const candidate = recentCandidates[0];
+  if (picked.candidate) {
+    const match = picked.candidate;
+    const matchedItem = match.item;
     return {
       success: true,
-      method: 'recent_unique_fallback',
-      amount: getBinanceHistoryAmountUSDT(candidate),
-      txId: candidate.transactionId || candidate.orderId || candidate.prepayId || orderNumber,
+      method: match.method,
+      amount: getBinanceHistoryAmountUSDT(matchedItem),
+      txId: matchedItem.transactionId || matchedItem.orderId || matchedItem.prepayId || getBinanceTransactionUniqueKey(matchedItem) || orderNumber,
       rawOrderId: orderNumber,
       currency: 'USDT',
-      transactionTime: candidate.transactionTime || candidate.transactTime || Date.now(),
-      orderType: candidate.orderType || null,
+      transactionTime: getBinanceTransactionTime(matchedItem) || getBinanceClientNowMs(),
+      orderType: matchedItem.orderType || null,
       payId: credentials.payId || null,
-      matchedItem: candidate
+      matchedItem,
+      searchedRows: rows.length,
+      amountMatchedRows: amountMatchedAll.length,
+      payIdMatchedRows: payIdMatchedRows.length,
+      scoredCandidates: picked.candidates.length,
+      matchScore: match.score
     };
   }
 
   return {
     success: false,
-    reason: 'no_match',
+    reason: picked.reason || 'no_match',
     searchedRows: rows.length,
     amountMatchedRows: amountMatchedAll.length,
-    payIdMatchedRows: amountMatchedPayId.length,
+    payIdMatchedRows: payIdMatchedRows.length,
     payId: credentials.payId || null
   };
 }
@@ -4087,9 +4306,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   const normalizedInput = normalizeBinanceIdentifier(rawInput);
   const lang = user.lang === 'ar' ? 'ar' : 'en';
 
-  const duplicateCandidates = [normalizedInput]
-    .map(value => String(value || '').trim())
-    .filter(Boolean);
+  const duplicateCandidates = [...new Set([normalizedInput].filter(Boolean))];
 
   if (duplicateCandidates.length) {
     const existing = await BalanceTransaction.findOne({
@@ -4114,10 +4331,35 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   const waitingMsg = await bot.sendMessage(userId, waitingText);
   const waitStartedAt = Date.now();
 
-  const checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
-    sessionCreatedAt: state?.createdAt,
-    userId
-  });
+  const maxAttempts = 6;
+  let checkResult = { success: false, reason: 'no_match' };
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (attempt > 1) {
+      const retryText = lang === 'ar'
+        ? `⏳ جاري إعادة المحاولة والتحقق من Binance... (${attempt}/${maxAttempts})`
+        : `⏳ Re-checking Binance verification... (${attempt}/${maxAttempts})`;
+      await bot.editMessageText(retryText, {
+        chat_id: userId,
+        message_id: waitingMsg.message_id
+      }).catch(() => {});
+    }
+
+    checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
+      sessionCreatedAt: state?.createdAt,
+      userId,
+      attemptNumber: attempt
+    });
+
+    if (checkResult.success) break;
+
+    const shouldRetry = ['no_match', 'ambiguous_match', 'api_error'].includes(checkResult.reason);
+    if (!shouldRetry || attempt >= maxAttempts) {
+      break;
+    }
+
+    await sleep(attempt <= 2 ? 3000 : 4000);
+  }
 
   const minVisibleMs = 1500;
   const elapsedMs = Date.now() - waitStartedAt;
@@ -4128,14 +4370,16 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
   if (checkResult.success) {
-    const txKey = normalizeBinanceIdentifier(checkResult.txId || rawInput) || normalizedInput;
-    const txDuplicate = await BalanceTransaction.findOne({
-      where: {
-        type: 'deposit',
-        status: 'completed',
-        txid: txKey
-      }
-    });
+    const txDuplicateKeys = buildBinanceDuplicateCandidates(rawInput, checkResult);
+    const txDuplicate = txDuplicateKeys.length
+      ? await BalanceTransaction.findOne({
+        where: {
+          type: 'deposit',
+          status: 'completed',
+          txid: { [Op.in]: txDuplicateKeys }
+        }
+      })
+      : null;
 
     if (txDuplicate) {
       await bot.sendMessage(userId, lang === 'ar'
@@ -4144,6 +4388,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
       return { handled: true, success: false, reason: 'duplicate_tx' };
     }
 
+    const txKey = txDuplicateKeys[0] || normalizedInput;
     const t = await sequelize.transaction();
     try {
       const freshUser = await User.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
@@ -4156,7 +4401,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         type: 'deposit',
         status: 'completed',
         txid: txKey,
-        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount}`
+        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | amountMatched=${checkResult.amountMatchedRows || 0} | payIdMatched=${checkResult.payIdMatchedRows || 0} | score=${checkResult.matchScore || 0}`
       }, { transaction: t });
 
       await t.commit();
@@ -4176,7 +4421,8 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         `Order ID: ${rawInput || '-'}\n` +
         `Matched Tx ID: ${checkResult.txId || '-'}\n` +
         `Method: ${checkResult.method}\n` +
-        `Binance ID: ${checkResult.payId || BINANCE_PAY_ID || '-'}`
+        `Binance ID: ${checkResult.payId || BINANCE_PAY_ID || '-'}\n` +
+        `Rows: ${checkResult.searchedRows || 0} | Amount rows: ${checkResult.amountMatchedRows || 0} | PayID rows: ${checkResult.payIdMatchedRows || 0}`
       ).catch(() => {});
 
       await clearUserState(userId);
@@ -4213,7 +4459,6 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
   return { handled: true, success: false, reason: checkResult.reason };
 }
-
 
 async function sendMainMenu(userId) {
   const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
