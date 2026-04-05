@@ -14,6 +14,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
+const HOSTED_BINANCE_PAY_ENABLED = String(process.env.BINANCE_PAY_MERCHANT_ENABLED || 'false').trim().toLowerCase() === 'true';
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -3550,8 +3551,8 @@ async function sendLegacyBinanceAutoInstructions(userId, amount) {
   const payId = credentials?.payId || BINANCE_PAY_ID || '842505320';
 
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل <b>Order ID</b> فقط هنا ليتم التحقق تلقائياً.`
-    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>Order ID</b> only here for automatic verification.`;
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل هنا <b>رقم العملية الظاهر في Binance</b> مثل <b>Order ID</b> أو <b>Transaction ID</b> ليتم التحقق تلقائياً.`
+    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>reference shown in Binance</b> here, such as the <b>Order ID</b> or <b>Transaction ID</b>, for automatic verification.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -4127,21 +4128,17 @@ async function closeHostedBinancePayOrderForUser(userId, merchantTradeNo) {
 }
 
 async function sendBinanceAutoInstructions(userId, amount) {
-  const created = await createHostedBinancePayDepositOrder(userId, amount);
-  const user = await User.findByPk(userId);
-  const lang = user?.lang || 'en';
+  if (!HOSTED_BINANCE_PAY_ENABLED) {
+    return sendLegacyBinanceAutoInstructions(userId, amount);
+  }
 
+  const created = await createHostedBinancePayDepositOrder(userId, amount);
   if (created.success && created.order) {
     await sendHostedBinancePayInvoice(userId, created.order);
     return created;
   }
 
   console.error('Hosted Binance Pay fallback:', created.reason, created.error || created.response || '');
-
-  const fallbackNotice = lang === 'ar'
-    ? '⚠️ تعذر إنشاء رابط الدفع المباشر الآن. تم تحويلك للوضع الاحتياطي الحالي.'
-    : '⚠️ Could not create the direct payment link right now. Switched to the current fallback mode.';
-  await bot.sendMessage(userId, fallbackNotice).catch(() => {});
   return sendLegacyBinanceAutoInstructions(userId, amount);
 }
 
@@ -5707,7 +5704,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
       return;
     }
-    if (rawArg && /^pay_[a-zA-Z0-9]+$/i.test(rawArg)) {
+    if (HOSTED_BINANCE_PAY_ENABLED && rawArg && /^pay_[a-zA-Z0-9]+$/i.test(rawArg)) {
       const merchantTradeNo = normalizeHostedBinanceOrderId(rawArg.slice(4));
       if (merchantTradeNo) {
         const payCheck = await handleBinancePayStatusCheck(userId, merchantTradeNo, { triggeredByStart: true });
@@ -6173,6 +6170,10 @@ bot.on('callback_query', async query => {
     }
 
     if (data.startsWith('binpay_check_')) {
+      if (!HOSTED_BINANCE_PAY_ENABLED) {
+        await bot.answerCallbackQuery(query.id, { text: 'Unavailable' }).catch(() => {});
+        return;
+      }
       const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_check_', ''));
       await bot.answerCallbackQuery(query.id, { text: 'Checking payment...' }).catch(() => {});
       await handleBinancePayStatusCheck(userId, merchantTradeNo);
@@ -6180,6 +6181,10 @@ bot.on('callback_query', async query => {
     }
 
     if (data.startsWith('binpay_close_')) {
+      if (!HOSTED_BINANCE_PAY_ENABLED) {
+        await bot.answerCallbackQuery(query.id, { text: 'Unavailable' }).catch(() => {});
+        return;
+      }
       const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_close_', ''));
       const result = await closeHostedBinancePayOrderForUser(userId, merchantTradeNo);
       const lang = (await User.findByPk(userId))?.lang || 'en';
@@ -9451,7 +9456,9 @@ sequelize.sync({ alter: true }).then(async () => {
   await getPrivateCodesChannelConfig();
   await getReferralCodesChannelConfig();
   await getBotUsername();
-  startBinancePayOrderPolling();
+  if (HOSTED_BINANCE_PAY_ENABLED) {
+    startBinancePayOrderPolling();
+  }
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
