@@ -912,6 +912,104 @@ const DEFAULT_TEXTS = {
   }
 };
 
+Object.assign(DEFAULT_TEXTS.en, {
+  cancel: '❌ Cancel',
+  digitalSectionsButtonsHeader: '🧩 Digital sections in the main menu',
+  digitalSectionManageText: '🧩 Section: {name}\nStatus: {status}\nAdded at: {createdAt}\nProducts: {count}',
+  digitalSectionActive: 'Visible in the main menu',
+  digitalSectionHidden: 'Hidden from the main menu',
+  editDigitalSectionName: '✏️ Edit section name',
+  deleteDigitalSection: '🗑️ Delete section',
+  askEditDigitalSectionNameEn: 'Send the new section name in English:',
+  askEditDigitalSectionNameAr: 'Send the new section name in Arabic:',
+  digitalSectionUpdated: '✅ Section name updated successfully!',
+  confirmDeleteDigitalSection: '⚠️ Are you sure you want to delete this section with all its products and stock?',
+  digitalSectionDeleted: '✅ Section deleted successfully.',
+  editDigitalProductName: '✏️ Edit item name',
+  editDigitalProductPrice: '💰 Edit item price',
+  editDigitalProductDescription: '📝 Edit item details',
+  deleteDigitalProduct: '🗑️ Delete item',
+  viewDigitalProductStock: '📄 View added stock',
+  searchDigitalProductDuplicates: '🔎 Search duplicate stock',
+  deleteDigitalProductDuplicates: '🗑️ Delete duplicate stock',
+  digitalProductDeleted: '✅ Item deleted successfully.',
+  confirmDeleteDigitalProduct: '⚠️ Are you sure you want to delete this item with all its stock?',
+  askEditDigitalProductNameEn: 'Send the new item name in English:',
+  askEditDigitalProductNameAr: 'Send the new item name in Arabic:',
+  askEditDigitalProductPrice: 'Send the new item price in USD:',
+  askEditDigitalProductDescription: 'Send the new item details (text, photo, video, /empty to clear, or /skip to cancel):',
+  digitalProductNameUpdated: '✅ Item name updated successfully!',
+  digitalProductPriceUpdated: '✅ Item price updated successfully!',
+  digitalProductDescriptionUpdated: '✅ Item details updated successfully!',
+  noDigitalProductStock: 'No stock/accounts were added for this item yet.',
+  digitalStockViewTitle: '📄 Added stock for: {name}\nTotal rows: {count}',
+  stockEntryLabel: 'Entry #{index}',
+  addedAtLine: 'Added at: {createdAt}',
+  stockStatusAvailable: 'Available',
+  stockStatusSold: 'Sold',
+  stockStatusLine: 'Status: {status}',
+  digitalDuplicatesNone: '✅ No duplicate codes/accounts were found for this item.',
+  digitalDuplicatesFound: '🔎 Duplicate codes/accounts found: {count}\n\n{details}',
+  digitalDuplicatesDeleted: '✅ Deleted duplicate stock rows: {count}\n{skippedLine}',
+  duplicateSkippedLocked: 'Used duplicate rows kept: {count}',
+  codesAddedDetailed: '✅ Stock added successfully.\nAdded: {added}\nSkipped duplicates: {duplicates}',
+  invalidPurchaseQuantity: '❌ Invalid quantity. Please send a valid positive number.',
+  productDescriptionLine: 'Description: {description}',
+  invalidBulkStockPairs: '❌ Bulk stock must be sent as pairs: email on one line and password on the next line.',
+  emptyStockInput: '❌ Please send the stock/accounts first.',
+  digitalProductManageText: '🧾 {name}\nPrice: {price} USD\nRemaining stock: {stock}\nType: {type}\nAdded at: {createdAt}\nDescription: {description}',
+  buyNow: '🛒 Buy Now'
+});
+
+Object.assign(DEFAULT_TEXTS.ar, {
+  cancel: '❌ إلغاء',
+  digitalSectionsButtonsHeader: '🧩 الخانات الرقمية في القائمة الرئيسية',
+  digitalSectionManageText: '🧩 الخانة: {name}\nالحالة: {status}\nتاريخ الإضافة: {createdAt}\nعدد المنتجات: {count}',
+  digitalSectionActive: 'ظاهرة في القائمة الرئيسية',
+  digitalSectionHidden: 'مخفية من القائمة الرئيسية',
+  editDigitalSectionName: '✏️ تعديل اسم الخانة',
+  deleteDigitalSection: '🗑️ حذف الخانة',
+  askEditDigitalSectionNameEn: 'أرسل اسم الخانة الجديد بالإنجليزية:',
+  askEditDigitalSectionNameAr: 'أرسل اسم الخانة الجديد بالعربية:',
+  digitalSectionUpdated: '✅ تم تحديث اسم الخانة بنجاح!',
+  confirmDeleteDigitalSection: '⚠️ هل أنت متأكد من حذف هذه الخانة مع جميع المنتجات والمخزون داخلها؟',
+  digitalSectionDeleted: '✅ تم حذف الخانة بنجاح.',
+  editDigitalProductName: '✏️ تعديل اسم المنتج',
+  editDigitalProductPrice: '💰 تعديل سعر المنتج',
+  editDigitalProductDescription: '📝 تعديل وصف المنتج',
+  deleteDigitalProduct: '🗑️ حذف المنتج',
+  viewDigitalProductStock: '📄 عرض المنتج المضاف',
+  searchDigitalProductDuplicates: '🔎 البحث عن المكرر',
+  deleteDigitalProductDuplicates: '🗑️ حذف المكرر',
+  digitalProductDeleted: '✅ تم حذف المنتج بنجاح.',
+  confirmDeleteDigitalProduct: '⚠️ هل أنت متأكد من حذف هذا المنتج مع جميع المخزون الخاص به؟',
+  askEditDigitalProductNameEn: 'أرسل اسم المنتج الجديد بالإنجليزية:',
+  askEditDigitalProductNameAr: 'أرسل اسم المنتج الجديد بالعربية:',
+  askEditDigitalProductPrice: 'أرسل سعر المنتج الجديد بالدولار:',
+  askEditDigitalProductDescription: 'أرسل تفاصيل المنتج الجديدة (نص أو صورة أو فيديو، أو /empty للحذف، أو /skip للإلغاء):',
+  digitalProductNameUpdated: '✅ تم تحديث اسم المنتج بنجاح!',
+  digitalProductPriceUpdated: '✅ تم تحديث سعر المنتج بنجاح!',
+  digitalProductDescriptionUpdated: '✅ تم تحديث وصف المنتج بنجاح!',
+  noDigitalProductStock: 'لا يوجد مخزون/حسابات مضافة لهذا المنتج حتى الآن.',
+  digitalStockViewTitle: '📄 المخزون المضاف للمنتج: {name}\nإجمالي السطور: {count}',
+  stockEntryLabel: 'العنصر #{index}',
+  addedAtLine: 'تاريخ الإضافة: {createdAt}',
+  stockStatusAvailable: 'متاح',
+  stockStatusSold: 'مباع',
+  stockStatusLine: 'الحالة: {status}',
+  digitalDuplicatesNone: '✅ لا توجد أكواد/حسابات مكررة لهذا المنتج.',
+  digitalDuplicatesFound: '🔎 تم العثور على أكواد/حسابات مكررة: {count}\n\n{details}',
+  digitalDuplicatesDeleted: '✅ تم حذف الصفوف المكررة: {count}\n{skippedLine}',
+  duplicateSkippedLocked: 'تم الإبقاء على الصفوف المكررة المباعة: {count}',
+  codesAddedDetailed: '✅ تمت إضافة المخزون بنجاح.\nتمت الإضافة: {added}\nالمكرر الذي تم تجاهله: {duplicates}',
+  invalidPurchaseQuantity: '❌ الكمية غير صالحة. يرجى إرسال رقم موجب صحيح.',
+  productDescriptionLine: 'الوصف: {description}',
+  invalidBulkStockPairs: '❌ يجب إرسال مخزون الحسابات على شكل أزواج: الإيميل في سطر والباسورد في السطر الذي يليه.',
+  emptyStockInput: '❌ أرسل المخزون/الحسابات أولاً.',
+  digitalProductManageText: '🧾 {name}\nالسعر: {price} دولار\nالمخزون المتبقي: {stock}\nالنوع: {type}\nتاريخ الإضافة: {createdAt}\nالوصف: {description}',
+  buyNow: '🛒 شراء الآن'
+});
+
 function isAdmin(userId) {
   return Number(userId) === ADMIN_ID;
 }
@@ -1630,11 +1728,17 @@ function isDigitalSectionCategory(category) {
   return Number.isInteger(parseDigitalSectionIdFromCategory(category));
 }
 
-async function getDigitalSections() {
+async function getDigitalSections(options = {}) {
+  const { includeInactive = false } = options;
+  const where = includeInactive ? {} : { isActive: true };
   return await DigitalSection.findAll({
-    where: { isActive: true },
+    where,
     order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
+}
+
+async function getAllDigitalSections() {
+  return await getDigitalSections({ includeInactive: true });
 }
 
 async function getDigitalSectionDisplayName(section, userId) {
@@ -1728,15 +1832,277 @@ async function showChatGptPurchaseInfo(userId) {
   });
 }
 
+function truncateText(value, maxLength = 700) {
+  const textValue = String(value || '');
+  if (textValue.length <= maxLength) return textValue;
+  return `${textValue.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function formatAdminDateTime(value) {
+  if (!value) return '-';
+  const parts = formatDateParts(value);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+async function getDigitalSectionStatusText(userId, section) {
+  return await getText(userId, section?.isActive ? 'digitalSectionActive' : 'digitalSectionHidden');
+}
+
+async function getMerchantAdminDescriptionSummary(userId, merchant) {
+  const plain = getMerchantPlainDescription(merchant);
+  if (plain) return truncateText(plain, 700);
+  if (merchant?.description?.type === 'photo' || merchant?.description?.type === 'video') {
+    return await getText(userId, 'attachedDetailsNote');
+  }
+  return '-';
+}
+
+async function resequenceDigitalSections(sectionsInput = null) {
+  const sections = Array.isArray(sectionsInput) && sectionsInput.length
+    ? sectionsInput
+    : await getAllDigitalSections();
+
+  for (let i = 0; i < sections.length; i += 1) {
+    const desired = i + 1;
+    if (Number(sections[i].sortOrder) !== desired) {
+      sections[i].sortOrder = desired;
+      await sections[i].save();
+    }
+  }
+
+  return sections;
+}
+
+async function moveDigitalSection(sectionId, direction) {
+  const sections = await getAllDigitalSections();
+  const index = sections.findIndex(section => Number(section.id) === Number(sectionId));
+  if (index === -1) return false;
+
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= sections.length) return false;
+
+  [sections[index], sections[targetIndex]] = [sections[targetIndex], sections[index]];
+  await resequenceDigitalSections(sections);
+  return true;
+}
+
+async function setDigitalSectionVisibility(sectionId, visible) {
+  const section = await DigitalSection.findByPk(sectionId);
+  if (!section) return false;
+  section.isActive = Boolean(visible);
+  await section.save();
+  return true;
+}
+
+function getMerchantStockCompositeKey(value, extra = '') {
+  return `${String(value || '').trim()}\n${String(extra || '').trim()}`;
+}
+
+function buildMerchantStockRowText(rowOrEntry) {
+  if (!rowOrEntry) return '';
+  return rowOrEntry.extra ? `${rowOrEntry.value}\n${rowOrEntry.extra}` : String(rowOrEntry.value || '');
+}
+
+function parseMerchantStockEntries(merchant, rawInput) {
+  const inputText = String(rawInput || '').trim();
+  if (!inputText) return { error: 'empty' };
+
+  if (merchant.type === 'bulk') {
+    const lines = inputText.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+    if (lines.length % 2 !== 0) return { error: 'pair_mismatch' };
+
+    const entries = [];
+    for (let i = 0; i < lines.length; i += 2) {
+      entries.push({ value: lines[i], extra: lines[i + 1] });
+    }
+    return { entries };
+  }
+
+  const values = inputText.split(/[\s\r\n]+/).map(v => v.trim()).filter(Boolean);
+  return { entries: values.map(value => ({ value, extra: null })) };
+}
+
+async function addMerchantStockEntriesWithDedup(merchant, rawInput) {
+  const parsed = parseMerchantStockEntries(merchant, rawInput);
+  if (parsed.error) return { success: false, reason: parsed.error };
+
+  const existingRows = await Code.findAll({
+    where: { merchantId: merchant.id },
+    attributes: ['value', 'extra']
+  });
+
+  const seen = new Set(existingRows.map(row => getMerchantStockCompositeKey(row.value, row.extra)));
+  const toCreate = [];
+  let duplicates = 0;
+
+  for (const entry of parsed.entries) {
+    const key = getMerchantStockCompositeKey(entry.value, entry.extra);
+    if (!entry.value || seen.has(key)) {
+      duplicates += 1;
+      continue;
+    }
+    seen.add(key);
+    toCreate.push({
+      value: entry.value,
+      extra: entry.extra || null,
+      merchantId: merchant.id,
+      isUsed: false
+    });
+  }
+
+  if (toCreate.length) {
+    await Code.bulkCreate(toCreate);
+  }
+
+  return {
+    success: true,
+    added: toCreate.length,
+    duplicates,
+    inputCount: parsed.entries.length
+  };
+}
+
+async function getMerchantDuplicateGroups(merchantId) {
+  const rows = await Code.findAll({
+    where: { merchantId },
+    order: [['id', 'ASC']]
+  });
+
+  const groups = new Map();
+  for (const row of rows) {
+    const key = getMerchantStockCompositeKey(row.value, row.extra);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+
+  return [...groups.entries()]
+    .filter(([, groupRows]) => groupRows.length > 1)
+    .map(([key, groupRows]) => ({
+      key,
+      rows: groupRows,
+      text: buildMerchantStockRowText(groupRows[0]),
+      total: groupRows.length,
+      unused: groupRows.filter(row => !row.isUsed).length,
+      used: groupRows.filter(row => row.isUsed).length
+    }));
+}
+
+async function formatMerchantDuplicateGroups(userId, groups, limit = 20) {
+  const availableLabel = await getText(userId, 'stockStatusAvailable');
+  const soldLabel = await getText(userId, 'stockStatusSold');
+  const sliced = groups.slice(0, limit);
+  let output = sliced.map((group, index) => {
+    return `${index + 1}) x${group.total} | ${availableLabel}: ${group.unused} | ${soldLabel}: ${group.used}\n${truncateText(group.text, 500)}`;
+  }).join('\n\n');
+
+  if (groups.length > limit) {
+    output += `\n\n... +${groups.length - limit} more`;
+  }
+
+  return output || '-';
+}
+
+async function deleteMerchantDuplicateRows(merchantId) {
+  const rows = await Code.findAll({
+    where: { merchantId },
+    order: [['id', 'ASC']]
+  });
+
+  const seen = new Set();
+  const deletableIds = [];
+  let locked = 0;
+
+  for (const row of rows) {
+    const key = getMerchantStockCompositeKey(row.value, row.extra);
+    if (!seen.has(key)) {
+      seen.add(key);
+      continue;
+    }
+
+    if (row.isUsed) {
+      locked += 1;
+      continue;
+    }
+
+    deletableIds.push(row.id);
+  }
+
+  if (deletableIds.length) {
+    await Code.destroy({ where: { id: deletableIds } });
+  }
+
+  return { count: deletableIds.length, locked };
+}
+
+async function sendDigitalProductStockPreview(userId, merchantId) {
+  const merchant = await Merchant.findByPk(merchantId);
+  if (!merchant) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
+
+  const rows = await Code.findAll({
+    where: { merchantId },
+    order: [['id', 'ASC']]
+  });
+
+  if (!rows.length) {
+    await bot.sendMessage(userId, await getText(userId, 'noDigitalProductStock'));
+    return;
+  }
+
+  const displayName = `${merchant.nameEn} / ${merchant.nameAr}`;
+  const availableLabel = await getText(userId, 'stockStatusAvailable');
+  const soldLabel = await getText(userId, 'stockStatusSold');
+
+  await bot.sendMessage(userId, await getText(userId, 'digitalStockViewTitle', {
+    name: displayName,
+    count: rows.length
+  }));
+
+  const entryBlocks = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    entryBlocks.push([
+      await getText(userId, 'stockEntryLabel', { index: index + 1 }),
+      await getText(userId, 'addedAtLine', { createdAt: formatAdminDateTime(row.createdAt) }),
+      await getText(userId, 'stockStatusLine', { status: row.isUsed ? soldLabel : availableLabel }),
+      `<code>${escapeHtml(buildMerchantStockRowText(row))}</code>`
+    ].join('\n'));
+  }
+
+  for (const chunk of chunkArray(entryBlocks, 10)) {
+    await bot.sendMessage(userId, chunk.join('\n\n'), { parse_mode: 'HTML' });
+  }
+}
+
+async function deleteDigitalProductAndStock(merchantId) {
+  await Code.destroy({ where: { merchantId } });
+  await Merchant.destroy({ where: { id: merchantId } });
+}
+
+async function deleteDigitalSectionAndContent(sectionId) {
+  const merchants = await getDigitalProductsForSection(sectionId);
+  const merchantIds = merchants.map(merchant => merchant.id);
+
+  if (merchantIds.length) {
+    await Code.destroy({ where: { merchantId: { [Op.in]: merchantIds } } });
+    await Merchant.destroy({ where: { id: { [Op.in]: merchantIds } } });
+  }
+
+  await DigitalSection.destroy({ where: { id: sectionId } });
+  await resequenceDigitalSections();
+}
+
 async function showDigitalSubscriptionsAdmin(userId) {
-  const sections = await getDigitalSections();
+  const sections = await getAllDigitalSections();
   const keyboard = [
     [{ text: await getText(userId, 'addDigitalSectionToMainMenu'), callback_data: 'admin_digital_add_section' }]
   ];
 
   for (const section of sections) {
     keyboard.push([{
-      text: `🧩 ${section.nameEn} / ${section.nameAr}`,
+      text: `${section.isActive ? '✅' : '⛔'} 🧩 ${section.nameEn} / ${section.nameAr}`,
       callback_data: `admin_digital_section_${section.id}`
     }]);
   }
@@ -1757,8 +2123,11 @@ async function showDigitalSectionAdmin(userId, sectionId) {
 
   const sectionName = `${section.nameEn} / ${section.nameAr}`;
   const products = await getDigitalProductsForSection(section.id);
+  const statusText = await getDigitalSectionStatusText(userId, section);
   const keyboard = [
-    [{ text: await getText(userId, 'addDigitalProductInSection', { name: sectionName }), callback_data: `admin_digital_add_product_${section.id}` }]
+    [{ text: await getText(userId, 'addDigitalProductInSection', { name: sectionName }), callback_data: `admin_digital_add_product_${section.id}` }],
+    [{ text: await getText(userId, 'editDigitalSectionName'), callback_data: `admin_edit_digital_section_${section.id}` }],
+    [{ text: await getText(userId, 'deleteDigitalSection'), callback_data: `admin_delete_digital_section_${section.id}` }]
   ];
 
   for (const product of products) {
@@ -1771,7 +2140,12 @@ async function showDigitalSectionAdmin(userId, sectionId) {
 
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin_digital_subscriptions' }]);
 
-  await bot.sendMessage(userId, await getText(userId, 'digitalSectionManageTitle', { name: sectionName }), {
+  await bot.sendMessage(userId, await getText(userId, 'digitalSectionManageText', {
+    name: sectionName,
+    status: statusText,
+    createdAt: formatAdminDateTime(section.createdAt),
+    count: products.length
+  }), {
     reply_markup: { inline_keyboard: keyboard }
   });
 }
@@ -1788,6 +2162,7 @@ async function showDigitalProductAdmin(userId, merchantId) {
   const typeText = merchant.type === 'bulk'
     ? await getText(userId, 'typeBulk')
     : await getText(userId, 'typeSingle');
+  const description = await getMerchantAdminDescriptionSummary(userId, merchant);
 
   await bot.sendMessage(
     userId,
@@ -1795,13 +2170,22 @@ async function showDigitalProductAdmin(userId, merchantId) {
       name: `${merchant.nameEn} / ${merchant.nameAr}`,
       price: formatUsdPrice(merchant.price),
       stock,
-      type: typeText
+      type: typeText,
+      createdAt: formatAdminDateTime(merchant.createdAt),
+      description
     }),
     {
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'addDigitalProductStock'), callback_data: `admin_digital_add_stock_${merchant.id}` }],
-          [{ text: await getText(userId, 'back'), callback_data: `admin_digital_section_${sectionId}` }]
+          [{ text: await getText(userId, 'viewDigitalProductStock'), callback_data: `admin_view_digital_product_stock_${merchant.id}` }],
+          [{ text: await getText(userId, 'searchDigitalProductDuplicates'), callback_data: `admin_search_digital_product_duplicates_${merchant.id}` }],
+          [{ text: await getText(userId, 'deleteDigitalProductDuplicates'), callback_data: `admin_delete_digital_product_duplicates_${merchant.id}` }],
+          [{ text: await getText(userId, 'editDigitalProductName'), callback_data: `admin_edit_digital_product_name_${merchant.id}` }],
+          [{ text: await getText(userId, 'editDigitalProductPrice'), callback_data: `admin_edit_digital_product_price_${merchant.id}` }],
+          [{ text: await getText(userId, 'editDigitalProductDescription'), callback_data: `admin_edit_digital_product_description_${merchant.id}` }],
+          [{ text: await getText(userId, 'deleteDigitalProduct'), callback_data: `admin_delete_digital_product_${merchant.id}` }],
+          [{ text: await getText(userId, 'back'), callback_data: sectionId ? `admin_digital_section_${sectionId}` : 'admin_digital_subscriptions' }]
         ]
       }
     }
@@ -1810,7 +2194,7 @@ async function showDigitalProductAdmin(userId, merchantId) {
 
 async function showDigitalSectionForUser(userId, sectionId) {
   const section = await DigitalSection.findByPk(sectionId);
-  if (!section) {
+  if (!section || !section.isActive) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
@@ -1852,6 +2236,11 @@ async function showDigitalProductDetails(userId, merchantId) {
   }
 
   const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
+  const section = sectionId ? await DigitalSection.findByPk(sectionId) : null;
+  if (!section || !section.isActive) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return;
+  }
   const stock = await getMerchantAvailableStock(merchant.id);
   const name = await getMerchantDisplayName(merchant, userId);
   let details = getMerchantPlainDescription(merchant);
@@ -2755,6 +3144,31 @@ async function showMenuButtonsAdmin(userId) {
     ]);
   }
 
+  const digitalSections = await getAllDigitalSections();
+  if (digitalSections.length) {
+    keyboard.push([{ text: await getText(userId, 'digitalSectionsButtonsHeader'), callback_data: 'ignore' }]);
+    for (let i = 0; i < digitalSections.length; i += 1) {
+      const section = digitalSections[i];
+      const sectionName = `${section.nameEn} / ${section.nameAr}`;
+      const action = section.isActive ? 'hide' : 'show';
+
+      keyboard.push([
+        {
+          text: `${section.isActive ? '✅' : '❌'} 🧩 ${sectionName}`,
+          callback_data: `toggle_digital_menu_button_${section.id}_${action}`
+        },
+        {
+          text: '⬆️',
+          callback_data: i === 0 ? 'ignore' : `move_digital_menu_button_${section.id}_up`
+        },
+        {
+          text: '⬇️',
+          callback_data: i === digitalSections.length - 1 ? 'ignore' : `move_digital_menu_button_${section.id}_down`
+        }
+      ]);
+    }
+  }
+
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
 
   await bot.sendMessage(userId, await getText(userId, 'manageMenuButtons'), {
@@ -3438,7 +3852,13 @@ async function fetchBinancePayTransactionsWindow(credentials, startTime, endTime
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const timestamp = Date.now();
-    const queryString = `startTime=${startTime}&endTime=${endTime}&limit=100&recvWindow=60000&timestamp=${timestamp}`;
+    const queryString = new URLSearchParams({
+      startTime: String(startTime),
+      endTime: String(endTime),
+      limit: '100',
+      recvWindow: '60000',
+      timestamp: String(timestamp)
+    }).toString();
     const signature = crypto.createHmac('sha256', credentials.apiSecret).update(queryString).digest('hex');
     const url = `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`;
 
@@ -3518,7 +3938,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
 
   const expected = Number(expectedAmountUSDT || 0);
   const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
-  if (!wantedIdentifier || !Number.isFinite(expected) || expected <= 0) {
+  const wantedCode = normalizeBinanceNoteCode(options.verificationCode || orderNumber);
+  if ((!wantedIdentifier && !wantedCode) || !Number.isFinite(expected) || expected <= 0) {
     return { success: false, reason: 'invalid_payload' };
   }
 
@@ -3528,14 +3949,24 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const rows = fetched.rows || [];
-  const amountMatched = rows.filter(item => {
+  const amountMatchedAll = rows.filter(item => {
     const amount = getBinanceHistoryAmountUSDT(item);
     if (Math.abs(amount - expected) > 0.000001) return false;
-    return isLikelyIncomingBinancePayment(item, credentials.payId);
+
+    const directAmount = parseFloat(item?.amount || 0);
+    if (Number.isFinite(directAmount) && directAmount < 0) return false;
+    return true;
   });
 
+  const amountMatchedPayId = credentials.payId
+    ? amountMatchedAll.filter(item => isLikelyIncomingBinancePayment(item, credentials.payId))
+    : amountMatchedAll;
+
+  const preferredRows = amountMatchedPayId.length ? amountMatchedPayId : amountMatchedAll;
+
   const exactIdentifierMatch = wantedIdentifier
-    ? amountMatched.find(item => itemMatchesBinanceOrder(item, wantedIdentifier))
+    ? (preferredRows.find(item => itemMatchesBinanceOrder(item, wantedIdentifier))
+      || amountMatchedAll.find(item => itemMatchesBinanceOrder(item, wantedIdentifier)))
     : null;
 
   if (exactIdentifierMatch) {
@@ -3554,7 +3985,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const noteCodeMatch = wantedCode
-    ? amountMatched.find(item => itemMatchesBinanceNoteCode(item, wantedCode))
+    ? (preferredRows.find(item => itemMatchesBinanceNoteCode(item, wantedCode))
+      || amountMatchedAll.find(item => itemMatchesBinanceNoteCode(item, wantedCode)))
     : null;
 
   if (noteCodeMatch) {
@@ -3573,7 +4005,7 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const relaxedIdentifierMatches = wantedIdentifier
-    ? amountMatched.filter(item => itemMatchesBinanceOrderRelaxed(item, wantedIdentifier))
+    ? preferredRows.filter(item => itemMatchesBinanceOrderRelaxed(item, wantedIdentifier))
     : [];
 
   if (relaxedIdentifierMatches.length === 1) {
@@ -3592,8 +4024,28 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
     };
   }
 
+  const relaxedFallbackMatches = !relaxedIdentifierMatches.length && wantedIdentifier
+    ? amountMatchedAll.filter(item => itemMatchesBinanceOrderRelaxed(item, wantedIdentifier))
+    : [];
+
+  if (relaxedFallbackMatches.length === 1) {
+    const relaxedMatch = relaxedFallbackMatches[0];
+    return {
+      success: true,
+      method: 'identifier_relaxed_amount_only',
+      amount: getBinanceHistoryAmountUSDT(relaxedMatch),
+      txId: relaxedMatch.transactionId || relaxedMatch.orderId || relaxedMatch.prepayId || orderNumber,
+      rawOrderId: orderNumber,
+      currency: 'USDT',
+      transactionTime: relaxedMatch.transactionTime || relaxedMatch.transactTime || Date.now(),
+      orderType: relaxedMatch.orderType || null,
+      payId: credentials.payId || null,
+      matchedItem: relaxedMatch
+    };
+  }
+
   const sessionCreatedAt = Number(options.sessionCreatedAt || 0);
-  const recentCandidates = amountMatched.filter(item => {
+  const recentCandidates = preferredRows.filter(item => {
     const txTime = Number(item?.transactionTime || item?.transactTime || 0);
     if (!Number.isFinite(txTime) || txTime <= 0) return false;
     if (!Number.isFinite(sessionCreatedAt) || sessionCreatedAt <= 0) return false;
@@ -3620,7 +4072,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
     success: false,
     reason: 'no_match',
     searchedRows: rows.length,
-    amountMatchedRows: amountMatched.length,
+    amountMatchedRows: amountMatchedAll.length,
+    payIdMatchedRows: amountMatchedPayId.length,
     payId: credentials.payId || null
   };
 }
@@ -3675,7 +4128,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
   if (checkResult.success) {
-    const txKey = normalizeBinanceIdentifier(checkResult.txId) || verificationCode || normalizedInput;
+    const txKey = normalizeBinanceIdentifier(checkResult.txId || rawInput) || normalizedInput;
     const txDuplicate = await BalanceTransaction.findOne({
       where: {
         type: 'deposit',
@@ -4825,6 +5278,26 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    const digitalToggleMatch = data.match(/^toggle_digital_menu_button_(\d+)_(show|hide)$/);
+    if (digitalToggleMatch && isAdmin(userId)) {
+      const sectionId = parseInt(digitalToggleMatch[1], 10);
+      const action = digitalToggleMatch[2];
+      await setDigitalSectionVisibility(sectionId, action === 'show');
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonVisibilityUpdated') });
+      await showMenuButtonsAdmin(userId);
+      return;
+    }
+
+    const digitalMoveMatch = data.match(/^move_digital_menu_button_(\d+)_(up|down)$/);
+    if (digitalMoveMatch && isAdmin(userId)) {
+      const sectionId = parseInt(digitalMoveMatch[1], 10);
+      const direction = digitalMoveMatch[2];
+      await moveDigitalSection(sectionId, direction);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonOrderUpdated') });
+      await showMenuButtonsAdmin(userId);
+      return;
+    }
+
     if (data.startsWith('support_reply_') && isAdmin(userId)) {
       const targetUserId = parseInt(data.split('_')[2], 10);
       await setUserState(userId, { action: 'support_reply', targetUserId });
@@ -5903,6 +6376,151 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    const editDigitalSectionMatch = data.match(/^admin_edit_digital_section_(\d+)$/);
+    if (editDigitalSectionMatch && isAdmin(userId)) {
+      const sectionId = parseInt(editDigitalSectionMatch[1], 10);
+      await setUserState(userId, { action: 'edit_digital_section_name', sectionId, step: 'nameEn' });
+      await bot.sendMessage(userId, await getText(userId, 'askEditDigitalSectionNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const deleteDigitalSectionMatch = data.match(/^admin_delete_digital_section_(\d+)$/);
+    if (deleteDigitalSectionMatch && isAdmin(userId)) {
+      const sectionId = parseInt(deleteDigitalSectionMatch[1], 10);
+      await bot.sendMessage(userId, await getText(userId, 'confirmDeleteDigitalSection'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'yes'), callback_data: `admin_confirm_delete_digital_section_${sectionId}` }],
+            [{ text: await getText(userId, 'no'), callback_data: `admin_digital_section_${sectionId}` }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const confirmDeleteDigitalSectionMatch = data.match(/^admin_confirm_delete_digital_section_(\d+)$/);
+    if (confirmDeleteDigitalSectionMatch && isAdmin(userId)) {
+      const sectionId = parseInt(confirmDeleteDigitalSectionMatch[1], 10);
+      await deleteDigitalSectionAndContent(sectionId);
+      await bot.sendMessage(userId, await getText(userId, 'digitalSectionDeleted'));
+      await showDigitalSubscriptionsAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const editDigitalProductNameMatch = data.match(/^admin_edit_digital_product_name_(\d+)$/);
+    if (editDigitalProductNameMatch && isAdmin(userId)) {
+      const merchantId = parseInt(editDigitalProductNameMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      const sectionId = parseDigitalSectionIdFromCategory(merchant?.category);
+      await setUserState(userId, { action: 'edit_digital_product_name', merchantId, sectionId, step: 'nameEn' });
+      await bot.sendMessage(userId, await getText(userId, 'askEditDigitalProductNameEn'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const editDigitalProductPriceMatch = data.match(/^admin_edit_digital_product_price_(\d+)$/);
+    if (editDigitalProductPriceMatch && isAdmin(userId)) {
+      const merchantId = parseInt(editDigitalProductPriceMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      const sectionId = parseDigitalSectionIdFromCategory(merchant?.category);
+      await setUserState(userId, { action: 'edit_digital_product_price', merchantId, sectionId });
+      await bot.sendMessage(userId, await getText(userId, 'askEditDigitalProductPrice'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const editDigitalProductDescriptionMatch = data.match(/^admin_edit_digital_product_description_(\d+)$/);
+    if (editDigitalProductDescriptionMatch && isAdmin(userId)) {
+      const merchantId = parseInt(editDigitalProductDescriptionMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      const sectionId = parseDigitalSectionIdFromCategory(merchant?.category);
+      await setUserState(userId, { action: 'edit_digital_product_description', merchantId, sectionId });
+      await bot.sendMessage(userId, await getText(userId, 'askEditDigitalProductDescription'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const deleteDigitalProductMatch = data.match(/^admin_delete_digital_product_(\d+)$/);
+    if (deleteDigitalProductMatch && isAdmin(userId)) {
+      const merchantId = parseInt(deleteDigitalProductMatch[1], 10);
+      await bot.sendMessage(userId, await getText(userId, 'confirmDeleteDigitalProduct'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: await getText(userId, 'yes'), callback_data: `admin_confirm_delete_digital_product_${merchantId}` }],
+            [{ text: await getText(userId, 'no'), callback_data: `admin_digital_product_${merchantId}` }]
+          ]
+        }
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const confirmDeleteDigitalProductMatch = data.match(/^admin_confirm_delete_digital_product_(\d+)$/);
+    if (confirmDeleteDigitalProductMatch && isAdmin(userId)) {
+      const merchantId = parseInt(confirmDeleteDigitalProductMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      const sectionId = parseDigitalSectionIdFromCategory(merchant?.category);
+      await deleteDigitalProductAndStock(merchantId);
+      await bot.sendMessage(userId, await getText(userId, 'digitalProductDeleted'));
+      if (sectionId) {
+        await showDigitalSectionAdmin(userId, sectionId);
+      } else {
+        await showDigitalSubscriptionsAdmin(userId);
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const viewDigitalProductStockMatch = data.match(/^admin_view_digital_product_stock_(\d+)$/);
+    if (viewDigitalProductStockMatch && isAdmin(userId)) {
+      const merchantId = parseInt(viewDigitalProductStockMatch[1], 10);
+      await sendDigitalProductStockPreview(userId, merchantId);
+      await showDigitalProductAdmin(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const searchDigitalProductDuplicatesMatch = data.match(/^admin_search_digital_product_duplicates_(\d+)$/);
+    if (searchDigitalProductDuplicatesMatch && isAdmin(userId)) {
+      const merchantId = parseInt(searchDigitalProductDuplicatesMatch[1], 10);
+      const groups = await getMerchantDuplicateGroups(merchantId);
+      if (!groups.length) {
+        await bot.sendMessage(userId, await getText(userId, 'digitalDuplicatesNone'));
+      } else {
+        const details = await formatMerchantDuplicateGroups(userId, groups);
+        await bot.sendMessage(userId, await getText(userId, 'digitalDuplicatesFound', {
+          count: groups.length,
+          details
+        }));
+      }
+      await showDigitalProductAdmin(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const deleteDigitalProductDuplicatesMatch = data.match(/^admin_delete_digital_product_duplicates_(\d+)$/);
+    if (deleteDigitalProductDuplicatesMatch && isAdmin(userId)) {
+      const merchantId = parseInt(deleteDigitalProductDuplicatesMatch[1], 10);
+      const result = await deleteMerchantDuplicateRows(merchantId);
+      if (result.count === 0 && result.locked === 0) {
+        await bot.sendMessage(userId, await getText(userId, 'digitalDuplicatesNone'));
+      } else {
+        const skippedLine = result.locked > 0
+          ? await getText(userId, 'duplicateSkippedLocked', { count: result.locked })
+          : '-';
+        await bot.sendMessage(userId, await getText(userId, 'digitalDuplicatesDeleted', {
+          count: result.count,
+          skippedLine
+        }));
+      }
+      await showDigitalProductAdmin(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data.startsWith('digital_section_')) {
       const sectionId = parseInt(data.split('_')[2], 10);
       await showDigitalSectionForUser(userId, sectionId);
@@ -6395,6 +7013,122 @@ bot.on('message', async msg => {
         }
       }
 
+      if (state.action === 'edit_digital_section_name') {
+        const section = await DigitalSection.findByPk(state.sectionId);
+        if (!section) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        const trimmedText = String(text || '').trim();
+        if (!trimmedText) {
+          await bot.sendMessage(userId, state.step === 'nameEn'
+            ? await getText(userId, 'askEditDigitalSectionNameEn')
+            : await getText(userId, 'askEditDigitalSectionNameAr'));
+          return;
+        }
+
+        if (state.step === 'nameEn') {
+          await setUserState(userId, { ...state, nameEn: trimmedText, step: 'nameAr' });
+          await bot.sendMessage(userId, await getText(userId, 'askEditDigitalSectionNameAr'));
+          return;
+        }
+
+        section.nameEn = state.nameEn || section.nameEn;
+        section.nameAr = trimmedText;
+        await section.save();
+        await bot.sendMessage(userId, await getText(userId, 'digitalSectionUpdated'));
+        await clearUserState(userId);
+        await showDigitalSectionAdmin(userId, section.id);
+        return;
+      }
+
+      if (state.action === 'edit_digital_product_name') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        const trimmedText = String(text || '').trim();
+        if (!trimmedText) {
+          await bot.sendMessage(userId, state.step === 'nameEn'
+            ? await getText(userId, 'askEditDigitalProductNameEn')
+            : await getText(userId, 'askEditDigitalProductNameAr'));
+          return;
+        }
+
+        if (state.step === 'nameEn') {
+          await setUserState(userId, { ...state, nameEn: trimmedText, step: 'nameAr' });
+          await bot.sendMessage(userId, await getText(userId, 'askEditDigitalProductNameAr'));
+          return;
+        }
+
+        merchant.nameEn = state.nameEn || merchant.nameEn;
+        merchant.nameAr = trimmedText;
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'digitalProductNameUpdated'));
+        await clearUserState(userId);
+        await showDigitalProductAdmin(userId, merchant.id);
+        return;
+      }
+
+      if (state.action === 'edit_digital_product_price') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        const price = parseFloat(text);
+        if (Number.isNaN(price) || price <= 0) {
+          await bot.sendMessage(userId, await getText(userId, 'invalidPrice'));
+          return;
+        }
+
+        merchant.price = price;
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'digitalProductPriceUpdated'));
+        await clearUserState(userId);
+        await showDigitalProductAdmin(userId, merchant.id);
+        return;
+      }
+
+      if (state.action === 'edit_digital_product_description') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        if (String(text || '').trim() === '/skip') {
+          await clearUserState(userId);
+          await showDigitalProductAdmin(userId, merchant.id);
+          return;
+        }
+
+        let description = null;
+        if (String(text || '').trim() === '/empty') description = null;
+        else if (text) description = { type: 'text', content: text };
+        else if (photo) description = { type: 'photo', fileId: photo[photo.length - 1].file_id };
+        else if (video) description = { type: 'video', fileId: video.file_id };
+        else {
+          await bot.sendMessage(userId, await getText(userId, 'sendValidDescription'));
+          return;
+        }
+
+        merchant.description = description;
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, 'digitalProductDescriptionUpdated'));
+        await clearUserState(userId);
+        await showDigitalProductAdmin(userId, merchant.id);
+        return;
+      }
+
       if (state.action === 'add_digital_product') {
         if (state.step === 'nameEn') {
           await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
@@ -6482,7 +7216,6 @@ bot.on('message', async msg => {
       }
 
       if (state.action === 'add_codes') {
-        const lines = String(text || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
         const merchant = await Merchant.findByPk(state.merchantId);
         if (!merchant) {
           await bot.sendMessage(userId, 'Merchant not found');
@@ -6490,21 +7223,20 @@ bot.on('message', async msg => {
           return;
         }
 
-        if (merchant.type === 'single') {
-          await Code.bulkCreate(lines.map(value => ({ value, merchantId: merchant.id, isUsed: false })));
-        } else {
-          if (lines.length % 2 !== 0) {
-            await bot.sendMessage(userId, '❌ Bulk codes must be pairs (email / password).');
-            return;
+        const saveResult = await addMerchantStockEntriesWithDedup(merchant, text || '');
+        if (!saveResult.success) {
+          if (saveResult.reason === 'pair_mismatch') {
+            await bot.sendMessage(userId, await getText(userId, 'invalidBulkStockPairs'));
+          } else {
+            await bot.sendMessage(userId, await getText(userId, 'emptyStockInput'));
           }
-          const pairs = [];
-          for (let i = 0; i < lines.length; i += 2) {
-            pairs.push({ value: lines[i], extra: lines[i + 1], merchantId: merchant.id, isUsed: false });
-          }
-          await Code.bulkCreate(pairs);
+          return;
         }
 
-        await bot.sendMessage(userId, await getText(userId, 'codesAdded'));
+        await bot.sendMessage(userId, await getText(userId, 'codesAddedDetailed', {
+          added: saveResult.added,
+          duplicates: saveResult.duplicates
+        }));
         const returnTo = state.returnTo || '';
         const merchantId = state.merchantId;
         await clearUserState(userId);
@@ -7457,7 +8189,11 @@ bot.on('message', async msg => {
     if (state?.action === 'buy') {
       const qty = parseInt(text, 10);
       if (Number.isNaN(qty) || qty <= 0) {
-        await bot.sendMessage(userId, '❌ Invalid quantity.');
+        await bot.sendMessage(userId, await getText(userId, 'invalidPurchaseQuantity'), {
+          reply_markup: {
+            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+          }
+        });
         return;
       }
       const merchant = await Merchant.findByPk(state.merchantId);
@@ -7745,7 +8481,11 @@ bot.on('message', async msg => {
     if (state?.action === 'chatgpt_buy_quantity') {
       const qty = parseInt(text, 10);
       if (Number.isNaN(qty) || qty <= 0 || qty > 70) {
-        await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'));
+        await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'), {
+          reply_markup: {
+            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+          }
+        });
         return;
       }
 
