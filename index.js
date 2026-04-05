@@ -6,6 +6,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const FormData = require('form-data');
 const { Sequelize, DataTypes, Op } = require('sequelize');
 const crypto = require('crypto');
+const BinancePay = require('./binancePay');
 
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
@@ -117,6 +118,36 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
+const BinancePayOrder = sequelize.define('BinancePayOrder', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  merchantTradeNo: { type: DataTypes.STRING(32), allowNull: false, unique: true },
+  prepayId: { type: DataTypes.STRING, allowNull: true },
+  transactionId: { type: DataTypes.STRING, allowNull: true },
+  userId: { type: DataTypes.BIGINT, allowNull: false },
+  amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+  currency: { type: DataTypes.STRING(10), defaultValue: 'USDT' },
+  status: { type: DataTypes.STRING, defaultValue: 'CREATED' },
+  checkoutUrl: { type: DataTypes.TEXT, allowNull: true },
+  universalUrl: { type: DataTypes.TEXT, allowNull: true },
+  deeplink: { type: DataTypes.TEXT, allowNull: true },
+  qrcodeLink: { type: DataTypes.TEXT, allowNull: true },
+  qrContent: { type: DataTypes.TEXT, allowNull: true },
+  rawRequest: { type: DataTypes.JSONB, allowNull: true },
+  rawResponse: { type: DataTypes.JSONB, allowNull: true },
+  errorMessage: { type: DataTypes.TEXT, allowNull: true },
+  balanceTransactionId: { type: DataTypes.INTEGER, allowNull: true },
+  expiresAt: { type: DataTypes.DATE, allowNull: true },
+  lastCheckedAt: { type: DataTypes.DATE, allowNull: true },
+  paidAt: { type: DataTypes.DATE, allowNull: true },
+  source: { type: DataTypes.STRING, defaultValue: 'telegram' }
+}, {
+  indexes: [
+    { unique: true, fields: ['merchantTradeNo'] },
+    { fields: ['status'] },
+    { fields: ['userId'] }
+  ]
+});
+
 const BotService = sequelize.define('BotService', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   token: { type: DataTypes.STRING, unique: true, allowNull: false },
@@ -207,6 +238,8 @@ Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant);
 BalanceTransaction.belongsTo(User, { foreignKey: 'userId' });
 BalanceTransaction.belongsTo(PaymentMethod);
+BinancePayOrder.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(BinancePayOrder, { foreignKey: 'userId' });
 BotService.hasMany(BotStat, { foreignKey: 'botId' });
 BotStat.belongsTo(BotService);
 User.hasMany(ReferralReward, { as: 'Referrer', foreignKey: 'referrerId' });
@@ -3510,7 +3543,7 @@ async function showBinanceAutoAmountOptions(userId) {
   });
 }
 
-async function sendBinanceAutoInstructions(userId, amount) {
+async function sendLegacyBinanceAutoInstructions(userId, amount) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
   const credentials = await getBinanceCredentials();
@@ -3712,6 +3745,441 @@ async function getBinanceCredentials() {
   }
 
   return null;
+}
+
+function normalizeHostedBinanceOrderId(value) {
+  return String(value || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+}
+
+function generateHostedBinanceMerchantTradeNo(userId) {
+  const userPart = String(userId || '').replace(/\D/g, '').slice(-10).padStart(4, '0');
+  const timePart = String(Date.now());
+  const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return normalizeHostedBinanceOrderId(`BP${userPart}${timePart}${randomPart}`);
+}
+
+function pickBinancePayCheckoutUrl(order) {
+  return order?.checkoutUrl || order?.universalUrl || order?.deeplink || order?.qrcodeLink || null;
+}
+
+function isSuccessfulBinancePayResponse(response) {
+  return String(response?.status || '').toUpperCase() === 'SUCCESS' && String(response?.code || '') === '000000';
+}
+
+async function getBotPaymentReturnUrl(merchantTradeNo) {
+  const username = String(await getBotUsername() || process.env.PUBLIC_BOT_USERNAME || process.env.BOT_USERNAME || '').replace(/^@/, '').trim();
+  if (!username) return null;
+  return `https://t.me/${username}?start=pay_${merchantTradeNo}`;
+}
+
+async function createHostedBinancePayDepositOrder(userId, amount) {
+  const amountNumber = Number(amount || 0);
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+    return { success: false, reason: 'invalid_amount' };
+  }
+
+  const credentials = await getBinanceCredentials();
+  if (!credentials?.apiKey || !credentials?.apiSecret) {
+    return { success: false, reason: 'binance_not_configured' };
+  }
+
+  const client = new BinancePay({
+    apiKey: credentials.apiKey,
+    apiSecret: credentials.apiSecret
+  });
+
+  const merchantTradeNo = generateHostedBinanceMerchantTradeNo(userId);
+  const returnUrl = await getBotPaymentReturnUrl(merchantTradeNo);
+  const expireMinutes = Math.max(5, Number(process.env.BINANCE_PAY_ORDER_EXPIRE_MINUTES || 30));
+  const orderExpireTime = Date.now() + (expireMinutes * 60 * 1000);
+
+  const payload = client.buildCreateOrderPayload({
+    merchantTradeNo,
+    amount: Number(amountNumber.toFixed(2)),
+    currency: 'USDT',
+    goodsName: 'BalanceTopup',
+    goodsDetail: `Telegram balance deposit ${userId}`,
+    terminalType: 'WAP',
+    returnUrl: returnUrl || undefined,
+    cancelUrl: returnUrl || undefined,
+    webhookUrl: process.env.BINANCE_PAY_WEBHOOK_URL || undefined,
+    orderExpireTime,
+    supportPayCurrency: process.env.BINANCE_PAY_ALLOWED_CURRENCIES || 'USDT',
+    passThroughInfo: String(userId)
+  });
+
+  let response;
+  try {
+    response = await client.createOrder(payload);
+  } catch (err) {
+    console.error('createHostedBinancePayDepositOrder error:', err.response?.data || err.message || err);
+    return { success: false, reason: 'create_order_exception', error: err.response?.data || err.message || String(err) };
+  }
+
+  if (!isSuccessfulBinancePayResponse(response) || !response?.data?.prepayId) {
+    return { success: false, reason: 'create_order_failed', response };
+  }
+
+  const order = await BinancePayOrder.create({
+    merchantTradeNo,
+    prepayId: response.data.prepayId || null,
+    userId,
+    amount: Number(amountNumber.toFixed(2)),
+    currency: response.data.currency || 'USDT',
+    status: 'INITIAL',
+    checkoutUrl: response.data.checkoutUrl || null,
+    universalUrl: response.data.universalUrl || null,
+    deeplink: response.data.deeplink || null,
+    qrcodeLink: response.data.qrcodeLink || null,
+    qrContent: response.data.qrContent || null,
+    rawRequest: payload,
+    rawResponse: response,
+    expiresAt: response.data.expireTime ? new Date(Number(response.data.expireTime)) : new Date(orderExpireTime),
+    source: 'telegram'
+  });
+
+  return { success: true, order, response };
+}
+
+async function sendHostedBinancePayInvoice(userId, order) {
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+  const paymentUrl = pickBinancePayCheckoutUrl(order);
+
+  const message = lang === 'ar'
+    ? `⚡ <b>Binance Pay (USDT)</b>\n\nالمبلغ: <b>${Number(order.amount).toFixed(2)}$</b>\nرقم الطلب: <code>${escapeHtml(order.merchantTradeNo)}</code>\n\n1) اضغط زر الدفع.\n2) أكمل الدفع داخل Binance.\n3) اضغط زر <b>تحقق من الدفع</b>.\n\nسيتم أيضًا فحص الطلب تلقائيًا كل دقيقة.`
+    : `⚡ <b>Binance Pay (USDT)</b>\n\nAmount: <b>${Number(order.amount).toFixed(2)}$</b>\nOrder ID: <code>${escapeHtml(order.merchantTradeNo)}</code>\n\n1) Tap the payment button.\n2) Complete the payment in Binance.\n3) Tap <b>Check Payment</b>.\n\nThe order will also be checked automatically every minute.`;
+
+  const keyboard = { inline_keyboard: [] };
+  if (paymentUrl) {
+    keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '💳 ادفع الآن' : '💳 Pay Now', url: paymentUrl }]);
+  }
+  keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '✅ تحقق من الدفع' : '✅ Check Payment', callback_data: `binpay_check_${order.merchantTradeNo}` }]);
+  keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '❌ إلغاء الطلب' : '❌ Close Order', callback_data: `binpay_close_${order.merchantTradeNo}` }]);
+  keyboard.inline_keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'deposit' }]);
+
+  await bot.sendMessage(userId, message, { parse_mode: 'HTML', reply_markup: keyboard });
+}
+
+async function finalizeHostedBinancePayOrder(orderOrId, queryData = {}, rawResponse = null, options = {}) {
+  const t = await sequelize.transaction();
+  try {
+    const orderId = typeof orderOrId === 'object' ? orderOrId.id : orderOrId;
+    const order = await BinancePayOrder.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!order) {
+      await t.rollback();
+      return { success: false, reason: 'order_not_found' };
+    }
+
+    if (order.balanceTransactionId) {
+      await t.commit();
+      return { success: true, alreadyProcessed: true, order };
+    }
+
+    const txCandidates = [...new Set([
+      normalizeBinanceIdentifier(queryData?.transactionId),
+      normalizeBinanceIdentifier(queryData?.prepayId),
+      normalizeBinanceIdentifier(queryData?.merchantTradeNo),
+      normalizeBinanceIdentifier(order.transactionId),
+      normalizeBinanceIdentifier(order.prepayId),
+      normalizeBinanceIdentifier(order.merchantTradeNo)
+    ].filter(Boolean))];
+
+    const existingBalanceTx = txCandidates.length
+      ? await BalanceTransaction.findOne({
+        where: {
+          type: 'deposit',
+          status: 'completed',
+          txid: { [Op.in]: txCandidates }
+        },
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      })
+      : null;
+
+    if (existingBalanceTx) {
+      order.balanceTransactionId = existingBalanceTx.id;
+      order.status = 'PAID';
+      order.transactionId = queryData?.transactionId || order.transactionId;
+      order.prepayId = queryData?.prepayId || order.prepayId;
+      order.rawResponse = rawResponse || order.rawResponse;
+      order.paidAt = order.paidAt || new Date(Number(queryData?.transactTime || Date.now()));
+      order.lastCheckedAt = new Date();
+      await order.save({ transaction: t });
+      await t.commit();
+      return { success: true, alreadyProcessed: true, order, existingBalanceTx };
+    }
+
+    const user = await User.findByPk(order.userId, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!user) {
+      await t.rollback();
+      return { success: false, reason: 'user_not_found' };
+    }
+
+    const newBalance = parseFloat(user.balance || 0) + parseFloat(order.amount || 0);
+    await User.update({ balance: newBalance }, { where: { id: order.userId }, transaction: t });
+
+    const txid = txCandidates[0] || normalizeHostedBinanceOrderId(order.merchantTradeNo);
+    const balanceTx = await BalanceTransaction.create({
+      userId: order.userId,
+      amount: order.amount,
+      type: 'deposit',
+      status: 'completed',
+      txid,
+      caption: `Binance Pay Hosted Checkout | merchantTradeNo=${order.merchantTradeNo} | prepayId=${queryData?.prepayId || order.prepayId || '-'} | transactionId=${queryData?.transactionId || order.transactionId || '-'} | amount=${order.amount}`
+    }, { transaction: t });
+
+    order.balanceTransactionId = balanceTx.id;
+    order.status = 'PAID';
+    order.transactionId = queryData?.transactionId || order.transactionId;
+    order.prepayId = queryData?.prepayId || order.prepayId;
+    order.rawResponse = rawResponse || order.rawResponse;
+    order.paidAt = new Date(Number(queryData?.transactTime || Date.now()));
+    order.lastCheckedAt = new Date();
+    await order.save({ transaction: t });
+
+    await t.commit();
+
+    if (!options.silentNotifications) {
+      const successBase = await getText(order.userId, 'depositSuccess', { balance: newBalance.toFixed(2) });
+      const extraLine = order.currency ? `\n\nBinance Pay: ${Number(order.amount).toFixed(2)} ${order.currency}` : '';
+      await bot.sendMessage(order.userId, `${successBase}${extraLine}`).catch(() => {});
+
+      const identity = await getTelegramIdentityById(order.userId);
+      await bot.sendMessage(ADMIN_ID,
+        `💰 Binance Pay Deposit\n\n` +
+        `Name: ${identity.fullName}\n` +
+        `Username: ${identity.usernameText}\n` +
+        `ID: ${order.userId}\n` +
+        `Amount: ${Number(order.amount).toFixed(2)} ${order.currency || 'USDT'}\n` +
+        `Order ID: ${order.merchantTradeNo}\n` +
+        `Prepay ID: ${order.prepayId || '-'}\n` +
+        `Transaction ID: ${order.transactionId || '-'}\n` +
+        `New Balance: ${newBalance.toFixed(2)} USD`
+      ).catch(() => {});
+    }
+
+    return { success: true, alreadyProcessed: false, order, newBalance, balanceTxId: balanceTx.id };
+  } catch (err) {
+    await t.rollback().catch(() => {});
+    console.error('finalizeHostedBinancePayOrder error:', err);
+    return { success: false, reason: 'db_error', error: err.message || String(err) };
+  }
+}
+
+async function syncHostedBinancePayOrderStatus(orderOrMerchantTradeNo, options = {}) {
+  const merchantTradeNo = typeof orderOrMerchantTradeNo === 'string'
+    ? normalizeHostedBinanceOrderId(orderOrMerchantTradeNo)
+    : normalizeHostedBinanceOrderId(orderOrMerchantTradeNo?.merchantTradeNo);
+
+  if (!merchantTradeNo) {
+    return { success: false, reason: 'invalid_order_id' };
+  }
+
+  const order = typeof orderOrMerchantTradeNo === 'object'
+    ? orderOrMerchantTradeNo
+    : await BinancePayOrder.findOne({ where: { merchantTradeNo } });
+
+  if (!order) {
+    return { success: false, reason: 'order_not_found' };
+  }
+
+  if (order.balanceTransactionId && order.status === 'PAID') {
+    return { success: true, paid: true, alreadyProcessed: true, order, status: 'PAID' };
+  }
+
+  const credentials = await getBinanceCredentials();
+  if (!credentials?.apiKey || !credentials?.apiSecret) {
+    return { success: false, reason: 'binance_not_configured' };
+  }
+
+  const client = new BinancePay({
+    apiKey: credentials.apiKey,
+    apiSecret: credentials.apiSecret
+  });
+
+  let response;
+  try {
+    response = await client.queryOrder({
+      ...(order.prepayId ? { prepayId: order.prepayId } : {}),
+      merchantTradeNo: order.merchantTradeNo
+    });
+  } catch (err) {
+    console.error('syncHostedBinancePayOrderStatus query error:', err.response?.data || err.message || err);
+    return { success: false, reason: 'query_exception', error: err.response?.data || err.message || String(err) };
+  }
+
+  const data = response?.data || {};
+  const status = String(data.status || order.status || '').toUpperCase() || order.status || 'UNKNOWN';
+
+  await order.update({
+    prepayId: data.prepayId || order.prepayId,
+    transactionId: data.transactionId || order.transactionId,
+    status,
+    rawResponse: response,
+    errorMessage: isSuccessfulBinancePayResponse(response) ? null : (response?.errorMessage || response?.error || null),
+    lastCheckedAt: new Date()
+  }).catch(err => console.error('Hosted order update error:', err));
+
+  if (!isSuccessfulBinancePayResponse(response)) {
+    return { success: false, reason: 'query_failed', status, order, response };
+  }
+
+  if (status === 'PAID') {
+    const finalized = await finalizeHostedBinancePayOrder(order.id, data, response, options);
+    return {
+      success: finalized.success,
+      paid: finalized.success,
+      alreadyProcessed: finalized.alreadyProcessed || false,
+      status,
+      order: finalized.order || order,
+      newBalance: finalized.newBalance,
+      response
+    };
+  }
+
+  return { success: true, paid: false, status, order, response };
+}
+
+async function handleBinancePayStatusCheck(userId, merchantTradeNo, options = {}) {
+  const safeOrderId = normalizeHostedBinanceOrderId(merchantTradeNo);
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+
+  const order = await BinancePayOrder.findOne({ where: { merchantTradeNo: safeOrderId } });
+  if (!order || (Number(order.userId) !== Number(userId) && !isAdmin(userId))) {
+    await bot.sendMessage(userId, lang === 'ar'
+      ? '❌ لم يتم العثور على طلب الدفع هذا.'
+      : '❌ This payment order was not found.').catch(() => {});
+    return { handled: true, success: false, reason: 'order_not_found' };
+  }
+
+  const result = await syncHostedBinancePayOrderStatus(order, { silentNotifications: false });
+
+  if (result.success && result.paid) {
+    if (options.triggeredByStart) {
+      await sendMainMenu(userId).catch(() => {});
+    }
+    return { handled: true, success: true, paid: true };
+  }
+
+  if (!result.success) {
+    await bot.sendMessage(userId, lang === 'ar'
+      ? '⚠️ تعذر التحقق من حالة الدفع الآن. حاول بعد قليل.'
+      : '⚠️ Could not verify the payment right now. Please try again shortly.').catch(() => {});
+    return { handled: true, success: false, reason: result.reason || 'query_failed' };
+  }
+
+  if (['INITIAL', 'PENDING', 'CREATED'].includes(String(result.status || '').toUpperCase())) {
+    const pendingText = lang === 'ar'
+      ? `⏳ لم يكتمل الدفع بعد. الحالة الحالية: <b>${escapeHtml(result.status)}</b>`
+      : `⏳ The payment is not completed yet. Current status: <b>${escapeHtml(result.status)}</b>`;
+    await bot.sendMessage(userId, pendingText, { parse_mode: 'HTML' }).catch(() => {});
+    await sendHostedBinancePayInvoice(userId, result.order || order).catch(() => {});
+    return { handled: true, success: true, paid: false, status: result.status };
+  }
+
+  const terminalText = lang === 'ar'
+    ? `ℹ️ حالة الطلب الحالية: <b>${escapeHtml(result.status || 'UNKNOWN')}</b>`
+    : `ℹ️ Current order status: <b>${escapeHtml(result.status || 'UNKNOWN')}</b>`;
+  await bot.sendMessage(userId, terminalText, { parse_mode: 'HTML' }).catch(() => {});
+  return { handled: true, success: true, paid: false, status: result.status };
+}
+
+async function closeHostedBinancePayOrderForUser(userId, merchantTradeNo) {
+  const safeOrderId = normalizeHostedBinanceOrderId(merchantTradeNo);
+  const order = await BinancePayOrder.findOne({ where: { merchantTradeNo: safeOrderId } });
+  if (!order || (Number(order.userId) !== Number(userId) && !isAdmin(userId))) {
+    return { success: false, reason: 'order_not_found' };
+  }
+
+  if (order.balanceTransactionId || String(order.status || '').toUpperCase() === 'PAID') {
+    return { success: false, reason: 'already_paid', order };
+  }
+
+  const credentials = await getBinanceCredentials();
+  if (!credentials?.apiKey || !credentials?.apiSecret) {
+    return { success: false, reason: 'binance_not_configured' };
+  }
+
+  const client = new BinancePay({
+    apiKey: credentials.apiKey,
+    apiSecret: credentials.apiSecret
+  });
+
+  let response;
+  try {
+    response = await client.closeOrder({
+      ...(order.prepayId ? { prepayId: order.prepayId } : {}),
+      merchantTradeNo: order.merchantTradeNo
+    });
+  } catch (err) {
+    console.error('closeHostedBinancePayOrderForUser error:', err.response?.data || err.message || err);
+    return { success: false, reason: 'close_exception', error: err.response?.data || err.message || String(err) };
+  }
+
+  if (!isSuccessfulBinancePayResponse(response)) {
+    return { success: false, reason: 'close_failed', response };
+  }
+
+  await order.update({ status: 'CANCELED', rawResponse: response, lastCheckedAt: new Date() }).catch(() => {});
+  return { success: true, order, response };
+}
+
+async function sendBinanceAutoInstructions(userId, amount) {
+  const created = await createHostedBinancePayDepositOrder(userId, amount);
+  const user = await User.findByPk(userId);
+  const lang = user?.lang || 'en';
+
+  if (created.success && created.order) {
+    await sendHostedBinancePayInvoice(userId, created.order);
+    return created;
+  }
+
+  console.error('Hosted Binance Pay fallback:', created.reason, created.error || created.response || '');
+
+  const fallbackNotice = lang === 'ar'
+    ? '⚠️ تعذر إنشاء رابط الدفع المباشر الآن. تم تحويلك للوضع الاحتياطي الحالي.'
+    : '⚠️ Could not create the direct payment link right now. Switched to the current fallback mode.';
+  await bot.sendMessage(userId, fallbackNotice).catch(() => {});
+  return sendLegacyBinanceAutoInstructions(userId, amount);
+}
+
+let BINANCE_PAY_POLLING_STARTED = false;
+function startBinancePayOrderPolling() {
+  if (BINANCE_PAY_POLLING_STARTED) return;
+  BINANCE_PAY_POLLING_STARTED = true;
+
+  let isRunning = false;
+  const intervalMs = Math.max(30000, Number(process.env.BINANCE_PAY_POLL_INTERVAL_MS || 60000));
+
+  setInterval(async () => {
+    if (isRunning) return;
+    isRunning = true;
+    try {
+      const cutoff = new Date(Date.now() - (24 * 60 * 60 * 1000));
+      const orders = await BinancePayOrder.findAll({
+        where: {
+          status: { [Op.in]: ['CREATED', 'INITIAL', 'PENDING'] },
+          createdAt: { [Op.gte]: cutoff }
+        },
+        order: [['createdAt', 'ASC']],
+        limit: 10
+      });
+
+      for (const order of orders) {
+        if (order.lastCheckedAt && (Date.now() - new Date(order.lastCheckedAt).getTime()) < 20000) {
+          continue;
+        }
+        await syncHostedBinancePayOrderStatus(order, { silentNotifications: false });
+        await sleep(800);
+      }
+    } catch (err) {
+      console.error('Binance Pay polling error:', err);
+    } finally {
+      isRunning = false;
+    }
+  }, intervalMs);
 }
 
 function flattenBinanceItemStrings(value, seen = new Set()) {
@@ -5239,6 +5707,14 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
       return;
     }
+    if (rawArg && /^pay_[a-zA-Z0-9]+$/i.test(rawArg)) {
+      const merchantTradeNo = normalizeHostedBinanceOrderId(rawArg.slice(4));
+      if (merchantTradeNo) {
+        const payCheck = await handleBinancePayStatusCheck(userId, merchantTradeNo, { triggeredByStart: true });
+        if (payCheck?.handled) return;
+      }
+    }
+
     const tgUser = msg.from || {};
     const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
     const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
@@ -5691,11 +6167,30 @@ bot.on('callback_query', async query => {
         await bot.answerCallbackQuery(query.id, { text: 'Invalid amount' });
         return;
       }
+      await bot.answerCallbackQuery(query.id, { text: 'Opening payment...' }).catch(() => {});
       await sendBinanceAutoInstructions(userId, amount);
-      await bot.answerCallbackQuery(query.id);
       return;
     }
 
+    if (data.startsWith('binpay_check_')) {
+      const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_check_', ''));
+      await bot.answerCallbackQuery(query.id, { text: 'Checking payment...' }).catch(() => {});
+      await handleBinancePayStatusCheck(userId, merchantTradeNo);
+      return;
+    }
+
+    if (data.startsWith('binpay_close_')) {
+      const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_close_', ''));
+      const result = await closeHostedBinancePayOrderForUser(userId, merchantTradeNo);
+      const lang = (await User.findByPk(userId))?.lang || 'en';
+      if (result.success) {
+        await bot.answerCallbackQuery(query.id, { text: lang === 'ar' ? 'تم إلغاء الطلب' : 'Order closed' }).catch(() => {});
+        await bot.sendMessage(userId, lang === 'ar' ? '✅ تم إلغاء طلب Binance Pay.' : '✅ Binance Pay order has been closed.').catch(() => {});
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: lang === 'ar' ? 'تعذر إلغاء الطلب' : 'Could not close order' }).catch(() => {});
+      }
+      return;
+    }
 
     // -------------------------------------------------------------------
 
@@ -8956,6 +9451,7 @@ sequelize.sync({ alter: true }).then(async () => {
   await getPrivateCodesChannelConfig();
   await getReferralCodesChannelConfig();
   await getBotUsername();
+  startBinancePayOrderPolling();
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
