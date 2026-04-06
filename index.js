@@ -6,15 +6,13 @@ const TelegramBot = require('node-telegram-bot-api');
 const FormData = require('form-data');
 const { Sequelize, DataTypes, Op } = require('sequelize');
 const crypto = require('crypto');
-const BinancePay = require('./binancePay');
 
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
 const DATABASE_URL = process.env.DATABASE_URL;
-const BINANCE_API_KEY = process.env.BINANCE_API_KEY || process.env.API_KEY || null;
-const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || process.env.SECRET_KEY || process.env.SECRET_Key || null;
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
-const HOSTED_BINANCE_PAY_ENABLED = String(process.env.BINANCE_PAY_MERCHANT_ENABLED || 'false').trim().toLowerCase() === 'true';
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -119,36 +117,6 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
-const BinancePayOrder = sequelize.define('BinancePayOrder', {
-  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-  merchantTradeNo: { type: DataTypes.STRING(32), allowNull: false, unique: true },
-  prepayId: { type: DataTypes.STRING, allowNull: true },
-  transactionId: { type: DataTypes.STRING, allowNull: true },
-  userId: { type: DataTypes.BIGINT, allowNull: false },
-  amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
-  currency: { type: DataTypes.STRING(10), defaultValue: 'USDT' },
-  status: { type: DataTypes.STRING, defaultValue: 'CREATED' },
-  checkoutUrl: { type: DataTypes.TEXT, allowNull: true },
-  universalUrl: { type: DataTypes.TEXT, allowNull: true },
-  deeplink: { type: DataTypes.TEXT, allowNull: true },
-  qrcodeLink: { type: DataTypes.TEXT, allowNull: true },
-  qrContent: { type: DataTypes.TEXT, allowNull: true },
-  rawRequest: { type: DataTypes.JSONB, allowNull: true },
-  rawResponse: { type: DataTypes.JSONB, allowNull: true },
-  errorMessage: { type: DataTypes.TEXT, allowNull: true },
-  balanceTransactionId: { type: DataTypes.INTEGER, allowNull: true },
-  expiresAt: { type: DataTypes.DATE, allowNull: true },
-  lastCheckedAt: { type: DataTypes.DATE, allowNull: true },
-  paidAt: { type: DataTypes.DATE, allowNull: true },
-  source: { type: DataTypes.STRING, defaultValue: 'telegram' }
-}, {
-  indexes: [
-    { unique: true, fields: ['merchantTradeNo'] },
-    { fields: ['status'] },
-    { fields: ['userId'] }
-  ]
-});
-
 const BotService = sequelize.define('BotService', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   token: { type: DataTypes.STRING, unique: true, allowNull: false },
@@ -239,8 +207,6 @@ Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant);
 BalanceTransaction.belongsTo(User, { foreignKey: 'userId' });
 BalanceTransaction.belongsTo(PaymentMethod);
-BinancePayOrder.belongsTo(User, { foreignKey: 'userId' });
-User.hasMany(BinancePayOrder, { foreignKey: 'userId' });
 BotService.hasMany(BotStat, { foreignKey: 'botId' });
 BotStat.belongsTo(BotService);
 User.hasMany(ReferralReward, { as: 'Referrer', foreignKey: 'referrerId' });
@@ -992,7 +958,12 @@ Object.assign(DEFAULT_TEXTS.en, {
   invalidBulkStockPairs: '❌ Bulk stock must be sent as pairs: email on one line and password on the next line.',
   emptyStockInput: '❌ Please send the stock/accounts first.',
   digitalProductManageText: '🧾 {name}\nPrice: {price} USD\nRemaining stock: {stock}\nType: {type}\nAdded at: {createdAt}\nDescription: {description}',
-  buyNow: '🛒 Buy Now'
+  buyNow: '🛒 Buy Now',
+  digitalStockBroadcastToggleOn: '📣 Stock notification: ✅ ON',
+  digitalStockBroadcastToggleOff: '📣 Stock notification: ❌ OFF',
+  digitalStockBroadcastEnabled: '✅ Digital stock notification enabled.',
+  digitalStockBroadcastDisabled: '⛔ Digital stock notification disabled.',
+  digitalStockBroadcastMessage: '🧩 New stock is now available\n\nItem: {name}\nAdded: {count}\nPrice: {price} USD'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
@@ -1041,7 +1012,12 @@ Object.assign(DEFAULT_TEXTS.ar, {
   invalidBulkStockPairs: '❌ يجب إرسال مخزون الحسابات على شكل أزواج: الإيميل في سطر والباسورد في السطر الذي يليه.',
   emptyStockInput: '❌ أرسل المخزون/الحسابات أولاً.',
   digitalProductManageText: '🧾 {name}\nالسعر: {price} دولار\nالمخزون المتبقي: {stock}\nالنوع: {type}\nتاريخ الإضافة: {createdAt}\nالوصف: {description}',
-  buyNow: '🛒 شراء الآن'
+  buyNow: '🛒 شراء الآن',
+  digitalStockBroadcastToggleOn: '📣 إشعار المخزون: ✅ مفعل',
+  digitalStockBroadcastToggleOff: '📣 إشعار المخزون: ❌ متوقف',
+  digitalStockBroadcastEnabled: '✅ تم تفعيل إشعار إضافة مخزون الاشتراكات الرقمية.',
+  digitalStockBroadcastDisabled: '⛔ تم إيقاف إشعار إضافة مخزون الاشتراكات الرقمية.',
+  digitalStockBroadcastMessage: '🧩 تمت إضافة مخزون جديد الآن\n\nالمنتج: {name}\nالكمية المضافة: {count}\nالسعر: {price} دولار'
 });
 
 function isAdmin(userId) {
@@ -1138,6 +1114,45 @@ async function broadcastAnnouncement(messageText) {
   }
 
   return { sent, failed };
+}
+
+async function getDigitalStockBroadcastEnabled() {
+  const rawValue = await getGlobalSetting('digital_stock_broadcast_enabled', 'false');
+  return String(rawValue).toLowerCase() === 'true';
+}
+
+async function broadcastDigitalStockAdded(merchant, addedCount) {
+  const enabled = await getDigitalStockBroadcastEnabled();
+  const normalizedCount = parseInt(addedCount, 10);
+
+  if (!enabled || !merchant || !Number.isInteger(normalizedCount) || normalizedCount <= 0) {
+    return { sent: 0, failed: 0, skipped: true };
+  }
+
+  const users = await User.findAll({ attributes: ['id', 'lang'] });
+  let sent = 0;
+  let failed = 0;
+
+  for (const u of users) {
+    try {
+      const lang = u.lang === 'ar' ? 'ar' : 'en';
+      const template = DEFAULT_TEXTS[lang]?.digitalStockBroadcastMessage || DEFAULT_TEXTS.en.digitalStockBroadcastMessage;
+      const productName = lang === 'ar'
+        ? (merchant.nameAr || merchant.nameEn || '-')
+        : (merchant.nameEn || merchant.nameAr || '-');
+      const messageText = template
+        .replace(/\{name\}/g, String(productName))
+        .replace(/\{count\}/g, String(normalizedCount))
+        .replace(/\{price\}/g, formatUsdPrice(merchant.price));
+
+      await bot.sendMessage(u.id, messageText);
+      sent += 1;
+    } catch (err) {
+      failed += 1;
+    }
+  }
+
+  return { sent, failed, skipped: false };
 }
 
 async function getReferralPercent() {
@@ -1494,7 +1509,7 @@ async function importReferralStockCodesFromPrivateChannel() {
   return {
     success: true,
     added: toCreate.length,
-    duplicates: 0,
+    duplicates: skippedDuplicates,
     posts: cachedPosts.length
   };
 }
@@ -2130,8 +2145,10 @@ async function deleteDigitalSectionAndContent(sectionId) {
 
 async function showDigitalSubscriptionsAdmin(userId) {
   const sections = await getAllDigitalSections();
+  const broadcastEnabled = await getDigitalStockBroadcastEnabled();
   const keyboard = [
-    [{ text: await getText(userId, 'addDigitalSectionToMainMenu'), callback_data: 'admin_digital_add_section' }]
+    [{ text: await getText(userId, 'addDigitalSectionToMainMenu'), callback_data: 'admin_digital_add_section' }],
+    [{ text: await getText(userId, broadcastEnabled ? 'digitalStockBroadcastToggleOn' : 'digitalStockBroadcastToggleOff'), callback_data: 'admin_toggle_digital_stock_broadcast' }]
   ];
 
   for (const section of sections) {
@@ -3544,15 +3561,15 @@ async function showBinanceAutoAmountOptions(userId) {
   });
 }
 
-async function sendLegacyBinanceAutoInstructions(userId, amount) {
+async function sendBinanceAutoInstructions(userId, amount) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'en';
   const credentials = await getBinanceCredentials();
   const payId = credentials?.payId || BINANCE_PAY_ID || '842505320';
 
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل هنا <b>رقم العملية الظاهر في Binance</b> مثل <b>Order ID</b> أو <b>Transaction ID</b> ليتم التحقق تلقائياً.`
-    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>reference shown in Binance</b> here, such as the <b>Order ID</b> or <b>Transaction ID</b>, for automatic verification.`;
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل <b>Order ID</b> فقط هنا ليتم التحقق تلقائياً.`
+    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>Order ID</b> only here for automatic verification.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -3603,7 +3620,7 @@ function getBinanceHistoryAmountUSDT(item) {
   return Number.isFinite(detailedAmount) ? detailedAmount : 0;
 }
 
-function itemMatchesBinanceOrderLegacy(item, orderNumber) {
+function itemMatchesBinanceOrder(item, orderNumber) {
   const wanted = normalizeBinanceIdentifier(orderNumber);
   if (!wanted) return false;
 
@@ -3746,437 +3763,6 @@ async function getBinanceCredentials() {
   }
 
   return null;
-}
-
-function normalizeHostedBinanceOrderId(value) {
-  return String(value || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
-}
-
-function generateHostedBinanceMerchantTradeNo(userId) {
-  const userPart = String(userId || '').replace(/\D/g, '').slice(-10).padStart(4, '0');
-  const timePart = String(Date.now());
-  const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
-  return normalizeHostedBinanceOrderId(`BP${userPart}${timePart}${randomPart}`);
-}
-
-function pickBinancePayCheckoutUrl(order) {
-  return order?.checkoutUrl || order?.universalUrl || order?.deeplink || order?.qrcodeLink || null;
-}
-
-function isSuccessfulBinancePayResponse(response) {
-  return String(response?.status || '').toUpperCase() === 'SUCCESS' && String(response?.code || '') === '000000';
-}
-
-async function getBotPaymentReturnUrl(merchantTradeNo) {
-  const username = String(await getBotUsername() || process.env.PUBLIC_BOT_USERNAME || process.env.BOT_USERNAME || '').replace(/^@/, '').trim();
-  if (!username) return null;
-  return `https://t.me/${username}?start=pay_${merchantTradeNo}`;
-}
-
-async function createHostedBinancePayDepositOrder(userId, amount) {
-  const amountNumber = Number(amount || 0);
-  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-    return { success: false, reason: 'invalid_amount' };
-  }
-
-  const credentials = await getBinanceCredentials();
-  if (!credentials?.apiKey || !credentials?.apiSecret) {
-    return { success: false, reason: 'binance_not_configured' };
-  }
-
-  const client = new BinancePay({
-    apiKey: credentials.apiKey,
-    apiSecret: credentials.apiSecret
-  });
-
-  const merchantTradeNo = generateHostedBinanceMerchantTradeNo(userId);
-  const returnUrl = await getBotPaymentReturnUrl(merchantTradeNo);
-  const expireMinutes = Math.max(5, Number(process.env.BINANCE_PAY_ORDER_EXPIRE_MINUTES || 30));
-  const orderExpireTime = Date.now() + (expireMinutes * 60 * 1000);
-
-  const payload = client.buildCreateOrderPayload({
-    merchantTradeNo,
-    amount: Number(amountNumber.toFixed(2)),
-    currency: 'USDT',
-    goodsName: 'BalanceTopup',
-    goodsDetail: `Telegram balance deposit ${userId}`,
-    terminalType: 'WAP',
-    returnUrl: returnUrl || undefined,
-    cancelUrl: returnUrl || undefined,
-    webhookUrl: process.env.BINANCE_PAY_WEBHOOK_URL || undefined,
-    orderExpireTime,
-    supportPayCurrency: process.env.BINANCE_PAY_ALLOWED_CURRENCIES || 'USDT',
-    passThroughInfo: String(userId)
-  });
-
-  let response;
-  try {
-    response = await client.createOrder(payload);
-  } catch (err) {
-    console.error('createHostedBinancePayDepositOrder error:', err.response?.data || err.message || err);
-    return { success: false, reason: 'create_order_exception', error: err.response?.data || err.message || String(err) };
-  }
-
-  if (!isSuccessfulBinancePayResponse(response) || !response?.data?.prepayId) {
-    return { success: false, reason: 'create_order_failed', response };
-  }
-
-  const order = await BinancePayOrder.create({
-    merchantTradeNo,
-    prepayId: response.data.prepayId || null,
-    userId,
-    amount: Number(amountNumber.toFixed(2)),
-    currency: response.data.currency || 'USDT',
-    status: 'INITIAL',
-    checkoutUrl: response.data.checkoutUrl || null,
-    universalUrl: response.data.universalUrl || null,
-    deeplink: response.data.deeplink || null,
-    qrcodeLink: response.data.qrcodeLink || null,
-    qrContent: response.data.qrContent || null,
-    rawRequest: payload,
-    rawResponse: response,
-    expiresAt: response.data.expireTime ? new Date(Number(response.data.expireTime)) : new Date(orderExpireTime),
-    source: 'telegram'
-  });
-
-  return { success: true, order, response };
-}
-
-async function sendHostedBinancePayInvoice(userId, order) {
-  const user = await User.findByPk(userId);
-  const lang = user?.lang || 'en';
-  const paymentUrl = pickBinancePayCheckoutUrl(order);
-
-  const message = lang === 'ar'
-    ? `⚡ <b>Binance Pay (USDT)</b>\n\nالمبلغ: <b>${Number(order.amount).toFixed(2)}$</b>\nرقم الطلب: <code>${escapeHtml(order.merchantTradeNo)}</code>\n\n1) اضغط زر الدفع.\n2) أكمل الدفع داخل Binance.\n3) اضغط زر <b>تحقق من الدفع</b>.\n\nسيتم أيضًا فحص الطلب تلقائيًا كل دقيقة.`
-    : `⚡ <b>Binance Pay (USDT)</b>\n\nAmount: <b>${Number(order.amount).toFixed(2)}$</b>\nOrder ID: <code>${escapeHtml(order.merchantTradeNo)}</code>\n\n1) Tap the payment button.\n2) Complete the payment in Binance.\n3) Tap <b>Check Payment</b>.\n\nThe order will also be checked automatically every minute.`;
-
-  const keyboard = { inline_keyboard: [] };
-  if (paymentUrl) {
-    keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '💳 ادفع الآن' : '💳 Pay Now', url: paymentUrl }]);
-  }
-  keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '✅ تحقق من الدفع' : '✅ Check Payment', callback_data: `binpay_check_${order.merchantTradeNo}` }]);
-  keyboard.inline_keyboard.push([{ text: lang === 'ar' ? '❌ إلغاء الطلب' : '❌ Close Order', callback_data: `binpay_close_${order.merchantTradeNo}` }]);
-  keyboard.inline_keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'deposit' }]);
-
-  await bot.sendMessage(userId, message, { parse_mode: 'HTML', reply_markup: keyboard });
-}
-
-async function finalizeHostedBinancePayOrder(orderOrId, queryData = {}, rawResponse = null, options = {}) {
-  const t = await sequelize.transaction();
-  try {
-    const orderId = typeof orderOrId === 'object' ? orderOrId.id : orderOrId;
-    const order = await BinancePayOrder.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
-    if (!order) {
-      await t.rollback();
-      return { success: false, reason: 'order_not_found' };
-    }
-
-    if (order.balanceTransactionId) {
-      await t.commit();
-      return { success: true, alreadyProcessed: true, order };
-    }
-
-    const txCandidates = [...new Set([
-      normalizeBinanceIdentifier(queryData?.transactionId),
-      normalizeBinanceIdentifier(queryData?.prepayId),
-      normalizeBinanceIdentifier(queryData?.merchantTradeNo),
-      normalizeBinanceIdentifier(order.transactionId),
-      normalizeBinanceIdentifier(order.prepayId),
-      normalizeBinanceIdentifier(order.merchantTradeNo)
-    ].filter(Boolean))];
-
-    const existingBalanceTx = txCandidates.length
-      ? await BalanceTransaction.findOne({
-        where: {
-          type: 'deposit',
-          status: 'completed',
-          txid: { [Op.in]: txCandidates }
-        },
-        transaction: t,
-        lock: t.LOCK.UPDATE
-      })
-      : null;
-
-    if (existingBalanceTx) {
-      order.balanceTransactionId = existingBalanceTx.id;
-      order.status = 'PAID';
-      order.transactionId = queryData?.transactionId || order.transactionId;
-      order.prepayId = queryData?.prepayId || order.prepayId;
-      order.rawResponse = rawResponse || order.rawResponse;
-      order.paidAt = order.paidAt || new Date(Number(queryData?.transactTime || Date.now()));
-      order.lastCheckedAt = new Date();
-      await order.save({ transaction: t });
-      await t.commit();
-      return { success: true, alreadyProcessed: true, order, existingBalanceTx };
-    }
-
-    const user = await User.findByPk(order.userId, { transaction: t, lock: t.LOCK.UPDATE });
-    if (!user) {
-      await t.rollback();
-      return { success: false, reason: 'user_not_found' };
-    }
-
-    const newBalance = parseFloat(user.balance || 0) + parseFloat(order.amount || 0);
-    await User.update({ balance: newBalance }, { where: { id: order.userId }, transaction: t });
-
-    const txid = txCandidates[0] || normalizeHostedBinanceOrderId(order.merchantTradeNo);
-    const balanceTx = await BalanceTransaction.create({
-      userId: order.userId,
-      amount: order.amount,
-      type: 'deposit',
-      status: 'completed',
-      txid,
-      caption: `Binance Pay Hosted Checkout | merchantTradeNo=${order.merchantTradeNo} | prepayId=${queryData?.prepayId || order.prepayId || '-'} | transactionId=${queryData?.transactionId || order.transactionId || '-'} | amount=${order.amount}`
-    }, { transaction: t });
-
-    order.balanceTransactionId = balanceTx.id;
-    order.status = 'PAID';
-    order.transactionId = queryData?.transactionId || order.transactionId;
-    order.prepayId = queryData?.prepayId || order.prepayId;
-    order.rawResponse = rawResponse || order.rawResponse;
-    order.paidAt = new Date(Number(queryData?.transactTime || Date.now()));
-    order.lastCheckedAt = new Date();
-    await order.save({ transaction: t });
-
-    await t.commit();
-
-    if (!options.silentNotifications) {
-      const successBase = await getText(order.userId, 'depositSuccess', { balance: newBalance.toFixed(2) });
-      const extraLine = order.currency ? `\n\nBinance Pay: ${Number(order.amount).toFixed(2)} ${order.currency}` : '';
-      await bot.sendMessage(order.userId, `${successBase}${extraLine}`).catch(() => {});
-
-      const identity = await getTelegramIdentityById(order.userId);
-      await bot.sendMessage(ADMIN_ID,
-        `💰 Binance Pay Deposit\n\n` +
-        `Name: ${identity.fullName}\n` +
-        `Username: ${identity.usernameText}\n` +
-        `ID: ${order.userId}\n` +
-        `Amount: ${Number(order.amount).toFixed(2)} ${order.currency || 'USDT'}\n` +
-        `Order ID: ${order.merchantTradeNo}\n` +
-        `Prepay ID: ${order.prepayId || '-'}\n` +
-        `Transaction ID: ${order.transactionId || '-'}\n` +
-        `New Balance: ${newBalance.toFixed(2)} USD`
-      ).catch(() => {});
-    }
-
-    return { success: true, alreadyProcessed: false, order, newBalance, balanceTxId: balanceTx.id };
-  } catch (err) {
-    await t.rollback().catch(() => {});
-    console.error('finalizeHostedBinancePayOrder error:', err);
-    return { success: false, reason: 'db_error', error: err.message || String(err) };
-  }
-}
-
-async function syncHostedBinancePayOrderStatus(orderOrMerchantTradeNo, options = {}) {
-  const merchantTradeNo = typeof orderOrMerchantTradeNo === 'string'
-    ? normalizeHostedBinanceOrderId(orderOrMerchantTradeNo)
-    : normalizeHostedBinanceOrderId(orderOrMerchantTradeNo?.merchantTradeNo);
-
-  if (!merchantTradeNo) {
-    return { success: false, reason: 'invalid_order_id' };
-  }
-
-  const order = typeof orderOrMerchantTradeNo === 'object'
-    ? orderOrMerchantTradeNo
-    : await BinancePayOrder.findOne({ where: { merchantTradeNo } });
-
-  if (!order) {
-    return { success: false, reason: 'order_not_found' };
-  }
-
-  if (order.balanceTransactionId && order.status === 'PAID') {
-    return { success: true, paid: true, alreadyProcessed: true, order, status: 'PAID' };
-  }
-
-  const credentials = await getBinanceCredentials();
-  if (!credentials?.apiKey || !credentials?.apiSecret) {
-    return { success: false, reason: 'binance_not_configured' };
-  }
-
-  const client = new BinancePay({
-    apiKey: credentials.apiKey,
-    apiSecret: credentials.apiSecret
-  });
-
-  let response;
-  try {
-    response = await client.queryOrder({
-      ...(order.prepayId ? { prepayId: order.prepayId } : {}),
-      merchantTradeNo: order.merchantTradeNo
-    });
-  } catch (err) {
-    console.error('syncHostedBinancePayOrderStatus query error:', err.response?.data || err.message || err);
-    return { success: false, reason: 'query_exception', error: err.response?.data || err.message || String(err) };
-  }
-
-  const data = response?.data || {};
-  const status = String(data.status || order.status || '').toUpperCase() || order.status || 'UNKNOWN';
-
-  await order.update({
-    prepayId: data.prepayId || order.prepayId,
-    transactionId: data.transactionId || order.transactionId,
-    status,
-    rawResponse: response,
-    errorMessage: isSuccessfulBinancePayResponse(response) ? null : (response?.errorMessage || response?.error || null),
-    lastCheckedAt: new Date()
-  }).catch(err => console.error('Hosted order update error:', err));
-
-  if (!isSuccessfulBinancePayResponse(response)) {
-    return { success: false, reason: 'query_failed', status, order, response };
-  }
-
-  if (status === 'PAID') {
-    const finalized = await finalizeHostedBinancePayOrder(order.id, data, response, options);
-    return {
-      success: finalized.success,
-      paid: finalized.success,
-      alreadyProcessed: finalized.alreadyProcessed || false,
-      status,
-      order: finalized.order || order,
-      newBalance: finalized.newBalance,
-      response
-    };
-  }
-
-  return { success: true, paid: false, status, order, response };
-}
-
-async function handleBinancePayStatusCheck(userId, merchantTradeNo, options = {}) {
-  const safeOrderId = normalizeHostedBinanceOrderId(merchantTradeNo);
-  const user = await User.findByPk(userId);
-  const lang = user?.lang || 'en';
-
-  const order = await BinancePayOrder.findOne({ where: { merchantTradeNo: safeOrderId } });
-  if (!order || (Number(order.userId) !== Number(userId) && !isAdmin(userId))) {
-    await bot.sendMessage(userId, lang === 'ar'
-      ? '❌ لم يتم العثور على طلب الدفع هذا.'
-      : '❌ This payment order was not found.').catch(() => {});
-    return { handled: true, success: false, reason: 'order_not_found' };
-  }
-
-  const result = await syncHostedBinancePayOrderStatus(order, { silentNotifications: false });
-
-  if (result.success && result.paid) {
-    if (options.triggeredByStart) {
-      await sendMainMenu(userId).catch(() => {});
-    }
-    return { handled: true, success: true, paid: true };
-  }
-
-  if (!result.success) {
-    await bot.sendMessage(userId, lang === 'ar'
-      ? '⚠️ تعذر التحقق من حالة الدفع الآن. حاول بعد قليل.'
-      : '⚠️ Could not verify the payment right now. Please try again shortly.').catch(() => {});
-    return { handled: true, success: false, reason: result.reason || 'query_failed' };
-  }
-
-  if (['INITIAL', 'PENDING', 'CREATED'].includes(String(result.status || '').toUpperCase())) {
-    const pendingText = lang === 'ar'
-      ? `⏳ لم يكتمل الدفع بعد. الحالة الحالية: <b>${escapeHtml(result.status)}</b>`
-      : `⏳ The payment is not completed yet. Current status: <b>${escapeHtml(result.status)}</b>`;
-    await bot.sendMessage(userId, pendingText, { parse_mode: 'HTML' }).catch(() => {});
-    await sendHostedBinancePayInvoice(userId, result.order || order).catch(() => {});
-    return { handled: true, success: true, paid: false, status: result.status };
-  }
-
-  const terminalText = lang === 'ar'
-    ? `ℹ️ حالة الطلب الحالية: <b>${escapeHtml(result.status || 'UNKNOWN')}</b>`
-    : `ℹ️ Current order status: <b>${escapeHtml(result.status || 'UNKNOWN')}</b>`;
-  await bot.sendMessage(userId, terminalText, { parse_mode: 'HTML' }).catch(() => {});
-  return { handled: true, success: true, paid: false, status: result.status };
-}
-
-async function closeHostedBinancePayOrderForUser(userId, merchantTradeNo) {
-  const safeOrderId = normalizeHostedBinanceOrderId(merchantTradeNo);
-  const order = await BinancePayOrder.findOne({ where: { merchantTradeNo: safeOrderId } });
-  if (!order || (Number(order.userId) !== Number(userId) && !isAdmin(userId))) {
-    return { success: false, reason: 'order_not_found' };
-  }
-
-  if (order.balanceTransactionId || String(order.status || '').toUpperCase() === 'PAID') {
-    return { success: false, reason: 'already_paid', order };
-  }
-
-  const credentials = await getBinanceCredentials();
-  if (!credentials?.apiKey || !credentials?.apiSecret) {
-    return { success: false, reason: 'binance_not_configured' };
-  }
-
-  const client = new BinancePay({
-    apiKey: credentials.apiKey,
-    apiSecret: credentials.apiSecret
-  });
-
-  let response;
-  try {
-    response = await client.closeOrder({
-      ...(order.prepayId ? { prepayId: order.prepayId } : {}),
-      merchantTradeNo: order.merchantTradeNo
-    });
-  } catch (err) {
-    console.error('closeHostedBinancePayOrderForUser error:', err.response?.data || err.message || err);
-    return { success: false, reason: 'close_exception', error: err.response?.data || err.message || String(err) };
-  }
-
-  if (!isSuccessfulBinancePayResponse(response)) {
-    return { success: false, reason: 'close_failed', response };
-  }
-
-  await order.update({ status: 'CANCELED', rawResponse: response, lastCheckedAt: new Date() }).catch(() => {});
-  return { success: true, order, response };
-}
-
-async function sendBinanceAutoInstructions(userId, amount) {
-  if (!HOSTED_BINANCE_PAY_ENABLED) {
-    return sendLegacyBinanceAutoInstructions(userId, amount);
-  }
-
-  const created = await createHostedBinancePayDepositOrder(userId, amount);
-  if (created.success && created.order) {
-    await sendHostedBinancePayInvoice(userId, created.order);
-    return created;
-  }
-
-  console.error('Hosted Binance Pay fallback:', created.reason, created.error || created.response || '');
-  return sendLegacyBinanceAutoInstructions(userId, amount);
-}
-
-let BINANCE_PAY_POLLING_STARTED = false;
-function startBinancePayOrderPolling() {
-  if (BINANCE_PAY_POLLING_STARTED) return;
-  BINANCE_PAY_POLLING_STARTED = true;
-
-  let isRunning = false;
-  const intervalMs = Math.max(30000, Number(process.env.BINANCE_PAY_POLL_INTERVAL_MS || 60000));
-
-  setInterval(async () => {
-    if (isRunning) return;
-    isRunning = true;
-    try {
-      const cutoff = new Date(Date.now() - (24 * 60 * 60 * 1000));
-      const orders = await BinancePayOrder.findAll({
-        where: {
-          status: { [Op.in]: ['CREATED', 'INITIAL', 'PENDING'] },
-          createdAt: { [Op.gte]: cutoff }
-        },
-        order: [['createdAt', 'ASC']],
-        limit: 10
-      });
-
-      for (const order of orders) {
-        if (order.lastCheckedAt && (Date.now() - new Date(order.lastCheckedAt).getTime()) < 20000) {
-          continue;
-        }
-        await syncHostedBinancePayOrderStatus(order, { silentNotifications: false });
-        await sleep(800);
-      }
-    } catch (err) {
-      console.error('Binance Pay polling error:', err);
-    } finally {
-      isRunning = false;
-    }
-  }, intervalMs);
 }
 
 function flattenBinanceItemStrings(value, seen = new Set()) {
@@ -4525,6 +4111,80 @@ async function fetchCandidateBinanceTransactions(credentials, sessionCreatedAt) 
   };
 }
 
+function buildFastBinanceVerificationWindow(sessionCreatedAt) {
+  const now = getBinanceClientNowMs();
+  const sessionMs = Number(sessionCreatedAt || 0);
+  const fallbackStart = now - (2 * 60 * 60 * 1000);
+
+  if (!Number.isFinite(sessionMs) || sessionMs <= 0) {
+    return { startTime: fallbackStart, endTime: now };
+  }
+
+  return {
+    startTime: Math.max(fallbackStart, sessionMs - (15 * 60 * 1000)),
+    endTime: now
+  };
+}
+
+async function fetchCandidateBinanceTransactionsFast(credentials, sessionCreatedAt) {
+  const executeRequest = async () => {
+    const window = buildFastBinanceVerificationWindow(sessionCreatedAt);
+    const params = new URLSearchParams({
+      limit: '100',
+      recvWindow: '60000',
+      timestamp: String(getBinanceClientNowMs()),
+      startTime: String(Number(window.startTime || 0)),
+      endTime: String(Number(window.endTime || 0))
+    });
+
+    const queryString = params.toString();
+    const signature = crypto.createHmac('sha256', credentials.apiSecret).update(queryString).digest('hex');
+    const url = `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: { 'X-MBX-APIKEY': credentials.apiKey },
+        timeout: 10000
+      });
+
+      const payload = response.data || {};
+      return {
+        ok: true,
+        rows: Array.isArray(payload.data) ? payload.data : []
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err.response?.data || err.message || 'API error',
+        rows: []
+      };
+    }
+  };
+
+  let result = await executeRequest();
+  if (!result.ok && isBinanceTimestampError(result.error)) {
+    const synced = await syncBinanceServerTimeOffset();
+    if (synced) {
+      result = await executeRequest();
+    }
+  }
+
+  if (result.ok) {
+    const seen = new Set();
+    const rows = [];
+    for (const row of result.rows || []) {
+      const key = getBinanceTransactionUniqueKey(row);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+    rows.sort((a, b) => getBinanceTransactionTime(b) - getBinanceTransactionTime(a));
+    return { ok: true, rows };
+  }
+
+  return { ok: false, error: result.error || 'API error', rows: [] };
+}
+
 function getBinanceVerificationFailureReason(reason, lang) {
   const ar = lang === 'ar';
   switch (reason) {
@@ -4705,37 +4365,27 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
 
   const expected = Number(expectedAmountUSDT || 0);
   const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
-  const wantedCode = normalizeBinanceNoteCode(options.verificationCode || orderNumber);
-  if ((!wantedIdentifier && !wantedCode) || !Number.isFinite(expected) || expected <= 0) {
+  if (!wantedIdentifier || !Number.isFinite(expected) || expected <= 0) {
     return { success: false, reason: 'invalid_payload' };
   }
 
-  const fetched = await fetchCandidateBinanceTransactions(credentials, options.sessionCreatedAt);
+  const fetched = await fetchCandidateBinanceTransactionsFast(credentials, options.sessionCreatedAt);
   if (!fetched.ok) {
     return { success: false, reason: 'api_error', error: fetched.error || null };
   }
 
   const rows = fetched.rows || [];
-  const amountMatchedAll = rows.filter(item => doesBinanceAmountMatch(item, expected) && isLikelyIncomingBinancePayment(item, null));
-  const payIdMatchedRows = credentials.payId
-    ? amountMatchedAll.filter(item => isLikelyIncomingBinancePayment(item, credentials.payId))
-    : amountMatchedAll;
+  const matchedRows = rows.filter(item => (
+    doesBinanceAmountMatch(item, expected)
+    && isLikelyIncomingBinancePayment(item, credentials.payId || null)
+    && itemMatchesBinanceOrder(item, wantedIdentifier)
+  ));
 
-  const orderedCandidates = payIdMatchedRows.length
-    ? [...payIdMatchedRows, ...amountMatchedAll.filter(item => !payIdMatchedRows.includes(item))]
-    : amountMatchedAll;
-
-  const picked = pickBestBinanceMatch(orderedCandidates, orderNumber, options.verificationCode || orderNumber, {
-    sessionCreatedAt: options.sessionCreatedAt,
-    payId: credentials.payId || null
-  });
-
-  if (picked.candidate) {
-    const match = picked.candidate;
-    const matchedItem = match.item;
+  if (matchedRows.length === 1) {
+    const matchedItem = matchedRows[0];
     return {
       success: true,
-      method: match.method,
+      method: 'exact_order_id',
       amount: getBinanceHistoryAmountUSDT(matchedItem),
       txId: matchedItem.transactionId || matchedItem.orderId || matchedItem.prepayId || getBinanceTransactionUniqueKey(matchedItem) || orderNumber,
       rawOrderId: orderNumber,
@@ -4745,19 +4395,20 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
       payId: credentials.payId || null,
       matchedItem,
       searchedRows: rows.length,
-      amountMatchedRows: amountMatchedAll.length,
-      payIdMatchedRows: payIdMatchedRows.length,
-      scoredCandidates: picked.candidates.length,
-      matchScore: match.score
+      matchedRows: matchedRows.length,
+      amountMatchedRows: matchedRows.length,
+      payIdMatchedRows: matchedRows.length,
+      matchScore: 100
     };
   }
 
   return {
     success: false,
-    reason: picked.reason || 'no_match',
+    reason: matchedRows.length > 1 ? 'ambiguous_match' : 'no_match',
     searchedRows: rows.length,
-    amountMatchedRows: amountMatchedAll.length,
-    payIdMatchedRows: payIdMatchedRows.length,
+    matchedRows: matchedRows.length,
+    amountMatchedRows: matchedRows.length,
+    payIdMatchedRows: matchedRows.length,
     payId: credentials.payId || null
   };
 }
@@ -4790,49 +4441,10 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
     }
   }
 
-  const waitingText = lang === 'ar'
-    ? '⏳ جاري التحقق من عملية Binance بكل طرق المطابقة المتاحة...'
-    : '⏳ Verifying the Binance payment using all available matching methods...';
-  const waitingMsg = await bot.sendMessage(userId, waitingText);
-  const waitStartedAt = Date.now();
-
-  const maxAttempts = 6;
-  let checkResult = { success: false, reason: 'no_match' };
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    if (attempt > 1) {
-      const retryText = lang === 'ar'
-        ? `⏳ جاري إعادة المحاولة والتحقق من Binance... (${attempt}/${maxAttempts})`
-        : `⏳ Re-checking Binance verification... (${attempt}/${maxAttempts})`;
-      await bot.editMessageText(retryText, {
-        chat_id: userId,
-        message_id: waitingMsg.message_id
-      }).catch(() => {});
-    }
-
-    checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
-      sessionCreatedAt: state?.createdAt,
-      userId,
-      attemptNumber: attempt
-    });
-
-    if (checkResult.success) break;
-
-    const shouldRetry = ['no_match', 'ambiguous_match', 'api_error'].includes(checkResult.reason);
-    if (!shouldRetry || attempt >= maxAttempts) {
-      break;
-    }
-
-    await sleep(attempt <= 2 ? 3000 : 4000);
-  }
-
-  const minVisibleMs = 1500;
-  const elapsedMs = Date.now() - waitStartedAt;
-  if (elapsedMs < minVisibleMs) {
-    await sleep(minVisibleMs - elapsedMs);
-  }
-
-  await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+  const checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
+    sessionCreatedAt: state?.createdAt,
+    userId
+  });
 
   if (checkResult.success) {
     const txDuplicateKeys = buildBinanceDuplicateCandidates(rawInput, checkResult);
@@ -4866,28 +4478,42 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         type: 'deposit',
         status: 'completed',
         txid: txKey,
-        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | amountMatched=${checkResult.amountMatchedRows || 0} | payIdMatched=${checkResult.payIdMatchedRows || 0} | score=${checkResult.matchScore || 0}`
+        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | matched=${checkResult.matchedRows || 0}`
       }, { transaction: t });
 
       await t.commit();
 
       const successText = lang === 'ar'
-        ? `✅ تم التحقق من الدفع بنجاح عبر ${checkResult.method}. تمت إضافة ${expectedAmount}$ إلى رصيدك.\n\nرصيدك الجديد: ${newBalance.toFixed(2)}$`
-        : `✅ Payment verified successfully via ${checkResult.method}. ${expectedAmount}$ has been added to your balance.\n\nNew balance: ${newBalance.toFixed(2)}$`;
+        ? `✅ تم التحقق من الدفع بنجاح عبر ${checkResult.method}. تمت إضافة ${expectedAmount}$ إلى رصيدك.
+
+رصيدك الجديد: ${newBalance.toFixed(2)}$`
+        : `✅ Payment verified successfully via ${checkResult.method}. ${expectedAmount}$ has been added to your balance.
+
+New balance: ${newBalance.toFixed(2)}$`;
       await bot.sendMessage(userId, successText);
 
       const identity = await getTelegramIdentityById(userId);
       await bot.sendMessage(ADMIN_ID,
-        `💰 Binance Auto Deposit\n\n` +
-        `Name: ${identity.fullName}\n` +
-        `Username: ${identity.usernameText}\n` +
-        `ID: ${userId}\n` +
-        `Amount: ${expectedAmount} USD\n` +
-        `Order ID: ${rawInput || '-'}\n` +
-        `Matched Tx ID: ${checkResult.txId || '-'}\n` +
-        `Method: ${checkResult.method}\n` +
-        `Binance ID: ${checkResult.payId || BINANCE_PAY_ID || '-'}\n` +
-        `Rows: ${checkResult.searchedRows || 0} | Amount rows: ${checkResult.amountMatchedRows || 0} | PayID rows: ${checkResult.payIdMatchedRows || 0}`
+        `💰 Binance Auto Deposit
+
+` +
+        `Name: ${identity.fullName}
+` +
+        `Username: ${identity.usernameText}
+` +
+        `ID: ${userId}
+` +
+        `Amount: ${expectedAmount} USD
+` +
+        `Order ID: ${rawInput || '-'}
+` +
+        `Matched Tx ID: ${checkResult.txId || '-'}
+` +
+        `Method: ${checkResult.method}
+` +
+        `Binance ID: ${checkResult.payId || BINANCE_PAY_ID || '-'}
+` +
+        `Rows: ${checkResult.searchedRows || 0} | Matches: ${checkResult.matchedRows || 0}`
       ).catch(() => {});
 
       await clearUserState(userId);
@@ -4911,17 +4537,10 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   });
 
   const failedText = lang === 'ar'
-    ? '❌ فشل التحقق. قم بإرسال صورة الدفع ويمكنك كتابة ملاحظة معها، وسيقوم الأدمن بمراجعتها.'
-    : '❌ Verification failed. Please send the payment screenshot. You can include a note with it, and the admin will review it manually.';
+    ? '❌ فشل التحقق.\n\nقم بإرسال صورة الدفع هنا.\n\nوسيقوم الأدمن بمراجعتها.'
+    : '❌ Verification failed.\n\nPlease send the payment screenshot here.\n\nThe admin will review it.';
 
-  const failedKeyboard = {
-    inline_keyboard: [[
-      { text: lang === 'ar' ? '❌ إلغاء' : '❌ Cancel', callback_data: 'cancel_state_and_menu' },
-      { text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }
-    ]]
-  };
-
-  await bot.sendMessage(userId, failedText, { reply_markup: failedKeyboard });
+  await bot.sendMessage(userId, failedText);
   return { handled: true, success: false, reason: checkResult.reason };
 }
 
@@ -5704,14 +5323,6 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       await bot.sendMessage(userId, await getText(userId, 'botPausedMessage'));
       return;
     }
-    if (HOSTED_BINANCE_PAY_ENABLED && rawArg && /^pay_[a-zA-Z0-9]+$/i.test(rawArg)) {
-      const merchantTradeNo = normalizeHostedBinanceOrderId(rawArg.slice(4));
-      if (merchantTradeNo) {
-        const payCheck = await handleBinancePayStatusCheck(userId, merchantTradeNo, { triggeredByStart: true });
-        if (payCheck?.handled) return;
-      }
-    }
-
     const tgUser = msg.from || {};
     const usernameText = tgUser.username ? `@${tgUser.username}` : 'لا يوجد';
     const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد';
@@ -6164,38 +5775,11 @@ bot.on('callback_query', async query => {
         await bot.answerCallbackQuery(query.id, { text: 'Invalid amount' });
         return;
       }
-      await bot.answerCallbackQuery(query.id, { text: 'Opening payment...' }).catch(() => {});
       await sendBinanceAutoInstructions(userId, amount);
+      await bot.answerCallbackQuery(query.id);
       return;
     }
 
-    if (data.startsWith('binpay_check_')) {
-      if (!HOSTED_BINANCE_PAY_ENABLED) {
-        await bot.answerCallbackQuery(query.id, { text: 'Unavailable' }).catch(() => {});
-        return;
-      }
-      const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_check_', ''));
-      await bot.answerCallbackQuery(query.id, { text: 'Checking payment...' }).catch(() => {});
-      await handleBinancePayStatusCheck(userId, merchantTradeNo);
-      return;
-    }
-
-    if (data.startsWith('binpay_close_')) {
-      if (!HOSTED_BINANCE_PAY_ENABLED) {
-        await bot.answerCallbackQuery(query.id, { text: 'Unavailable' }).catch(() => {});
-        return;
-      }
-      const merchantTradeNo = normalizeHostedBinanceOrderId(data.replace('binpay_close_', ''));
-      const result = await closeHostedBinancePayOrderForUser(userId, merchantTradeNo);
-      const lang = (await User.findByPk(userId))?.lang || 'en';
-      if (result.success) {
-        await bot.answerCallbackQuery(query.id, { text: lang === 'ar' ? 'تم إلغاء الطلب' : 'Order closed' }).catch(() => {});
-        await bot.sendMessage(userId, lang === 'ar' ? '✅ تم إلغاء طلب Binance Pay.' : '✅ Binance Pay order has been closed.').catch(() => {});
-      } else {
-        await bot.answerCallbackQuery(query.id, { text: lang === 'ar' ? 'تعذر إلغاء الطلب' : 'Could not close order' }).catch(() => {});
-      }
-      return;
-    }
 
     // -------------------------------------------------------------------
 
@@ -7081,6 +6665,15 @@ bot.on('callback_query', async query => {
     if (data === 'admin_digital_subscriptions' && isAdmin(userId)) {
       await showDigitalSubscriptionsAdmin(userId);
       await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_toggle_digital_stock_broadcast' && isAdmin(userId)) {
+      const current = await getDigitalStockBroadcastEnabled();
+      const nextValue = !current;
+      await Setting.upsert({ key: 'digital_stock_broadcast_enabled', lang: 'global', value: String(nextValue) });
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, nextValue ? 'digitalStockBroadcastEnabled' : 'digitalStockBroadcastDisabled') });
+      await showDigitalSubscriptionsAdmin(userId);
       return;
     }
 
@@ -7984,12 +7577,19 @@ bot.on('message', async msg => {
         }));
         const returnTo = state.returnTo || '';
         const merchantId = state.merchantId;
+        const shouldBroadcastDigitalStock = isDigitalSectionCategory(merchant.category) && saveResult.added > 0;
         await clearUserState(userId);
 
         if (returnTo === 'digital_product_admin') {
           await showDigitalProductAdmin(userId, merchantId);
         } else {
           await showAdminPanel(userId);
+        }
+
+        if (shouldBroadcastDigitalStock) {
+          broadcastDigitalStockAdded(merchant, saveResult.added).catch(err => {
+            console.error('digital stock broadcast error:', err);
+          });
         }
         return;
       }
@@ -8880,8 +8480,8 @@ bot.on('message', async msg => {
 
       if (!imageFileId) {
         await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ يرجى إرسال صورة الدفع. ويمكنك كتابة رسالة معها.'
-          : '❌ Please send the payment screenshot. You may include a note with it.');
+          ? '❌ فشل التحقق.\n\nقم بإرسال صورة الدفع هنا.\n\nوسيقوم الأدمن بمراجعتها.'
+          : '❌ Verification failed.\n\nPlease send the payment screenshot here.\n\nThe admin will review it.');
         return;
       }
 
@@ -9089,12 +8689,7 @@ bot.on('message', async msg => {
     if (state?.action === 'deposit_awaiting_proof') {
       const imageFileId = photo ? photo[photo.length - 1].file_id : null;
       const caption = String(msg.caption || text || '').trim();
-      if (!imageFileId) {
-        await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ يرجى إرسال صورة إثبات الدفع.'
-          : '❌ Please send a payment screenshot.');
-        return;
-      }
+      if (!imageFileId) return;
       await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
       await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
       await clearUserState(userId);
@@ -9392,7 +8987,7 @@ bot.on('message', async msg => {
 
   } catch (err) {
     console.error('Message handler error:', err);
-    await bot.sendMessage(userId, '❌ حدث خطأ غير متوقع، حاول مرة أخرى.').catch(() => {});
+    await bot.sendMessage(userId, '⏳ جار التحميل...').catch(() => {});
   }
 });
 
@@ -9450,9 +9045,7 @@ setInterval(async () => {
   }
 }, 5 * 60 * 1000);
 
-const DB_ALTER_SYNC = String(process.env.DB_ALTER_SYNC || 'false').trim().toLowerCase() === 'true';
-
-sequelize.sync(DB_ALTER_SYNC ? { alter: true } : {}).then(async () => {
+sequelize.sync({ alter: true }).then(async () => {
   console.log('✅ Database synced');
   await getDepositConfig('USD');
   await getDepositConfig('IQD');
@@ -9463,9 +9056,6 @@ sequelize.sync(DB_ALTER_SYNC ? { alter: true } : {}).then(async () => {
   await getPrivateCodesChannelConfig();
   await getReferralCodesChannelConfig();
   await getBotUsername();
-  if (HOSTED_BINANCE_PAY_ENABLED) {
-    startBinancePayOrderPolling();
-  }
 
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Bot is running'));
