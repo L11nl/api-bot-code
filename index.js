@@ -2065,16 +2065,7 @@ async function resequenceDigitalSections(sectionsInput = null) {
 }
 
 async function moveDigitalSection(sectionId, direction) {
-  const sections = await getAllDigitalSections();
-  const index = sections.findIndex(section => Number(section.id) === Number(sectionId));
-  if (index === -1) return false;
-
-  const targetIndex = direction === 'up' ? index - 1 : index + 1;
-  if (targetIndex < 0 || targetIndex >= sections.length) return false;
-
-  [sections[index], sections[targetIndex]] = [sections[targetIndex], sections[index]];
-  await resequenceDigitalSections(sections);
-  return true;
+  return await moveMenuButton(getDigitalSectionCategory(sectionId), direction);
 }
 
 async function setDigitalSectionVisibility(sectionId, visible) {
@@ -2082,6 +2073,16 @@ async function setDigitalSectionVisibility(sectionId, visible) {
   if (!section) return false;
   section.isActive = Boolean(visible);
   await section.save();
+
+  if (visible) {
+    const entryId = getDigitalSectionCategory(sectionId);
+    const order = await getMenuButtonsOrder();
+    if (!order.includes(entryId)) {
+      order.push(entryId);
+      await setMenuButtonsOrder(order);
+    }
+  }
+
   return true;
 }
 
@@ -3266,20 +3267,69 @@ async function setMenuButtonsVisibility(visibility) {
   });
 }
 
+async function getExpandedDefaultButtonOrder() {
+  const digitalEntries = (await getAllDigitalSections()).map(section => getDigitalSectionCategory(section.id));
+  const expanded = [];
+
+  for (const id of DEFAULT_BUTTON_ORDER) {
+    if (id === 'digital_sections_group') {
+      expanded.push(...digitalEntries);
+    } else {
+      expanded.push(id);
+    }
+  }
+
+  return expanded;
+}
+
 async function getMenuButtonsOrder() {
+  const defaultOrder = await getExpandedDefaultButtonOrder();
+  const activeDigitalEntries = new Set((await getAllDigitalSections()).map(section => getDigitalSectionCategory(section.id)));
+  const staticEntries = new Set(DEFAULT_BUTTON_ORDER.filter(id => id !== 'digital_sections_group'));
   const setting = await Setting.findOne({ where: { key: 'menu_buttons_order', lang: 'global' } });
-  if (!setting) return [...DEFAULT_BUTTON_ORDER];
+  if (!setting) return defaultOrder;
 
   try {
     const savedOrder = JSON.parse(setting.value);
-    if (!Array.isArray(savedOrder)) return [...DEFAULT_BUTTON_ORDER];
+    if (!Array.isArray(savedOrder)) return defaultOrder;
 
-    const validSaved = savedOrder.filter(id => DEFAULT_BUTTON_ORDER.includes(id));
-    const missing = DEFAULT_BUTTON_ORDER.filter(id => !validSaved.includes(id));
-    return [...validSaved, ...missing];
+    const normalized = [];
+    for (const id of savedOrder) {
+      if (id === 'digital_sections_group') {
+        for (const digitalId of activeDigitalEntries) {
+          if (!normalized.includes(digitalId)) normalized.push(digitalId);
+        }
+        continue;
+      }
+
+      if ((staticEntries.has(id) || activeDigitalEntries.has(id)) && !normalized.includes(id)) {
+        normalized.push(id);
+      }
+    }
+
+    for (const id of defaultOrder) {
+      if (!normalized.includes(id)) normalized.push(id);
+    }
+
+    return normalized;
   } catch {
-    return [...DEFAULT_BUTTON_ORDER];
+    return defaultOrder;
   }
+}
+
+async function syncDigitalSectionOrderWithMainMenu(orderInput = null) {
+  const order = Array.isArray(orderInput) ? orderInput : await getMenuButtonsOrder();
+  const digitalIds = order
+    .map(id => parseDigitalSectionIdFromCategory(id))
+    .filter(id => Number.isInteger(id));
+
+  if (!digitalIds.length) return false;
+
+  for (let i = 0; i < digitalIds.length; i += 1) {
+    await DigitalSection.update({ sortOrder: i + 1 }, { where: { id: digitalIds[i] } });
+  }
+
+  return true;
 }
 
 async function setMenuButtonsOrder(order) {
@@ -3288,6 +3338,7 @@ async function setMenuButtonsOrder(order) {
     lang: 'global',
     value: JSON.stringify(order)
   });
+  await syncDigitalSectionOrderWithMainMenu(order);
 }
 
 async function moveMenuButton(buttonId, direction) {
@@ -3307,7 +3358,6 @@ async function getMenuButtonItems(userId) {
   return [
     { id: 'buy', name: await getText(userId, 'buy') },
     { id: 'chatgpt_code', name: await getChatGptMenuLabel(userId) },
-    { id: 'digital_sections_group', name: await getText(userId, 'digitalSectionsGroupButton') },
     { id: 'my_balance', name: await getText(userId, 'myBalance') },
     { id: 'deposit', name: await getText(userId, 'deposit') },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
@@ -3323,55 +3373,52 @@ async function getMenuButtonItems(userId) {
 async function showMenuButtonsAdmin(userId) {
   const visibility = await getMenuButtonsVisibility();
   const items = await getMenuButtonItems(userId);
-  const itemsMap = new Map(items.map(item => [item.id, item]));
+  const digitalSections = await getAllDigitalSections();
+  const itemsMap = new Map(items.map(item => [item.id, { ...item, type: 'static' }]));
+
+  for (const section of digitalSections) {
+    itemsMap.set(getDigitalSectionCategory(section.id), {
+      id: getDigitalSectionCategory(section.id),
+      sectionId: section.id,
+      type: 'digital',
+      name: `🧩 ${section.nameEn} / ${section.nameAr}`,
+      enabled: section.isActive
+    });
+  }
+
   const order = await getMenuButtonsOrder();
   const orderedItems = order.map(id => itemsMap.get(id)).filter(Boolean);
 
   const keyboard = [];
   for (let i = 0; i < orderedItems.length; i += 1) {
     const item = orderedItems[i];
-    const enabled = visibility[item.id] !== false;
+    const enabled = item.type === 'digital' ? item.enabled : visibility[item.id] !== false;
     const action = enabled ? 'hide' : 'show';
 
     keyboard.push([
       {
         text: `${enabled ? '✅' : '❌'} ${item.name}`,
-        callback_data: `toggle_button_${item.id}_${action}`
+        callback_data: item.type === 'digital'
+          ? `toggle_digital_menu_button_${item.sectionId}_${action}`
+          : `toggle_button_${item.id}_${action}`
       },
       {
         text: '⬆️',
-        callback_data: i === 0 ? 'ignore' : `move_button_${item.id}_up`
+        callback_data: i === 0
+          ? 'ignore'
+          : (item.type === 'digital'
+            ? `move_digital_menu_button_${item.sectionId}_up`
+            : `move_button_${item.id}_up`)
       },
       {
         text: '⬇️',
-        callback_data: i === orderedItems.length - 1 ? 'ignore' : `move_button_${item.id}_down`
+        callback_data: i === orderedItems.length - 1
+          ? 'ignore'
+          : (item.type === 'digital'
+            ? `move_digital_menu_button_${item.sectionId}_down`
+            : `move_button_${item.id}_down`)
       }
     ]);
-  }
-
-  const digitalSections = await getAllDigitalSections();
-  if (digitalSections.length) {
-    keyboard.push([{ text: await getText(userId, 'digitalSectionsButtonsHeader'), callback_data: 'ignore' }]);
-    for (let i = 0; i < digitalSections.length; i += 1) {
-      const section = digitalSections[i];
-      const sectionName = `${section.nameEn} / ${section.nameAr}`;
-      const action = section.isActive ? 'hide' : 'show';
-
-      keyboard.push([
-        {
-          text: `${section.isActive ? '✅' : '❌'} 🧩 ${sectionName}`,
-          callback_data: `toggle_digital_menu_button_${section.id}_${action}`
-        },
-        {
-          text: '⬆️',
-          callback_data: i === 0 ? 'ignore' : `move_digital_menu_button_${section.id}_up`
-        },
-        {
-          text: '⬇️',
-          callback_data: i === digitalSections.length - 1 ? 'ignore' : `move_digital_menu_button_${section.id}_down`
-        }
-      ]);
-    }
   }
 
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
@@ -3382,6 +3429,11 @@ async function showMenuButtonsAdmin(userId) {
 }
 
 async function toggleMenuButton(buttonId, action) {
+  const digitalSectionId = parseDigitalSectionIdFromCategory(buttonId);
+  if (Number.isInteger(digitalSectionId)) {
+    return await setDigitalSectionVisibility(digitalSectionId, action === 'show');
+  }
+
   const visibility = await getMenuButtonsVisibility();
   visibility[buttonId] = action === 'show';
   await setMenuButtonsVisibility(visibility);
@@ -4712,11 +4764,11 @@ async function sendMainMenu(userId) {
   const showFreeCode = await shouldShowFreeCodeButton(userId);
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
+  const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
 
   const buttonLabels = {
     buy: await getText(userId, 'buy'),
     chatgpt_code: await getChatGptMenuLabel(userId),
-    digital_sections_group: await getText(userId, 'digitalSectionsGroupButton'),
     my_balance: await getBalanceButtonLabel(userId),
     deposit: await getText(userId, 'deposit'),
     my_purchases: await getText(userId, 'myPurchases'),
@@ -4729,20 +4781,14 @@ async function sendMainMenu(userId) {
   };
 
   const buttons = [];
-  const appendDigitalSections = async () => {
-    for (const section of digitalSections) {
-      buttons.push([{
-        text: `🧩 ${await getDigitalSectionDisplayName(section, userId)}`,
-        callback_data: `digital_section_${section.id}`
-      }]);
-    }
-  };
 
   for (const id of order) {
-    if (id === 'digital_sections_group') {
-      if (visibility.digital_sections_group !== false && digitalSections.length > 0) {
-        await appendDigitalSections();
-      }
+    const digitalSection = digitalSectionMap.get(id);
+    if (digitalSection) {
+      buttons.push([{
+        text: `🧩 ${await getDigitalSectionDisplayName(digitalSection, userId)}`,
+        callback_data: `digital_section_${digitalSection.id}`
+      }]);
       continue;
     }
 
@@ -4754,11 +4800,9 @@ async function sendMainMenu(userId) {
     }
   }
 
-  if (!order.includes('digital_sections_group') && visibility.digital_sections_group !== false && digitalSections.length > 0) {
-    await appendDigitalSections();
-  }
+  await bot.sendMessage(userId, `${await getText(userId, 'menu')}
 
-  await bot.sendMessage(userId, `${await getText(userId, 'menu')}\n\n${currentBalanceLine}`, {
+${currentBalanceLine}`, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
