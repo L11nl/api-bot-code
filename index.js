@@ -11,8 +11,8 @@ const BinancePay = require('./binancePay');
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
 const DATABASE_URL = process.env.DATABASE_URL;
-const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
-const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY || process.env.API_KEY || null;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || process.env.SECRET_KEY || process.env.SECRET_Key || null;
 const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
 const HOSTED_BINANCE_PAY_ENABLED = String(process.env.BINANCE_PAY_MERCHANT_ENABLED || 'false').trim().toLowerCase() === 'true';
 
@@ -1494,7 +1494,7 @@ async function importReferralStockCodesFromPrivateChannel() {
   return {
     success: true,
     added: toCreate.length,
-    duplicates: skippedDuplicates,
+    duplicates: 0,
     posts: cachedPosts.length
   };
 }
@@ -3603,7 +3603,7 @@ function getBinanceHistoryAmountUSDT(item) {
   return Number.isFinite(detailedAmount) ? detailedAmount : 0;
 }
 
-function itemMatchesBinanceOrder(item, orderNumber) {
+function itemMatchesBinanceOrderLegacy(item, orderNumber) {
   const wanted = normalizeBinanceIdentifier(orderNumber);
   if (!wanted) return false;
 
@@ -9089,7 +9089,12 @@ bot.on('message', async msg => {
     if (state?.action === 'deposit_awaiting_proof') {
       const imageFileId = photo ? photo[photo.length - 1].file_id : null;
       const caption = String(msg.caption || text || '').trim();
-      if (!imageFileId) return;
+      if (!imageFileId) {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ يرجى إرسال صورة إثبات الدفع.'
+          : '❌ Please send a payment screenshot.');
+        return;
+      }
       await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
       await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
       await clearUserState(userId);
@@ -9387,7 +9392,7 @@ bot.on('message', async msg => {
 
   } catch (err) {
     console.error('Message handler error:', err);
-    await bot.sendMessage(userId, '⏳ جار التحميل...').catch(() => {});
+    await bot.sendMessage(userId, '❌ حدث خطأ غير متوقع، حاول مرة أخرى.').catch(() => {});
   }
 });
 
@@ -9445,7 +9450,9 @@ setInterval(async () => {
   }
 }, 5 * 60 * 1000);
 
-sequelize.sync({ alter: true }).then(async () => {
+const DB_ALTER_SYNC = String(process.env.DB_ALTER_SYNC || 'false').trim().toLowerCase() === 'true';
+
+sequelize.sync(DB_ALTER_SYNC ? { alter: true } : {}).then(async () => {
   console.log('✅ Database synced');
   await getDepositConfig('USD');
   await getDepositConfig('IQD');
