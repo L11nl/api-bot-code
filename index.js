@@ -220,6 +220,14 @@ const DEFAULT_TEXTS = {
     redeem: '🔄 Redeem Code',
     buy: '🛒 Buy Codes',
     myBalance: '💰 My Balance',
+    myBalanceButton: '💰 My Balance ({balance} USD)',
+    balanceInfoText: '💰 Your current balance: {balance} USD',
+    currentBalanceLine: '💰 Current balance: {balance} USD',
+    remainingBalanceLine: '💰 Remaining balance: {balance} USD',
+    totalPaidLine: '💳 Total paid: {total} USD',
+    quantityPurchasedLine: '🧮 Quantity: {qty}',
+    continueShopping: '🛒 Continue Shopping',
+    enterDepositAmount: '💰 Send the amount in USD:',
     deposit: '💳 Deposit',
     support: '📞 Support',
     chooseMerchant: '👋 Choose merchant:',
@@ -578,6 +586,14 @@ const DEFAULT_TEXTS = {
     redeem: '🔄 استرداد الكود',
     buy: '🛒 شراء كودات',
     myBalance: '💰 رصيدي',
+    myBalanceButton: '💰 رصيدي ({balance} دولار)',
+    balanceInfoText: '💰 رصيدك الحالي: {balance} دولار',
+    currentBalanceLine: '💰 رصيدك الحالي: {balance} دولار',
+    remainingBalanceLine: '💰 الرصيد المتبقي: {balance} دولار',
+    totalPaidLine: '💳 إجمالي المبلغ المدفوع: {total} دولار',
+    quantityPurchasedLine: '🧮 الكمية: {qty}',
+    continueShopping: '🛒 متابعة الشراء',
+    enterDepositAmount: '💰 أرسل مبلغ الشحن بالدولار:',
     deposit: '💳 شحن الرصيد',
     support: '📞 الدعم الفني',
     chooseMerchant: '👋 اختر التاجر:',
@@ -1044,6 +1060,88 @@ async function clearUserState(userId) {
 async function cancelUserStateAndReturnToMenu(userId) {
   await clearUserState(userId);
   await sendMainMenu(userId);
+}
+
+async function getUserBalanceValue(userId) {
+  const user = await User.findByPk(userId, { attributes: ['balance'] });
+  return Number(user?.balance || 0);
+}
+
+async function getUserBalanceFormatted(userId) {
+  return (await getUserBalanceValue(userId)).toFixed(2);
+}
+
+async function getCurrentBalanceLineText(userId) {
+  return await getText(userId, 'currentBalanceLine', { balance: await getUserBalanceFormatted(userId) });
+}
+
+async function getBalanceButtonLabel(userId) {
+  return await getText(userId, 'myBalanceButton', { balance: await getUserBalanceFormatted(userId) });
+}
+
+async function getBackAndCancelReplyMarkup(userId, backCallback = 'back_to_menu') {
+  const rows = [];
+  if (backCallback) rows.push([{ text: await getText(userId, 'back'), callback_data: backCallback }]);
+  rows.push([{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]);
+  return { inline_keyboard: rows };
+}
+
+async function getBalanceCenterReplyMarkup(userId) {
+  return {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }],
+      [{ text: await getText(userId, 'myPurchases'), callback_data: 'my_purchases' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+    ]
+  };
+}
+
+async function getPostPurchaseReplyMarkup(userId, options = {}) {
+  const { merchant = null, continueCallback = null } = options;
+  let nextCallback = continueCallback;
+
+  if (!nextCallback) {
+    if (merchant) {
+      const digitalSectionId = parseDigitalSectionIdFromCategory(merchant.category);
+      nextCallback = digitalSectionId ? `digital_section_${digitalSectionId}` : 'buy';
+    } else {
+      nextCallback = 'chatgpt_code';
+    }
+  }
+
+  return {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'myBalance'), callback_data: 'my_balance' }],
+      [{ text: await getText(userId, 'continueShopping'), callback_data: nextCallback }],
+      [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+    ]
+  };
+}
+
+async function sendPurchaseDeliveryMessage(userId, htmlMessage, options = {}) {
+  const { merchant = null, continueCallback = null, totalCost = null, newBalance = null, quantity = null } = options;
+  const summaryLines = [];
+
+  if (quantity !== null && quantity !== undefined) {
+    summaryLines.push(await getText(userId, 'quantityPurchasedLine', { qty: quantity }));
+  }
+
+  if (totalCost !== null && totalCost !== undefined) {
+    summaryLines.push(await getText(userId, 'totalPaidLine', { total: Number(totalCost).toFixed(2) }));
+  }
+
+  if (newBalance !== null && newBalance !== undefined) {
+    summaryLines.push(await getText(userId, 'remainingBalanceLine', { balance: Number(newBalance).toFixed(2) }));
+  }
+
+  const finalText = summaryLines.length > 0
+    ? `${htmlMessage}\n\n${summaryLines.join('\n')}`
+    : htmlMessage;
+
+  await bot.sendMessage(userId, finalText, {
+    parse_mode: 'HTML',
+    reply_markup: await getPostPurchaseReplyMarkup(userId, { merchant, continueCallback })
+  });
 }
 
 function generateReferralCode(userId) {
@@ -1851,6 +1949,7 @@ async function buildChatGptPurchaseInfoText(userId) {
   return [
     await getText(userId, 'chatgptStockLine', { stock }),
     await getText(userId, 'chatgptPriceLine', { price }),
+    await getCurrentBalanceLineText(userId),
     await getText(userId, 'chatgptDiscountLine'),
     await getText(userId, 'chatgptDetailsLine'),
     await getText(userId, 'chatgptNoteLine'),
@@ -2310,12 +2409,14 @@ async function showDigitalProductDetails(userId, merchantId) {
 
   await bot.sendMessage(
     userId,
-    await getText(userId, 'digitalProductDetailsText', {
+    `${await getText(userId, 'digitalProductDetailsText', {
       name,
       stock,
       price: formatUsdPrice(merchant.price),
       details
-    }),
+    })}
+
+${await getCurrentBalanceLineText(userId)}`,
     {
       reply_markup: {
         inline_keyboard: [
@@ -3588,7 +3689,10 @@ async function sendBinanceAutoInstructions(userId, amount) {
 
 async function showPaymentMethodsForDeposit(userId, amount, currency) {
   const msg = await renderDepositMessage(userId, currency, amount);
-  await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
+  await bot.sendMessage(userId, msg, {
+    parse_mode: 'Markdown',
+    reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
+  });
   await setUserState(userId, { action: 'deposit_awaiting_proof', amount, currency });
 }
 
@@ -4552,10 +4656,11 @@ async function sendMainMenu(userId) {
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const showFreeCode = await shouldShowFreeCodeButton(userId);
+  const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const buttonLabels = {
     redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
-    my_balance: await getText(userId, 'myBalance'),
+    my_balance: await getBalanceButtonLabel(userId),
     deposit: await getText(userId, 'deposit'),
     referral: await getText(userId, 'referral'),
     referral_prize: await getText(userId, 'referralStockClaim'),
@@ -4585,7 +4690,7 @@ async function sendMainMenu(userId) {
     }]);
   }
 
-  await bot.sendMessage(userId, await getText(userId, 'menu'), {
+  await bot.sendMessage(userId, `${await getText(userId, 'menu')}\n\n${currentBalanceLine}`, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
@@ -4792,6 +4897,8 @@ async function showMerchantsForBuy(userId) {
 
   buttons.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
   const chooseText = `${await getText(userId, 'chooseMerchant')}
+
+${await getCurrentBalanceLineText(userId)}
 
 ${await getBulkDiscountInfoText(userId)}`;
   await bot.sendMessage(userId, chooseText, {
@@ -5002,7 +5109,7 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
 
     await t.commit();
     const codesText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
-    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost };
+    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost, newBalance: currentBalance - totalCost };
   } catch (err) {
     await t.rollback();
     console.error('Purchase transaction error:', err);
@@ -5306,7 +5413,8 @@ async function processAutoChatGptCode(userId, options = {}) {
     requestedQuantity: safeQuantity,
     partial: codes.length !== safeQuantity,
     price: price.toFixed(2),
-    totalCost: (price * codes.length).toFixed(2)
+    totalCost: (price * codes.length).toFixed(2),
+    newBalance: isFree ? null : (currentBalance - (price * codes.length)).toFixed(2)
   };
 }
 
@@ -5479,7 +5587,9 @@ bot.on('callback_query', async query => {
 
     if (data === 'support') {
       await setUserState(userId, { action: 'support' });
-      await bot.sendMessage(userId, await getText(userId, 'sendReply'));
+      await bot.sendMessage(userId, await getText(userId, 'sendReply'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId)
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5636,8 +5746,11 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'my_balance') {
-      const user = await User.findByPk(userId);
-      await bot.sendMessage(userId, `💰 ${parseFloat(user.balance).toFixed(2)} USD`);
+      await bot.sendMessage(userId, await getText(userId, 'balanceInfoText', {
+        balance: await getUserBalanceFormatted(userId)
+      }), {
+        reply_markup: await getBalanceCenterReplyMarkup(userId)
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5719,7 +5832,9 @@ bot.on('callback_query', async query => {
 
     if (data === 'discount') {
       await setUserState(userId, { action: 'discount' });
-      await bot.sendMessage(userId, await getText(userId, 'enterDiscountCode'));
+      await bot.sendMessage(userId, await getText(userId, 'enterDiscountCode'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId)
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5732,10 +5847,16 @@ bot.on('callback_query', async query => {
       });
 
       if (!purchases.length) {
-        await bot.sendMessage(userId, await getText(userId, 'noPurchases'));
+        await bot.sendMessage(userId, await getText(userId, 'noPurchases'), {
+          reply_markup: await getBalanceCenterReplyMarkup(userId)
+        });
       } else {
-        const history = purchases.map(p => `🛒 ${p.createdAt.toLocaleDateString()}: ${p.amount} USD`).join('\n');
-        await bot.sendMessage(userId, await getText(userId, 'purchaseHistory', { history }));
+        const history = purchases
+          .map(p => `🛒 ${p.createdAt.toLocaleDateString()}: ${Math.abs(Number(p.amount || 0)).toFixed(2)} USD`)
+          .join('\n');
+        await bot.sendMessage(userId, await getText(userId, 'purchaseHistory', { history }), {
+          reply_markup: await getBalanceCenterReplyMarkup(userId)
+        });
       }
       await bot.answerCallbackQuery(query.id);
       return;
@@ -5749,14 +5870,18 @@ bot.on('callback_query', async query => {
 
     if (data === 'deposit_currency_iqd') {
       await setUserState(userId, { action: 'deposit_amount', currency: 'IQD' });
-      await bot.sendMessage(userId, '💰 USD:');
+      await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'deposit_currency_usd') {
       await setUserState(userId, { action: 'deposit_amount', currency: 'USD' });
-      await bot.sendMessage(userId, '💰 USD:');
+      await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5863,7 +5988,9 @@ bot.on('callback_query', async query => {
 
     if (data === 'redeem') {
       await setUserState(userId, { action: 'redeem_smart' });
-      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'));
+      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'back_to_menu')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5871,7 +5998,9 @@ bot.on('callback_query', async query => {
     if (data.startsWith('redeem_service_')) {
       const serviceId = parseInt(data.split('_')[2], 10);
       await setUserState(userId, { action: 'redeem_via_service', serviceId });
-      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'));
+      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'redeem')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5887,8 +6016,11 @@ bot.on('callback_query', async query => {
       }
       const currentState = safeParseState((await User.findByPk(userId)).state);
       const discountCode = currentState?.discountCode || null;
+      const merchant = await Merchant.findByPk(merchantId);
       await setUserState(userId, { action: 'buy', merchantId, discountCode });
-      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n📦 Available: ${available}\n\n${await getBulkDiscountInfoText(userId)}`);
+      await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n${await getText(userId, 'remainingStockLine', { stock: available })}\n${await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant?.price || 0) })}\n${await getCurrentBalanceLineText(userId)}\n\n${await getBulkDiscountInfoText(userId)}`, {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'buy')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -6892,11 +7024,10 @@ bot.on('callback_query', async query => {
         userId,
         `${await getText(userId, 'productQuantityPrompt')}
 ${await getText(userId, 'remainingStockLine', { stock: available })}
-${await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) })}`,
+${await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) })}
+${await getCurrentBalanceLineText(userId)}`,
         {
-          reply_markup: {
-            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
-          }
+          reply_markup: await getBackAndCancelReplyMarkup(userId, `digital_product_${merchant.id}`)
         }
       );
       await bot.answerCallbackQuery(query.id);
@@ -8548,18 +8679,24 @@ bot.on('message', async msg => {
       }
       const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
       if (qty > available) {
-        await bot.sendMessage(userId, `${await getText(userId, 'noCodes')} Available: ${available}`);
+        const backTarget = isDigitalSectionCategory(merchant.category) ? `digital_product_${merchant.id}` : 'buy';
+        await bot.sendMessage(userId, `${await getText(userId, 'noCodes')}\n${await getText(userId, 'remainingStockLine', { stock: available })}`, {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, backTarget)
+        });
         return;
       }
       const result = await processPurchase(userId, merchant.id, qty, state.discountCode || null);
       if (result.success) {
         let msgText = await getText(userId, 'success');
-        if (result.discountApplied) msgText += `\n🎟️ Discount applied: ${result.discountApplied}%`;
+        if (result.discountApplied) msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
         msgText += `\n\n${formatCodesForHtml(result.codes)}`;
-        {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await bot.sendMessage(userId, `${deliveryPrefix}${msgText}`, { parse_mode: 'HTML' });
-      }
+        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
+          merchant,
+          totalCost: result.totalCost,
+          newBalance: result.newBalance,
+          quantity: qty
+        });
 
         const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
         await sendAdminCodeActionNotice(userId, {
@@ -8645,10 +8782,15 @@ bot.on('message', async msg => {
 
                 const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
                 const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-                await bot.sendMessage(
+                await sendPurchaseDeliveryMessage(
                   userId,
                   `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
-                  { parse_mode: 'HTML' }
+                  {
+                    continueCallback: 'chatgpt_code',
+                    totalCost,
+                    newBalance: currentBalance - totalCost,
+                    quantity: deliveredCodes.length
+                  }
                 );
 
                 const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
@@ -8679,7 +8821,9 @@ bot.on('message', async msg => {
     if (state?.action === 'deposit_amount') {
       const amount = parseFloat(text);
       if (Number.isNaN(amount) || amount <= 0) {
-        await bot.sendMessage(userId, '❌ Invalid amount');
+        await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
+        });
         return;
       }
       await showPaymentMethodsForDeposit(userId, amount, state.currency);
@@ -8845,10 +8989,13 @@ bot.on('message', async msg => {
 
 ⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
         }
-        {
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
-      }
+        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${successText}`, {
+          continueCallback: 'chatgpt_code',
+          totalCost: result.totalCost,
+          newBalance: result.newBalance,
+          quantity: result.quantity
+        });
         await sendAdminCodeActionNotice(userId, {
           sourceKey: 'balance',
           serviceType: 'ChatGPT GO',
@@ -8954,10 +9101,15 @@ bot.on('message', async msg => {
 
                 const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
                 const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-                await bot.sendMessage(
+                await sendPurchaseDeliveryMessage(
                   userId,
                   `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
-                  { parse_mode: 'HTML' }
+                  {
+                    continueCallback: 'chatgpt_code',
+                    totalCost,
+                    newBalance: currentBalance - totalCost,
+                    quantity: deliveredCodes.length
+                  }
                 );
 
                 const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
