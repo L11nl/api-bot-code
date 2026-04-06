@@ -216,7 +216,7 @@ DiscountCode.belongsTo(User, { as: 'creator', foreignKey: 'createdBy' });
 const DEFAULT_TEXTS = {
   en: {
     start: '🌍 Choose language',
-    menu: '👋 Main menu:',
+    menu: '✨ Main Menu\nChoose the service you want from the buttons below:',
     redeem: '🔄 Redeem Code',
     buy: '🛒 Buy Codes',
     myBalance: '💰 My Balance',
@@ -233,7 +233,7 @@ const DEFAULT_TEXTS = {
     chooseMerchant: '👋 Choose merchant:',
     processing: '⏳ Processing...',
     enterQty: '✍️ Enter quantity:',
-    noCodes: '❌ Not enough codes in stock',
+    noCodes: '❌ Stock is currently empty.',
     back: '🔙 Back',
     cancel: 'Cancel',
     adminPanel: '🔧 Admin Panel',
@@ -571,18 +571,18 @@ const DEFAULT_TEXTS = {
     chatgptStockLine: 'Remaining stock: {stock}',
     chatgptPriceLine: 'Code price: {price} USD',
     chatgptDiscountLine: 'Quantity discount: if you buy 20 codes or more, the price becomes 1 USD per code.',
-    chatgptDetailsLine: 'Code details: This code is a Mexican promotional offer. You must enable a Mexico VPN, copy the code link, open it in the browser with the VPN enabled, then activate the subscription.',
-    chatgptNoteLine: 'Note: At the moment there is no BIN guessing or fake BIN that works with it.',
+    chatgptDetailsLine: 'Code details: This code is part of a Mexican promotional offer. Turn on a Mexico VPN, copy the code link, open it in the browser while the VPN is active, then complete the activation.',
+    chatgptNoteLine: 'Note: At the moment, no guessed BIN or fake BIN works with this offer.',
     chatgptTermsTitle: 'Terms:',
-    chatgptTerms1: '1- The expiry time of the code is unknown. If it expires, it is not refundable.',
-    chatgptTerms2: '2- The code is not refundable if it works and has no issue. Only if the code does not work will it be replaced.',
-    chatgptAgreementLine: 'If you press Confirm & Buy, you agree to the terms.',
+    chatgptTerms1: '1- The validity period of this code is unknown. If it expires, it is not refundable.',
+    chatgptTerms2: '2- The code is not refundable if it works properly and has no issue. It will only be replaced if it does not work.',
+    chatgptAgreementLine: 'By pressing Confirm & Buy, you agree to these terms.',
     invalidPrice: '❌ Invalid price.',
     sendValidDescription: 'Please send text, photo, video, or /skip.'
   },
   ar: {
     start: '🌍 اختر اللغة',
-    menu: '👋 القائمة الرئيسية:',
+    menu: '✨ القائمة الرئيسية\nاختر الخدمة المطلوبة من الأزرار بالأسفل:',
     redeem: '🔄 استرداد الكود',
     buy: '🛒 شراء كودات',
     myBalance: '💰 رصيدي',
@@ -596,10 +596,10 @@ const DEFAULT_TEXTS = {
     enterDepositAmount: '💰 أرسل مبلغ الشحن بالدولار:',
     deposit: '💳 شحن الرصيد',
     support: '📞 الدعم الفني',
-    chooseMerchant: '👋 اختر التاجر:',
+    chooseMerchant: '🛍️ اختر التاجر المطلوب:',
     processing: '⏳ جاري المعالجة...',
     enterQty: '✍️ أرسل الكمية:',
-    noCodes: '❌ لا يوجد عدد كافٍ من الأكواد في المخزون',
+    noCodes: '❌ المخزون فارغ حاليًا.',
     back: '🔙 رجوع',
     cancel: 'الــغـــاء',
     adminPanel: '🔧 لوحة التحكم',
@@ -907,7 +907,7 @@ const DEFAULT_TEXTS = {
     addDigitalProductStock: '📦 إضافة مخزون/حسابات',
     digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nإذا كان المنتج حسابات، فأرسل الإيميل في سطر والباسورد في السطر الذي بعده لكل حساب.',
     digitalSectionEmpty: 'لا توجد اشتراكات متاحة داخل هذه الخانة حالياً.',
-    digitalSectionChooseProduct: 'اختر الاشتراك الذي تريد:',
+    digitalSectionChooseProduct: '🧩 اختر الاشتراك المطلوب من القائمة التالية:',
     digitalProductListButton: '{name} - {price} دولار ({stock})',
     digitalProductDetailsText: '🧩 {name}\n\nالمخزون المتبقي: {stock}\nالسعر: {price} دولار\n\nالتفاصيل:\n{details}',
     attachedDetailsNote: 'شاهد الوسائط المرفقة لمعرفة التفاصيل كاملة.',
@@ -917,12 +917,12 @@ const DEFAULT_TEXTS = {
     chatgptStockLine: 'كم تبقى في المخزون: {stock}',
     chatgptPriceLine: 'سعر الكود: {price} دولار',
     chatgptDiscountLine: 'الخصم على الكمية: إذا اشتريت 20 كودًا أو أكثر يصبح سعر الكود الواحد 1 دولار.',
-    chatgptDetailsLine: 'تفاصيل الكود: الكود هذا هو عرض ترويجي مكسيكي يجب تشغيل vpn على المكسيك وتنسخ رابط الكود وتذهب الى المتصفح مع تشغيل vpn وتقوم بتفعيل الاشتراك.',
-    chatgptNoteLine: 'ملاحظة: حتى الآن لا يوجد Bin تخمين أو وهمي يعمل عليه.',
-    chatgptTermsTitle: 'الشروط:',
-    chatgptTerms1: '1- الكود غير معلوم متى تنتهي صلاحيته فـ اذا انتهت صلاحيته لا يسترجع.',
-    chatgptTerms2: '2- الكود لا يسترجع يعمل ولا مشكل فيه، الا في حال اذا الكود لا يعمل سوف يتم استبدال الكود لك.',
-    chatgptAgreementLine: 'اذا ضغطت موافق وشراء فـ انت توافق على الشروط.',
+    chatgptDetailsLine: 'تفاصيل الكود: هذا الكود عبارة عن عرض ترويجي مخصص للمكسيك. يجب تشغيل VPN على المكسيك، ثم نسخ رابط الكود وفتحه من المتصفح أثناء تشغيل الـ VPN، وبعدها تفعيل الاشتراك.',
+    chatgptNoteLine: 'ملاحظة: حتى الآن لا يعمل عليه أي BIN تخميني أو وهمي.',
+    chatgptTermsTitle: '📌 الشروط:',
+    chatgptTerms1: '1- لا توجد مدة صلاحية معلومة لهذا الكود. إذا انتهت صلاحيته فلا يمكن استرجاعه.',
+    chatgptTerms2: '2- الكود غير قابل للاسترجاع إذا كان يعمل بشكل سليم ولا توجد به مشكلة. وفي حال كان الكود لا يعمل فقط، سيتم استبداله لك.',
+    chatgptAgreementLine: 'بالضغط على «موافق وشراء» فأنت توافق على هذه الشروط.',
     invalidPrice: '❌ السعر غير صالح.',
     sendValidDescription: 'أرسل نصًا أو صورة أو فيديو أو /skip.'
   }
@@ -930,7 +930,9 @@ const DEFAULT_TEXTS = {
 
 Object.assign(DEFAULT_TEXTS.en, {
   cancel: '❌ Cancel',
-  digitalSectionsButtonsHeader: '🧩 Digital sections in the main menu',
+  discountButton: '🎟️ Discount Code',
+  digitalSectionsGroupButton: '🧩 Digital sections in main menu',
+  digitalSectionsButtonsHeader: '📚 Order digital sections inside this group',
   digitalSectionManageText: '🧩 Section: {name}\nStatus: {status}\nAdded at: {createdAt}\nProducts: {count}',
   digitalSectionActive: 'Visible in the main menu',
   digitalSectionHidden: 'Hidden from the main menu',
@@ -984,7 +986,9 @@ Object.assign(DEFAULT_TEXTS.en, {
 
 Object.assign(DEFAULT_TEXTS.ar, {
   cancel: '❌ إلغاء',
-  digitalSectionsButtonsHeader: '🧩 الخانات الرقمية في القائمة الرئيسية',
+  discountButton: '🎟️ كود خصم',
+  digitalSectionsGroupButton: '🧩 الخانات الرقمية في القائمة الرئيسية',
+  digitalSectionsButtonsHeader: '📚 ترتيب الخانات الرقمية داخل هذا القسم',
   digitalSectionManageText: '🧩 الخانة: {name}\nالحالة: {status}\nتاريخ الإضافة: {createdAt}\nعدد المنتجات: {count}',
   digitalSectionActive: 'ظاهرة في القائمة الرئيسية',
   digitalSectionHidden: 'مخفية من القائمة الرئيسية',
@@ -1084,6 +1088,42 @@ async function getBackAndCancelReplyMarkup(userId, backCallback = 'back_to_menu'
   if (backCallback) rows.push([{ text: await getText(userId, 'back'), callback_data: backCallback }]);
   rows.push([{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]);
   return { inline_keyboard: rows };
+}
+
+async function safeDeleteChatMessage(chatId, messageId) {
+  if (!chatId || !messageId) return false;
+  try {
+    await bot.deleteMessage(chatId, messageId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldAutoDeleteIncomingMessage(msg, state, admin = false) {
+  if (admin) return false;
+  if (!msg || msg.chat?.type !== 'private') return false;
+  if (msg.forward_from_chat) return false;
+  if (!state?.action) return false;
+
+  const textValue = String(msg.text || '').trim();
+  if (textValue.startsWith('/')) return false;
+
+  return Boolean(msg.text || msg.caption || msg.photo || msg.video || msg.document);
+}
+
+function scheduleAutoDeleteIncomingMessage(msg, state, admin = false, delayMs = 1500) {
+  if (!shouldAutoDeleteIncomingMessage(msg, state, admin)) return;
+  setTimeout(() => {
+    bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+  }, delayMs);
+}
+
+async function cleanupCallbackSourceMessage(query, userId, options = {}) {
+  const { skipForAdmins = true } = options;
+  if (!query?.message?.message_id) return false;
+  if (skipForAdmins && isAdmin(userId)) return false;
+  return safeDeleteChatMessage(query.message.chat.id, query.message.message_id);
 }
 
 async function getBalanceCenterReplyMarkup(userId) {
@@ -1945,8 +1985,10 @@ async function buildChatGptPurchaseInfoText(userId) {
   const fallbackMerchant = await getReferralStockMerchant();
   const stock = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
   const price = formatUsdPrice(await getChatGptPriceValue());
+  const title = escapeHtml(await getText(userId, 'chatgptCode'));
 
   return [
+    `✨ <b>${title}</b>`,
     await getText(userId, 'chatgptStockLine', { stock }),
     await getText(userId, 'chatgptPriceLine', { price }),
     await getCurrentBalanceLineText(userId),
@@ -1971,6 +2013,7 @@ function getMerchantPlainDescription(merchant) {
 async function showChatGptPurchaseInfo(userId) {
   const messageText = await buildChatGptPurchaseInfoText(userId);
   await bot.sendMessage(userId, messageText, {
+    parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [[
         { text: await getText(userId, 'confirm'), callback_data: 'chatgpt_buy_accept' },
@@ -2350,8 +2393,12 @@ async function showDigitalSectionForUser(userId, sectionId) {
   }
 
   const products = await getDigitalProductsForSection(section.id);
+  const sectionName = await getDigitalSectionDisplayName(section, userId);
   if (!products.length) {
-    await bot.sendMessage(userId, await getText(userId, 'digitalSectionEmpty'), {
+    await bot.sendMessage(userId, `🧩 <b>${escapeHtml(sectionName)}</b>
+
+${await getText(userId, 'digitalSectionEmpty')}`, {
+      parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]] }
     });
     return;
@@ -2373,7 +2420,11 @@ async function showDigitalSectionForUser(userId, sectionId) {
 
   buttons.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
-  await bot.sendMessage(userId, await getText(userId, 'digitalSectionChooseProduct'), {
+  await bot.sendMessage(userId, `🧩 <b>${escapeHtml(sectionName)}</b>
+
+${await getText(userId, 'digitalSectionChooseProduct')}
+${await getCurrentBalanceLineText(userId)}`, {
+    parse_mode: 'HTML',
     reply_markup: { inline_keyboard: buttons }
   });
 }
@@ -3176,20 +3227,22 @@ const DEFAULT_BUTTONS = {
   my_purchases: true,
   support: true,
   chatgpt_code: true,
+  digital_sections_group: true,
   free_code: true,
   admin_panel: true
 };
 
 const DEFAULT_BUTTON_ORDER = [
-  'redeem',
   'buy',
+  'chatgpt_code',
+  'digital_sections_group',
   'my_balance',
   'deposit',
+  'my_purchases',
+  'redeem',
   'referral',
   'discount',
-  'my_purchases',
   'support',
-  'chatgpt_code',
   'free_code',
   'admin_panel'
 ];
@@ -3252,16 +3305,16 @@ async function moveMenuButton(buttonId, direction) {
 
 async function getMenuButtonItems(userId) {
   return [
-    { id: 'redeem', name: await getText(userId, 'redeem') },
     { id: 'buy', name: await getText(userId, 'buy') },
+    { id: 'chatgpt_code', name: await getChatGptMenuLabel(userId) },
+    { id: 'digital_sections_group', name: await getText(userId, 'digitalSectionsGroupButton') },
     { id: 'my_balance', name: await getText(userId, 'myBalance') },
     { id: 'deposit', name: await getText(userId, 'deposit') },
-    { id: 'referral', name: await getText(userId, 'referral') },
-    { id: 'referral_prize', name: await getText(userId, 'referralStockClaim') },
-    { id: 'discount', name: '🎟️ Discount' },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
+    { id: 'redeem', name: await getText(userId, 'redeem') },
+    { id: 'referral', name: await getText(userId, 'referral') },
+    { id: 'discount', name: await getText(userId, 'discountButton') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'chatgpt_code', name: await getChatGptMenuLabel(userId) },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
@@ -3674,7 +3727,8 @@ async function sendBinanceAutoInstructions(userId, amount) {
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }]
+      [{ text: lang === 'ar' ? '🔙 رجوع' : '🔙 Back', callback_data: 'deposit_binance_auto' }],
+      [{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]
     ]
   };
 
@@ -4657,23 +4711,41 @@ async function sendMainMenu(userId) {
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const showFreeCode = await shouldShowFreeCodeButton(userId);
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
+  const digitalSections = await getDigitalSections();
+
   const buttonLabels = {
-    redeem: await getText(userId, 'redeem'),
     buy: await getText(userId, 'buy'),
+    chatgpt_code: await getChatGptMenuLabel(userId),
+    digital_sections_group: await getText(userId, 'digitalSectionsGroupButton'),
     my_balance: await getBalanceButtonLabel(userId),
     deposit: await getText(userId, 'deposit'),
-    referral: await getText(userId, 'referral'),
-    referral_prize: await getText(userId, 'referralStockClaim'),
-    discount: '🎟️ Discount',
     my_purchases: await getText(userId, 'myPurchases'),
+    redeem: await getText(userId, 'redeem'),
+    referral: await getText(userId, 'referral'),
+    discount: await getText(userId, 'discountButton'),
     support: await getText(userId, 'support'),
-    chatgpt_code: await getChatGptMenuLabel(userId),
     free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
   const buttons = [];
+  const appendDigitalSections = async () => {
+    for (const section of digitalSections) {
+      buttons.push([{
+        text: `🧩 ${await getDigitalSectionDisplayName(section, userId)}`,
+        callback_data: `digital_section_${section.id}`
+      }]);
+    }
+  };
+
   for (const id of order) {
+    if (id === 'digital_sections_group') {
+      if (visibility.digital_sections_group !== false && digitalSections.length > 0) {
+        await appendDigitalSections();
+      }
+      continue;
+    }
+
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
     if (id === 'free_code' && !showFreeCode) continue;
@@ -4682,12 +4754,8 @@ async function sendMainMenu(userId) {
     }
   }
 
-  const digitalSections = await getDigitalSections();
-  for (const section of digitalSections) {
-    buttons.push([{
-      text: `🧩 ${await getDigitalSectionDisplayName(section, userId)}`,
-      callback_data: `digital_section_${section.id}`
-    }]);
+  if (!order.includes('digital_sections_group') && visibility.digital_sections_group !== false && digitalSections.length > 0) {
+    await appendDigitalSections();
   }
 
   await bot.sendMessage(userId, `${await getText(userId, 'menu')}\n\n${currentBalanceLine}`, {
@@ -5525,6 +5593,7 @@ bot.on('callback_query', async query => {
   const data = query.data;
 
   try {
+    const cleanupPressedMessage = async () => cleanupCallbackSourceMessage(query, userId);
     await findOrCreateUser(userId);
 
     if (!isAdmin(userId) && !(await getBotEnabled())) {
@@ -5541,6 +5610,7 @@ bot.on('callback_query', async query => {
         await tryAwardReferralIfEligible(userId);
         await sendMainMenu(userId);
       }
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5551,6 +5621,7 @@ bot.on('callback_query', async query => {
         await tryAwardReferralIfEligible(userId);
         await sendMainMenu(userId);
       }
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5568,18 +5639,21 @@ bot.on('callback_query', async query => {
 
     if (data === 'cancel_state_and_menu') {
       await cancelUserStateAndReturnToMenu(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'back_to_menu') {
       await sendMainMenu(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
     if (data === 'cancel_action') {
       await clearUserState(userId);
       await sendMainMenu(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5590,6 +5664,7 @@ bot.on('callback_query', async query => {
       await bot.sendMessage(userId, await getText(userId, 'sendReply'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId)
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5597,7 +5672,10 @@ bot.on('callback_query', async query => {
     if (data.startsWith('support_reply_user_')) {
       const adminId = parseInt(data.split('_')[3], 10);
       await setUserState(userId, { action: 'support_reply_user', targetAdminId: adminId });
-      await bot.sendMessage(userId, await getText(userId, 'sendReply'));
+      await bot.sendMessage(userId, await getText(userId, 'sendReply'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'support')
+      });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5631,7 +5709,9 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_set_private_codes_channel' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_private_codes_channel' });
-      await bot.sendMessage(userId, 'أرسل رابط الدعوة الخاص مثل\nhttps://t.me/+Sf4X6ek8eLRiOGM5\nأو أرسل آيدي القناة، أو قم بإعادة توجيه منشور منها.\n\nمهم: إذا أرسلت رابط دعوة خاص فقط، فقم بعده بإعادة توجيه منشور من نفس القناة مرة واحدة ليتم حفظ معرّف القناة الداخلي للإرسال.');
+      await bot.sendMessage(userId, 'أرسل رابط الدعوة الخاص مثل\nhttps://t.me/+Sf4X6ek8eLRiOGM5\nأو أرسل آيدي القناة، أو قم بإعادة توجيه منشور منها.\n\nمهم: إذا أرسلت رابط دعوة خاص فقط، فقم بعده بإعادة توجيه منشور من نفس القناة مرة واحدة ليتم حفظ معرّف القناة الداخلي للإرسال.', {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin_private_codes_channel')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5679,14 +5759,18 @@ bot.on('callback_query', async query => {
 
     if (data === 'admin_set_channel_link' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_channel_link' });
-      await bot.sendMessage(userId, await getText(userId, 'enterNewChannelLink'));
+      await bot.sendMessage(userId, await getText(userId, 'enterNewChannelLink'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin_manage_channel')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'admin_set_channel_message' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_channel_message' });
-      await bot.sendMessage(userId, await getText(userId, 'enterNewChannelMessage'));
+      await bot.sendMessage(userId, await getText(userId, 'enterNewChannelMessage'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin_manage_channel')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5740,7 +5824,9 @@ bot.on('callback_query', async query => {
     if (data.startsWith('support_reply_') && isAdmin(userId)) {
       const targetUserId = parseInt(data.split('_')[2], 10);
       await setUserState(userId, { action: 'support_reply', targetUserId });
-      await bot.sendMessage(userId, await getText(userId, 'replyToSupport', { userId: targetUserId }));
+      await bot.sendMessage(userId, await getText(userId, 'replyToSupport', { userId: targetUserId }), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5751,6 +5837,7 @@ bot.on('callback_query', async query => {
       }), {
         reply_markup: await getBalanceCenterReplyMarkup(userId)
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5777,6 +5864,7 @@ bot.on('callback_query', async query => {
       };
 
       await bot.sendMessage(userId, info, { parse_mode: 'HTML', reply_markup: keyboard });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5787,12 +5875,16 @@ bot.on('callback_query', async query => {
 
       if (Number(user.referralPoints || 0) < requiredPoints) {
         await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: user.referralPoints, requiredPoints }));
+        await cleanupPressedMessage();
         await bot.answerCallbackQuery(query.id);
         return;
       }
 
       await setUserState(userId, { action: 'redeem_points_amount' });
-      await bot.sendMessage(userId, await getText(userId, 'redeemPointsAskAmount', { requiredPoints }));
+      await bot.sendMessage(userId, await getText(userId, 'redeemPointsAskAmount', { requiredPoints }), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'referral')
+      });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5802,6 +5894,7 @@ bot.on('callback_query', async query => {
 
       if (!canClaim) {
         await sendMainMenu(userId);
+        await cleanupPressedMessage();
         await bot.answerCallbackQuery(query.id);
         return;
       }
@@ -5826,6 +5919,7 @@ bot.on('callback_query', async query => {
       }
 
       await sendMainMenu(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5835,6 +5929,7 @@ bot.on('callback_query', async query => {
       await bot.sendMessage(userId, await getText(userId, 'enterDiscountCode'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId)
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5858,12 +5953,14 @@ bot.on('callback_query', async query => {
           reply_markup: await getBalanceCenterReplyMarkup(userId)
         });
       }
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'deposit') {
       await showCurrencyOptions(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5873,6 +5970,7 @@ bot.on('callback_query', async query => {
       await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5882,6 +5980,7 @@ bot.on('callback_query', async query => {
       await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5890,6 +5989,7 @@ bot.on('callback_query', async query => {
     // زر الدفع التلقائي عبر Binance
     if (data === 'deposit_binance_auto') {
       await showBinanceAutoAmountOptions(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -5901,6 +6001,7 @@ bot.on('callback_query', async query => {
         return;
       }
       await sendBinanceAutoInstructions(userId, amount);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -6994,6 +7095,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('digital_section_')) {
       const sectionId = parseInt(data.split('_')[2], 10);
       await showDigitalSectionForUser(userId, sectionId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7001,6 +7103,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('digital_product_')) {
       const merchantId = parseInt(data.split('_')[2], 10);
       await showDigitalProductDetails(userId, merchantId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7013,6 +7116,7 @@ bot.on('callback_query', async query => {
       if (!merchant || !available) {
         await bot.sendMessage(userId, await getText(userId, 'noCodes'));
         await sendMainMenu(userId);
+        await cleanupPressedMessage();
         await bot.answerCallbackQuery(query.id);
         return;
       }
@@ -7030,12 +7134,14 @@ ${await getCurrentBalanceLineText(userId)}`,
           reply_markup: await getBackAndCancelReplyMarkup(userId, `digital_product_${merchant.id}`)
         }
       );
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
 
     if (data === 'chatgpt_code') {
       await showChatGptPurchaseInfo(userId);
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7043,10 +7149,9 @@ ${await getCurrentBalanceLineText(userId)}`,
     if (data === 'chatgpt_buy_accept') {
       await setUserState(userId, { action: 'chatgpt_buy_quantity' });
       await bot.sendMessage(userId, await getText(userId, 'askQuantity'), {
-        reply_markup: {
-          inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
-        }
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'chatgpt_code')
       });
+      await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7090,6 +7195,7 @@ bot.on('message', async msg => {
       return;
     }
     let state = safeParseState(user.state);
+    scheduleAutoDeleteIncomingMessage(msg, state, isAdmin(userId));
 
     if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
       const forwardedPayload = {
