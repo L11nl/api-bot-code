@@ -1131,6 +1131,60 @@ Object.assign(DEFAULT_TEXTS.ar, {
   digitalProductListButton: '{name} - {price} دولار | يوجد {stock}'
 });
 
+Object.assign(DEFAULT_TEXTS.en, {
+  aiAssistantPurchaseConfirm: '🛒 Purchase confirmation\n\nProduct: {name}\nQuantity: {qty}\nPrice per item: {price} USD\nTotal: {total} USD\nRemaining stock: {stock}\nYour balance: {balance} USD\n\nAre you sure you want me to complete this purchase now?',
+  aiAssistantPurchaseNeedMore: 'Would you like to know more about {name} before purchasing?',
+  aiAssistantPurchaseUnavailable: '❌ This item is currently unavailable in the requested quantity. Available stock: {stock}.',
+  aiAssistantPurchaseCancelled: '✅ Purchase request cancelled.',
+  aiAssistantPurchaseConfirmButton: '✅ Yes, buy now',
+  aiAssistantPurchaseMoreButton: 'ℹ️ Tell me more',
+  aiAssistantPurchaseCancelButton: '❌ Cancel',
+  aiAssistantProductHeader: '🧩 Product details',
+  aiAssistantPricesHeader: '💵 Current prices of available products:',
+  aiAssistantNoProductMatch: 'I could not identify the product exactly. Tell me the product name more clearly, for example: Buy CapCut account.',
+  aiAssistantTrainingSaved: '✅ Assistant training saved successfully.',
+  aiAssistantTrainingHelp: 'Use one of these formats:\ntrain assistant: question => answer\n\nor\nدرب المساعد: السؤال => الجواب',
+  aiAssistantAdminOpened: '✅ Done. I opened: {target}',
+  aiAssistantAdminNoMatch: 'I understood that you want to open an admin interface, but I could not determine which one exactly. Try for example: open stock interface, open prices, open merchants, open balances, or open subscriptions.',
+  aiAssistantOpenStocks: 'stock interface',
+  aiAssistantOpenPrices: 'prices interface',
+  aiAssistantOpenMerchants: 'merchants list',
+  aiAssistantOpenBalances: 'balance management',
+  aiAssistantOpenButtons: 'button management',
+  aiAssistantOpenSubscriptions: 'digital subscriptions',
+  aiAssistantOpenAdminPanel: 'admin panel',
+  aiAssistantOpenStats: 'statistics',
+  aiAssistantOpenReferrals: 'referral settings',
+  aiAssistantOpenBots: 'bots management'
+});
+
+Object.assign(DEFAULT_TEXTS.ar, {
+  aiAssistantPurchaseConfirm: '🛒 تأكيد الشراء\n\nالمنتج: {name}\nالكمية: {qty}\nسعر القطعة: {price} دولار\nالإجمالي: {total} دولار\nالمخزون المتبقي: {stock}\nرصيدك الحالي: {balance} دولار\n\nهل أنت متأكد أنك تريد مني إتمام هذا الشراء الآن؟',
+  aiAssistantPurchaseNeedMore: 'هل تريد معرفة المزيد عن {name} قبل الشراء؟',
+  aiAssistantPurchaseUnavailable: '❌ هذا المنتج غير متوفر حالياً بالكمية المطلوبة. المتوفر الآن: {stock}.',
+  aiAssistantPurchaseCancelled: '✅ تم إلغاء طلب الشراء.',
+  aiAssistantPurchaseConfirmButton: '✅ نعم، اشترِ الآن',
+  aiAssistantPurchaseMoreButton: 'ℹ️ أريد معرفة المزيد',
+  aiAssistantPurchaseCancelButton: '❌ إلغاء',
+  aiAssistantProductHeader: '🧩 تفاصيل المنتج',
+  aiAssistantPricesHeader: '💵 أسعار المنتجات المتوفرة حالياً:',
+  aiAssistantNoProductMatch: 'لم أتمكن من تحديد المنتج بدقة. اكتب اسم المنتج بشكل أوضح، مثلاً: أريد شراء حساب كاب كات.',
+  aiAssistantTrainingSaved: '✅ تم حفظ تدريب المساعد بنجاح.',
+  aiAssistantTrainingHelp: 'استخدم أحد الشكلين التاليين:\ntrain assistant: question => answer\n\nأو\nدرب المساعد: السؤال => الجواب',
+  aiAssistantAdminOpened: '✅ تم. فتحت لك: {target}',
+  aiAssistantAdminNoMatch: 'فهمت أنك تريد فتح واجهة إدارية، لكني لم أحدد أي واجهة بالضبط. جرّب مثلاً: افتح المخزونات، افتح الأسعار، افتح التجار، افتح الأرصدة، أو افتح الاشتراكات.',
+  aiAssistantOpenStocks: 'واجهة المخزونات',
+  aiAssistantOpenPrices: 'واجهة الأسعار',
+  aiAssistantOpenMerchants: 'قائمة التجار',
+  aiAssistantOpenBalances: 'إدارة الأرصدة',
+  aiAssistantOpenButtons: 'إدارة الأزرار',
+  aiAssistantOpenSubscriptions: 'الاشتراكات الرقمية',
+  aiAssistantOpenAdminPanel: 'لوحة التحكم',
+  aiAssistantOpenStats: 'الإحصائيات',
+  aiAssistantOpenReferrals: 'إعدادات الإحالة',
+  aiAssistantOpenBots: 'إدارة البوتات'
+});
+
 function isAdmin(userId) {
   return Number(userId) === ADMIN_ID;
 }
@@ -2605,30 +2659,90 @@ function containsArabicText(value) {
   return /[\u0600-\u06FF]/.test(String(value || ''));
 }
 
+function normalizeOpenAIContentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part === 'object') return String(part.text || part.content || '');
+      return '';
+    }).join('\n').trim();
+  }
+  if (content && typeof content === 'object') {
+    return String(content.text || content.content || '').trim();
+  }
+  return '';
+}
+
+function extractJsonObjectFromText(rawValue) {
+  const raw = normalizeOpenAIContentToText(rawValue).trim();
+  if (!raw) return null;
+
+  const candidates = [raw];
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch?.[1]) candidates.push(fenceMatch[1].trim());
+
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidates.push(raw.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+  return null;
+}
+
 async function callOpenAIJson(messages, options = {}) {
   if (!OPENAI_API_KEY) return null;
-  try {
-    const response = await axios.post(`${OPENAI_BASE_URL}/chat/completions`, {
+
+  const sendRequest = async (useJsonMode = true) => {
+    const body = {
       model: OPENAI_MODEL,
       messages,
       temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 700,
-      response_format: { type: 'json_object' }
-    }, {
+      max_tokens: options.maxTokens ?? 700
+    };
+
+    if (useJsonMode && options.disableResponseFormat !== true) {
+      body.response_format = { type: 'json_object' };
+    }
+
+    return await axios.post(`${OPENAI_BASE_URL}/chat/completions`, body, {
       timeout: options.timeout ?? 25000,
       headers: {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
       }
     });
+  };
 
-    const content = response?.data?.choices?.[0]?.message?.content;
-    if (!content) return null;
-    return JSON.parse(content);
+  try {
+    const response = await sendRequest(true);
+    const message = response?.data?.choices?.[0]?.message;
+    const parsed = message?.parsed || extractJsonObjectFromText(message?.content);
+    if (parsed && typeof parsed === 'object') return parsed;
   } catch (err) {
-    console.error('OpenAI JSON error:', err.response?.data || err.message);
-    return null;
+    const status = err?.response?.status;
+    if (![400, 404, 415, 422].includes(status)) {
+      console.error('OpenAI JSON error:', err?.response?.data || err.message);
+    }
   }
+
+  try {
+    const response = await sendRequest(false);
+    const message = response?.data?.choices?.[0]?.message;
+    const parsed = message?.parsed || extractJsonObjectFromText(message?.content);
+    if (parsed && typeof parsed === 'object') return parsed;
+    console.error('OpenAI JSON parse error: response was not valid JSON');
+  } catch (err) {
+    console.error('OpenAI JSON retry error:', err?.response?.data || err.message);
+  }
+
+  return null;
 }
 
 async function translateTextForLang(lang, textValue, options = {}) {
@@ -3077,6 +3191,578 @@ async function buildFallbackAssistantReply(userId, userMessage, state = {}) {
   return lines.join('\n\n');
 }
 
+
+function normalizeAssistantDigits(value) {
+  return String(value || '')
+    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+}
+
+function normalizeAssistantText(value) {
+  return normalizeAssistantDigits(value)
+    .toLowerCase()
+    .replace(/[\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/[^A-Za-z0-9\u0600-\u06FF]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractAssistantQuantity(value, fallback = 1) {
+  const normalized = normalizeAssistantDigits(value);
+  const match = normalized.match(/\b(\d{1,3})\b/);
+  const qty = parseInt(match?.[1] || '', 10);
+  if (Number.isInteger(qty) && qty > 0) return qty;
+  return fallback;
+}
+
+function isPurchaseIntentText(value) {
+  const normalized = normalizeAssistantText(value);
+  return /(buy|purchase|order|get|اشتري|شراء|اريد شراء|أريد شراء|ابغي اشتري|اريد حساب|أريد حساب|اريد اشتراك|أريد اشتراك|خذ لي|جيب لي)/i.test(normalized);
+}
+
+function isPriceIntentText(value) {
+  const normalized = normalizeAssistantText(value);
+  return /(price|prices|cost|how much|pricing|سعر|اسعار|الاسعار|الأسعار|بكم|كم السعر|تكلفه)/i.test(normalized);
+}
+
+function isNeedMoreInfoText(value) {
+  const normalized = normalizeAssistantText(value);
+  return /(more info|more details|details|tell me more|about|what is|تفاصيل|مزيد|اعرف اكثر|اعرف المزيد|شنو هذا|ما هو|اشرح|وصف)/i.test(normalized);
+}
+
+function isAdminOpenIntentText(value) {
+  const normalized = normalizeAssistantText(value);
+  return /(open|show|go to|take me to|افتح|وريني|اعرض|روح|خذني|دخلني|افتح لي)/i.test(normalized);
+}
+
+function isAssistantCancelIntentText(value) {
+  return isNegativeText(value) || /cancel purchase|الغ الشراء|الغي الشراء|إلغاء الشراء/i.test(String(value || ''));
+}
+
+function getAssistantTrainingSettingKey() {
+  return 'assistant_training_examples';
+}
+
+async function getAssistantTrainingExamples() {
+  const raw = await getGlobalSetting(getAssistantTrainingSettingKey(), '[]');
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(item => item && typeof item === 'object')
+      .map(item => ({
+        question: String(item.question || '').trim(),
+        answer: String(item.answer || '').trim(),
+        createdAt: String(item.createdAt || ''),
+        createdBy: item.createdBy || null
+      }))
+      .filter(item => item.question && item.answer)
+      .slice(-80);
+  } catch {
+    return [];
+  }
+}
+
+async function saveAssistantTrainingExample(question, answer, adminId) {
+  const items = await getAssistantTrainingExamples();
+  const normalizedQuestion = normalizeAssistantText(question);
+  const remaining = items.filter(item => normalizeAssistantText(item.question) !== normalizedQuestion);
+  remaining.push({
+    question: String(question || '').trim(),
+    answer: String(answer || '').trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: adminId
+  });
+
+  await Setting.upsert({
+    key: getAssistantTrainingSettingKey(),
+    lang: 'global',
+    value: JSON.stringify(remaining.slice(-80))
+  });
+}
+
+function parseAssistantTrainingCommand(value) {
+  const textValue = String(value || '').trim();
+  if (!textValue) return null;
+
+  const colonMatch = textValue.match(/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)\s*:\s*([\s\S]+)$/i);
+  if (colonMatch?.[1]) {
+    const body = colonMatch[1].trim();
+    const arrowSplit = body.split(/\s*=>\s*/);
+    if (arrowSplit.length >= 2) {
+      return {
+        question: arrowSplit.shift().trim(),
+        answer: arrowSplit.join(' => ').trim()
+      };
+    }
+  }
+
+  const qaMatch = textValue.match(/question\s*:\s*([\s\S]+?)\n+answer\s*:\s*([\s\S]+)/i)
+    || textValue.match(/السؤال\s*:\s*([\s\S]+?)\n+الجواب\s*:\s*([\s\S]+)/i);
+  if (qaMatch) {
+    return { question: qaMatch[1].trim(), answer: qaMatch[2].trim() };
+  }
+
+  return null;
+}
+
+async function findAssistantTrainingAnswer(userMessage) {
+  const normalizedMessage = normalizeAssistantText(userMessage);
+  if (!normalizedMessage) return '';
+  const items = await getAssistantTrainingExamples();
+
+  for (const item of items.slice().reverse()) {
+    const normalizedQuestion = normalizeAssistantText(item.question);
+    if (!normalizedQuestion) continue;
+    if (normalizedMessage === normalizedQuestion || normalizedMessage.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedMessage)) {
+      return item.answer;
+    }
+  }
+
+  return '';
+}
+
+async function getAssistantCandidateMerchants() {
+  const merchants = await Merchant.findAll({ order: [['id', 'ASC']] });
+  return merchants.filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock');
+}
+
+function getAssistantMerchantSearchBlob(merchant) {
+  return normalizeAssistantText([
+    merchant?.nameEn || '',
+    merchant?.nameAr || '',
+    merchant?.category || '',
+    getMerchantPlainDescription(merchant) || ''
+  ].join(' '));
+}
+
+function scoreAssistantMerchantMatch(queryText, merchant) {
+  const normalizedQuery = normalizeAssistantText(queryText);
+  if (!normalizedQuery) return 0;
+  const haystack = getAssistantMerchantSearchBlob(merchant);
+  if (!haystack) return 0;
+
+  let score = 0;
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
+  const compactHaystack = haystack.replace(/\s+/g, '');
+
+  if (compactQuery && compactHaystack.includes(compactQuery)) score += 100;
+
+  const tokens = normalizedQuery.split(' ').filter(token => token.length >= 2);
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += token.length >= 4 ? 18 : 8;
+  }
+
+  const nameEn = normalizeAssistantText(merchant?.nameEn || '');
+  const nameAr = normalizeAssistantText(merchant?.nameAr || '');
+  if (nameEn && normalizedQuery.includes(nameEn)) score += 60;
+  if (nameAr && normalizedQuery.includes(nameAr)) score += 60;
+
+  return score;
+}
+
+async function resolveAssistantMerchantFromText(userId, userMessage, state = {}) {
+  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
+  if (focusMerchantId) {
+    const focused = await Merchant.findByPk(focusMerchantId);
+    if (focused) return focused;
+  }
+
+  const merchants = await getAssistantCandidateMerchants();
+  let bestMerchant = null;
+  let bestScore = 0;
+  for (const merchant of merchants) {
+    const score = scoreAssistantMerchantMatch(userMessage, merchant);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMerchant = merchant;
+    }
+  }
+
+  if (bestMerchant && bestScore >= 30) return bestMerchant;
+
+  if (!OPENAI_API_KEY || !merchants.length) return null;
+
+  const payload = await callOpenAIJson([
+    {
+      role: 'system',
+      content: 'Choose the single best matching merchant for the user query. Return JSON with merchant_id only when there is a strong match; otherwise return merchant_id as null.'
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        query: String(userMessage || ''),
+        merchants: merchants.slice(0, 150).map(merchant => ({
+          id: merchant.id,
+          nameEn: merchant.nameEn,
+          nameAr: merchant.nameAr,
+          category: merchant.category,
+          details: truncateText(getMerchantPlainDescription(merchant), 120)
+        }))
+      })
+    }
+  ], { temperature: 0, maxTokens: 220 });
+
+  const merchantId = parseInt(payload?.merchant_id, 10);
+  if (Number.isInteger(merchantId)) {
+    return await Merchant.findByPk(merchantId);
+  }
+
+  return null;
+}
+
+async function buildAssistantMerchantInfoText(userId, merchant, quantity = 1) {
+  const name = await getMerchantDisplayName(merchant, userId);
+  const stock = await getMerchantAvailableStock(merchant.id);
+  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
+  const total = unitPrice * Math.max(1, quantity);
+  const details = await getMerchantDescriptionForUser(userId, merchant);
+  const lines = [
+    `🧩 ${name}`,
+    await getText(userId, 'itemPriceLine', { price: formatUsdPrice(unitPrice) }),
+    await getText(userId, 'remainingStockLine', { stock }),
+    await getText(userId, 'currentBalanceLine', { balance: await getUserBalanceFormatted(userId) })
+  ];
+
+  if (quantity > 1) {
+    lines.push(await getText(userId, 'quantityPurchasedLine', { qty: quantity }));
+    lines.push(await getText(userId, 'totalPaidLine', { total: formatUsdPrice(total) }));
+  }
+
+  if (details) {
+    lines.push(await getText(userId, 'productDescriptionLine', { description: details }));
+  }
+
+  return lines.join('\n');
+}
+
+async function buildAssistantPricesCatalogReply(userId) {
+  const sections = await getDigitalSections();
+  const lines = [await getText(userId, 'aiAssistantPricesHeader')];
+
+  for (const section of sections.slice(0, 6)) {
+    const sectionName = await getDigitalSectionDisplayName(section, userId);
+    lines.push(`\n• ${sectionName}`);
+    const products = await getDigitalProductsForSection(section.id);
+    for (const product of products.slice(0, 6)) {
+      lines.push(`  - ${await getMerchantDisplayName(product, userId)}: ${formatUsdPrice(product.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })})`);
+    }
+  }
+
+  const generalMerchants = (await Merchant.findAll({ order: [['id', 'ASC']] }))
+    .filter(merchant => !isDigitalSectionCategory(merchant.category))
+    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock')
+    .slice(0, 10);
+
+  if (generalMerchants.length) {
+    lines.push('');
+    for (const merchant of generalMerchants) {
+      lines.push(`- ${await getMerchantDisplayName(merchant, userId)}: ${formatUsdPrice(merchant.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(merchant.id) })})`);
+    }
+  }
+
+  lines.push('');
+  lines.push(await getCurrentBalanceLineText(userId));
+  return lines.join('\n');
+}
+
+async function buildAssistantPurchaseConfirmationText(userId, merchant, quantity = 1) {
+  const stock = await getMerchantAvailableStock(merchant.id);
+  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
+  const total = unitPrice * Math.max(1, quantity);
+  return await getText(userId, 'aiAssistantPurchaseConfirm', {
+    name: await getMerchantDisplayName(merchant, userId),
+    qty: quantity,
+    price: formatUsdPrice(unitPrice),
+    total: formatUsdPrice(total),
+    stock,
+    balance: await getUserBalanceFormatted(userId)
+  });
+}
+
+async function getAssistantPurchaseReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
+  return {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
+      [{ text: await getText(userId, 'aiAssistantPurchaseMoreButton'), callback_data: `ai_buy_info_${merchantId}_${quantity}` }],
+      [{ text: await getText(userId, 'aiAssistantPurchaseCancelButton'), callback_data: 'ai_buy_no' }],
+      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
+    ]
+  };
+}
+
+async function getAssistantProductInfoReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
+  return {
+    inline_keyboard: [
+      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
+      [{ text: await getText(userId, 'support'), callback_data: 'support' }],
+      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
+    ]
+  };
+}
+
+async function awardReferralRewardForMerchantPurchase(userId, totalCost) {
+  const userObj = await User.findByPk(userId);
+  if (!userObj?.referredBy) return;
+
+  const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
+  const rewardAmount = Number(totalCost || 0) * referralPercent / 100;
+  if (!(rewardAmount > 0)) return;
+
+  const referrer = await User.findByPk(userObj.referredBy);
+  if (!referrer) return;
+
+  await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
+  await User.update({ balance: parseFloat(referrer.balance) + rewardAmount }, { where: { id: referrer.id } });
+  await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
+}
+
+async function completeAssistantMerchantPurchase(userId, merchantId, quantity = 1, state = {}) {
+  const merchant = await Merchant.findByPk(merchantId);
+  if (!merchant) {
+    await bot.sendMessage(userId, await getText(userId, 'error'));
+    return { success: false, reason: 'merchant_not_found' };
+  }
+
+  const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+  if (available < quantity) {
+    await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseUnavailable', { stock: available }), {
+      reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+    });
+    return { success: false, reason: 'not_enough_stock' };
+  }
+
+  const result = await processPurchase(userId, merchant.id, quantity, state.discountCode || null);
+  if (result.success) {
+    let msgText = await getText(userId, 'success');
+    if (result.discountApplied) {
+      msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
+    }
+    const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
+    msgText += `\n\n${deliveryHtml}`;
+    const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+    await clearUserState(userId);
+    await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
+      merchant,
+      totalCost: result.totalCost,
+      newBalance: result.newBalance,
+      quantity
+    });
+
+    const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+    await sendAdminCodeActionNotice(userId, {
+      sourceKey: 'balance',
+      serviceType: `${merchant.nameAr || merchant.nameEn}`,
+      codesCount: quantity,
+      remainingStockText: String(remainingMerchantStock)
+    });
+    await awardReferralRewardForMerchantPurchase(userId, result.totalCost || (merchant.price * quantity));
+    return { success: true };
+  }
+
+  if (result.reason === 'Insufficient balance') {
+    await clearUserState(userId);
+    await bot.sendMessage(
+      userId,
+      await getText(userId, 'insufficientBalance', {
+        balance: Number(result.balance || 0).toFixed(2),
+        price: Number(result.price || merchant.price || 0).toFixed(2),
+        needed: Number(result.totalCost || 0).toFixed(2)
+      }),
+      {
+        reply_markup: {
+          inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+        }
+      }
+    );
+    return { success: false, reason: 'insufficient_balance' };
+  }
+
+  await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason || 'unknown error'}`);
+  return { success: false, reason: result.reason || 'unknown_error' };
+}
+
+async function showAdminAddCodesMenu(userId) {
+  const merchants = await Merchant.findAll();
+  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `add_codes_merchant_${m.id}` }]));
+  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
+  await bot.sendMessage(userId, await getText(userId, 'addCodes'), { reply_markup: { inline_keyboard: buttons } });
+}
+
+async function showAdminSetPriceMenu(userId) {
+  const merchants = await Merchant.findAll();
+  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `set_price_merchant_${m.id}` }]));
+  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
+  await bot.sendMessage(userId, await getText(userId, 'setPrice'), { reply_markup: { inline_keyboard: buttons } });
+}
+
+async function showAdminMerchantsListMenu(userId) {
+  const merchants = await Merchant.findAll();
+  let msg = await getText(userId, 'merchantList');
+  for (const m of merchants) {
+    msg += `ID: ${m.id} | ${m.nameEn} / ${m.nameAr} | Price: ${m.price} USD | Category: ${m.category} | Type: ${m.type}\n`;
+  }
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '✏️ Edit', callback_data: 'admin_edit_merchant' }],
+      [{ text: '🗑️ Delete', callback_data: 'admin_delete_merchant' }],
+      [{ text: '📂 Edit Category', callback_data: 'admin_edit_category' }],
+      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+    ]
+  };
+  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
+}
+
+async function showAdminStatsSummary(userId) {
+  const totalCodes = await Code.count();
+  const totalSales = await BalanceTransaction.sum('amount', { where: { type: 'purchase', status: 'completed' } });
+  const pendingDeposits = await BalanceTransaction.count({ where: { type: 'deposit', status: 'pending' } });
+  await bot.sendMessage(userId,
+    `${await getText(userId, 'totalCodes', { count: totalCodes })}\n` +
+    `${await getText(userId, 'totalSales', { amount: Math.abs(totalSales || 0) })}\n` +
+    `${await getText(userId, 'pendingDeposits', { count: pendingDeposits })}`
+  );
+}
+
+async function executeAdminAssistantShortcut(userId, userMessage) {
+  if (!isAdmin(userId)) return { handled: false };
+  const normalized = normalizeAssistantText(userMessage);
+  if (!isAdminOpenIntentText(normalized)) return { handled: false };
+
+  const items = [
+    { targetTextKey: 'aiAssistantOpenStocks', patterns: [/مخزون|مخزونات|inventory|stock/i], handler: showAdminAddCodesMenu },
+    { targetTextKey: 'aiAssistantOpenSubscriptions', patterns: [/اشتراك|اشتراكات|subscriptions|digital/i], handler: showDigitalSubscriptionsAdmin },
+    { targetTextKey: 'aiAssistantOpenPrices', patterns: [/سعر|اسعار|الاسعار|الأسعار|prices|pricing/i], handler: showAdminSetPriceMenu },
+    { targetTextKey: 'aiAssistantOpenMerchants', patterns: [/تاجر|تجار|merchant/i], handler: showAdminMerchantsListMenu },
+    { targetTextKey: 'aiAssistantOpenBalances', patterns: [/رصيد|ارصده|أرصدة|balance/i], handler: showBalanceManagementAdmin },
+    { targetTextKey: 'aiAssistantOpenButtons', patterns: [/زر|ازرار|أزرار|buttons|menu/i], handler: showMenuButtonsAdmin },
+    { targetTextKey: 'aiAssistantOpenAdminPanel', patterns: [/لوحه التحكم|لوحة التحكم|admin panel|panel/i], handler: showAdminPanel },
+    { targetTextKey: 'aiAssistantOpenStats', patterns: [/احصائيات|إحصائيات|stats|statistics/i], handler: showAdminStatsSummary },
+    { targetTextKey: 'aiAssistantOpenReferrals', patterns: [/احاله|إحالة|احالات|إحالات|referral/i], handler: showReferralSettingsAdmin },
+    { targetTextKey: 'aiAssistantOpenBots', patterns: [/بوتات|bots|manage bots/i], handler: showBotsList }
+  ];
+
+  for (const item of items) {
+    if (item.patterns.some(pattern => pattern.test(normalized))) {
+      await item.handler(userId);
+      return {
+        handled: true,
+        reply: await getText(userId, 'aiAssistantAdminOpened', { target: await getText(userId, item.targetTextKey) })
+      };
+    }
+  }
+
+  return { handled: true, reply: await getText(userId, 'aiAssistantAdminNoMatch') };
+}
+
+async function handleDeterministicAssistantRequest(userId, cleanMessage, state = {}) {
+  if (!cleanMessage) return { handled: false };
+
+  if (isAdmin(userId)) {
+    const training = parseAssistantTrainingCommand(cleanMessage);
+    if (training?.question && training?.answer) {
+      await saveAssistantTrainingExample(training.question, training.answer, userId);
+      return {
+        handled: true,
+        reply: `${await getText(userId, 'aiAssistantTrainingSaved')}\n\nQ: ${training.question}\nA: ${training.answer}`,
+        replyMarkup: await getBackAndCancelReplyMarkup(userId)
+      };
+    }
+
+    if (/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)/i.test(String(cleanMessage || '').trim())) {
+      return {
+        handled: true,
+        reply: await getText(userId, 'aiAssistantTrainingHelp'),
+        replyMarkup: await getBackAndCancelReplyMarkup(userId)
+      };
+    }
+
+    const adminShortcut = await executeAdminAssistantShortcut(userId, cleanMessage);
+    if (adminShortcut.handled) {
+      return {
+        handled: true,
+        reply: adminShortcut.reply,
+        replyMarkup: await getBackAndCancelReplyMarkup(userId, 'admin')
+      };
+    }
+  }
+
+  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
+  if (trainedAnswer) {
+    return {
+      handled: true,
+      reply: trainedAnswer,
+      replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+    };
+  }
+
+  const merchant = await resolveAssistantMerchantFromText(userId, cleanMessage, state);
+  if (merchant && isPurchaseIntentText(cleanMessage)) {
+    const quantity = extractAssistantQuantity(cleanMessage, 1);
+    const stock = await getMerchantAvailableStock(merchant.id);
+    if (stock < quantity || stock <= 0) {
+      return {
+        handled: true,
+        reply: await getText(userId, 'aiAssistantPurchaseUnavailable', { stock }),
+        replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+      };
+    }
+
+    return {
+      handled: true,
+      reply: `${await buildAssistantPurchaseConfirmationText(userId, merchant, quantity)}\n\n${await getText(userId, 'aiAssistantPurchaseNeedMore', { name: await getMerchantDisplayName(merchant, userId) })}`,
+      replyMarkup: await getAssistantPurchaseReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      nextState: {
+        action: 'ai_assistant',
+        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+        focusMerchantId: merchant.id,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: true,
+        pendingMerchantId: merchant.id,
+        pendingQuantity: quantity
+      }
+    };
+  }
+
+  if (merchant && (isPriceIntentText(cleanMessage) || isNeedMoreInfoText(cleanMessage))) {
+    const quantity = extractAssistantQuantity(cleanMessage, 1);
+    return {
+      handled: true,
+      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
+      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      nextState: {
+        action: 'ai_assistant',
+        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+        focusMerchantId: merchant.id,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: false
+      }
+    };
+  }
+
+  if (!merchant && isPriceIntentText(cleanMessage)) {
+    return {
+      handled: true,
+      reply: await buildAssistantPricesCatalogReply(userId),
+      replyMarkup: await getBackAndCancelReplyMarkup(userId)
+    };
+  }
+
+  if (!merchant && isPurchaseIntentText(cleanMessage)) {
+    return {
+      handled: true,
+      reply: await getText(userId, 'aiAssistantNoProductMatch'),
+      replyMarkup: await getBackAndCancelReplyMarkup(userId)
+    };
+  }
+
+  return { handled: false };
+}
+
 async function askBotAssistant(userId, userMessage, state = {}) {
   const cleanMessage = String(userMessage || '').trim();
   if (!cleanMessage) {
@@ -3091,25 +3777,50 @@ async function askBotAssistant(userId, userMessage, state = {}) {
     };
   }
 
+  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
+  if (trainedAnswer) {
+    const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
+    return {
+      reply: trainedAnswer,
+      offerSupport: false,
+      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: trainedAnswer }].slice(-8)
+    };
+  }
+
   const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
   if (!OPENAI_API_KEY) {
     const fallbackReply = await buildFallbackAssistantReply(userId, cleanMessage, state);
     return {
-      reply: `${await getText(userId, 'aiAssistantUnavailable')}\n\n${fallbackReply}`,
+      reply: `${await getText(userId, 'aiAssistantUnavailable')}
+
+${fallbackReply}`,
       offerSupport: false,
       history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: fallbackReply }].slice(-8)
     };
   }
 
   const context = await buildAssistantCatalogContext(userId, state);
+  const trainingExamples = await getAssistantTrainingExamples();
+  const trainingText = trainingExamples.length
+    ? trainingExamples.slice(-20).map((item, index) => `Example ${index + 1}
+Q: ${item.question}
+A: ${item.answer}`).join('\n\n')
+    : 'No custom training examples.';
+
   const payload = await callOpenAIJson([
     {
       role: 'system',
-      content: 'You are the AI assistant inside a Telegram bot that sells digital subscriptions and codes. Answer ONLY about this bot, its available products, remaining stock, prices, payment flow, verification flow, and the current user own balance. Never reveal secrets, tokens, raw database content, admin-only settings, payment wallet addresses, internal configuration, or other users balances. If the user asks about anything outside the bot services, politely say you only help with this bot. If the user wants a human or support, set offer_support to true. Return strict JSON with keys reply and offer_support.'
+      content: 'You are the AI assistant inside a Telegram bot that sells digital subscriptions and codes. Answer ONLY about this bot, its available products, remaining stock, prices, payment flow, verification flow, and the current user own balance. You may compare products, explain what a subscription is, suggest the next step, and keep answers concise and practical. Never reveal secrets, tokens, raw database content, admin-only settings, payment wallet addresses, internal configuration, or other users balances. If the user asks about anything outside the bot services, politely say you only help with this bot. If the user wants a human or support, set offer_support to true. Return strict JSON with keys reply and offer_support.'
     },
     {
       role: 'system',
-      content: `Bot context JSON:\n${JSON.stringify(context)}`
+      content: `Bot context JSON:
+${JSON.stringify(context)}`
+    },
+    {
+      role: 'system',
+      content: `Admin training examples:
+${trainingText}`
     },
     ...previousHistory,
     { role: 'user', content: cleanMessage }
@@ -6427,6 +7138,59 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    const aiBuyYesMatch = data.match(/^ai_buy_yes_(\d+)_(\d+)$/);
+    if (aiBuyYesMatch) {
+      const merchantId = parseInt(aiBuyYesMatch[1], 10);
+      const quantity = Math.max(1, parseInt(aiBuyYesMatch[2], 10) || 1);
+      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      await completeAssistantMerchantPurchase(userId, merchantId, quantity, currentState);
+      return;
+    }
+
+    const aiBuyInfoMatch = data.match(/^ai_buy_info_(\d+)_(\d+)$/);
+    if (aiBuyInfoMatch) {
+      const merchantId = parseInt(aiBuyInfoMatch[1], 10);
+      const quantity = Math.max(1, parseInt(aiBuyInfoMatch[2], 10) || 1);
+      const merchant = await Merchant.findByPk(merchantId);
+      if (merchant) {
+        const currentState = safeParseState((await User.findByPk(userId)).state) || {};
+        await setUserState(userId, {
+          action: 'ai_assistant',
+          history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
+          focusMerchantId: merchantId,
+          awaitingSupportConfirm: false,
+          awaitingPurchaseConfirm: true,
+          pendingMerchantId: merchantId,
+          pendingQuantity: quantity
+        });
+        await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, quantity), {
+          reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchantId, quantity, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
+        });
+      }
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'ai_buy_no') {
+      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
+      await setUserState(userId, {
+        action: 'ai_assistant',
+        history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
+        focusMerchantId: currentState.focusMerchantId || null,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: false
+      });
+      await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
+      });
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'support_close') {
       await closeSupportConversationForUser(userId, 'user', ADMIN_ID);
       await cleanupPressedMessage();
@@ -9645,6 +10409,52 @@ bot.on('message', async msg => {
         return;
       }
 
+      if (state.awaitingPurchaseConfirm && isAffirmativeText(trimmed)) {
+        await completeAssistantMerchantPurchase(userId, parseInt(state.pendingMerchantId, 10), Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state);
+        return;
+      }
+      if (state.awaitingPurchaseConfirm && isNeedMoreInfoText(trimmed)) {
+        const merchant = await Merchant.findByPk(parseInt(state.pendingMerchantId, 10));
+        if (merchant) {
+          await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, Math.max(1, parseInt(state.pendingQuantity, 10) || 1)), {
+            reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+          });
+        }
+        return;
+      }
+      if (state.awaitingPurchaseConfirm && isAssistantCancelIntentText(trimmed)) {
+        await setUserState(userId, {
+          action: 'ai_assistant',
+          history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+          focusMerchantId: state.focusMerchantId || null,
+          awaitingSupportConfirm: false,
+          awaitingPurchaseConfirm: false
+        });
+        await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+        });
+        return;
+      }
+
+      const deterministic = await handleDeterministicAssistantRequest(userId, trimmed, state);
+      if (deterministic.handled) {
+        if (deterministic.nextState) {
+          await setUserState(userId, deterministic.nextState);
+        } else {
+          await setUserState(userId, {
+            action: 'ai_assistant',
+            history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+            focusMerchantId: state.focusMerchantId || null,
+            awaitingSupportConfirm: false,
+            awaitingPurchaseConfirm: false
+          });
+        }
+        await bot.sendMessage(userId, deterministic.reply, {
+          reply_markup: deterministic.replyMarkup || await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+        });
+        return;
+      }
+
       const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
       const aiResult = await askBotAssistant(userId, trimmed, state);
       await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
@@ -9653,7 +10463,8 @@ bot.on('message', async msg => {
         action: 'ai_assistant',
         history: aiResult.history,
         focusMerchantId: state.focusMerchantId || null,
-        awaitingSupportConfirm: Boolean(aiResult.offerSupport)
+        awaitingSupportConfirm: Boolean(aiResult.offerSupport),
+        awaitingPurchaseConfirm: false
       });
 
       const replyMarkup = aiResult.offerSupport
