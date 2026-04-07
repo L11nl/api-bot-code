@@ -13,6 +13,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || '';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const OPENAI_BASE_URL = String(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -981,7 +984,51 @@ Object.assign(DEFAULT_TEXTS.en, {
   digitalStockBroadcastToggleOff: '📣 Stock notification: ❌ OFF',
   digitalStockBroadcastEnabled: '✅ Digital stock notification enabled.',
   digitalStockBroadcastDisabled: '⛔ Digital stock notification disabled.',
-  digitalStockBroadcastMessage: '🧩 New stock is now available\n\nItem: {name}\nAdded: {count}\nPrice: {price} USD'
+  digitalStockBroadcastMessage: '🧩 New stock is now available\n\nItem: {name}\nAdded: {count}\nPrice: {price} USD',
+  changeLanguage: '🌐 Change Language',
+  languageUpdated: '✅ Language updated.',
+  aiAssistant: '🤖 AI Assistant',
+  aiAssistantWelcome: '🤖 Bot Assistant\n\nAsk me about available subscriptions, stock, prices, payment steps, or your balance. I only answer about this bot and its available services.',
+  aiAssistantWelcomeForProduct: '🤖 Product Assistant\n\nAsk me anything about {name}: what it does, its price, remaining stock, and whether it suits you.',
+  aiAssistantThinking: '🤖 Thinking...',
+  aiAssistantUnavailable: '⚠️ AI features are not configured right now. Set OPENAI_API_KEY to enable smart translation and the assistant.',
+  aiAssistantScopeLimit: 'I can only help with this bot, its subscriptions, stock, prices, payment flow, and your own balance.',
+  aiAssistantContactSupportAsk: 'Would you like me to connect you with support?',
+  aiAssistantSupportOpened: '✅ Support chat opened. Send your message now.',
+  aiAssistantSupportDeclined: 'No problem. You can open support any time from the main menu.',
+  aiAssistantSupportYes: '✅ Yes, contact support',
+  aiAssistantSupportNo: '❌ No',
+  askAiAboutThisProduct: '🤖 Ask AI about this item',
+  stockAvailableInline: 'Available {stock}',
+  addEmailPassword: '📧 Add Email & Password',
+  enterBulkEmail: 'Send the email now:',
+  enterBulkPassword: 'Send the password now:',
+  enterBulkVerify: 'Send the verification/check value now, or /skip:',
+  enterBulkExtra: 'Send any extra note now, or /skip:',
+  bulkAccountSaved: '✅ Account saved.',
+  bulkAccountDuplicate: '⚠️ This account already exists in stock.',
+  addAnotherAccount: '➕ Add another account',
+  done: '✅ Done',
+  fieldEmail: 'Email',
+  fieldPassword: 'Password',
+  fieldVerification: 'Verification',
+  fieldExtra: 'Extra',
+  accountEntryTitle: 'Account #{index}',
+  searchDeleteDigitalProductStock: '🔍 Search stock and delete',
+  enterSearchDeleteDigitalProductStock: 'Send the stock/accounts you want to search for and delete. You can send one entry or many entries.',
+  digitalProductStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n🔒 Kept sold rows: {locked}\n\n{details}',
+  closeChat: '🔒 Close Chat',
+  supportChatOpened: '✅ A support chat has been opened. Send your message now.',
+  supportChatAlreadyOpen: '✅ The support chat is already open. Send your message now.',
+  supportChatClosedByUser: '🔒 You closed the support chat.',
+  supportChatClosedByAdmin: '🔒 Support closed the chat.',
+  supportChatClosedAdminNotice: '🔒 The user closed the support chat.',
+  supportChatClosedUserNotice: '🔒 Support closed the chat for the user.',
+  supportAdminReplyPrompt: 'Send your reply to the user:',
+  supportUserMessageForwarded: '📨 Your message was delivered to support.',
+  supportThreadAdminNotice: '📩 Live support message\n\nUsername: {username}\nName: {name}\nUser ID: {userId}\n\nMessage: {message}',
+  digitalStockInputPrompt: 'Send the stock/accounts now.\n\nQuick formats supported:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|extra note\n\nYou can also use the button below to add one account step by step.',
+  digitalProductListButton: '{name} - {price} USD | Available {stock}'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
@@ -1037,7 +1084,51 @@ Object.assign(DEFAULT_TEXTS.ar, {
   digitalStockBroadcastToggleOff: '📣 إشعار المخزون: ❌ متوقف',
   digitalStockBroadcastEnabled: '✅ تم تفعيل إشعار إضافة مخزون الاشتراكات الرقمية.',
   digitalStockBroadcastDisabled: '⛔ تم إيقاف إشعار إضافة مخزون الاشتراكات الرقمية.',
-  digitalStockBroadcastMessage: '🧩 تمت إضافة مخزون جديد الآن\n\nالمنتج: {name}\nالكمية المضافة: {count}\nالسعر: {price} دولار'
+  digitalStockBroadcastMessage: '🧩 تمت إضافة مخزون جديد الآن\n\nالمنتج: {name}\nالكمية المضافة: {count}\nالسعر: {price} دولار',
+  changeLanguage: '🌐 تغيير اللغة',
+  languageUpdated: '✅ تم تحديث اللغة.',
+  aiAssistant: '🤖 المساعد الذكي',
+  aiAssistantWelcome: '🤖 مساعد البوت الذكي\n\nاسألني عن الاشتراكات المتوفرة، المخزون، الأسعار، خطوات الدفع، أو رصيدك. أنا أجيب فقط عن هذا البوت وخدماته المتوفرة.',
+  aiAssistantWelcomeForProduct: '🤖 مساعد المنتج الذكي\n\nاسألني عن {name}: ما هو، ماذا يفعل، كم سعره، وكم تبقى منه في المخزون.',
+  aiAssistantThinking: '🤖 جاري التفكير...',
+  aiAssistantUnavailable: '⚠️ ميزات الذكاء الاصطناعي غير مفعلة حالياً. أضف OPENAI_API_KEY لتفعيل الترجمة الذكية والمساعد.',
+  aiAssistantScopeLimit: 'أنا أساعد فقط فيما يخص هذا البوت، الاشتراكات المتوفرة، المخزون، الأسعار، الشراء، الدفع، ورصيدك أنت فقط.',
+  aiAssistantContactSupportAsk: 'هل تريد أن أوصلك بالدعم؟',
+  aiAssistantSupportOpened: '✅ تم فتح دردشة الدعم. أرسل رسالتك الآن.',
+  aiAssistantSupportDeclined: 'لا مشكلة، يمكنك فتح الدعم في أي وقت من القائمة الرئيسية.',
+  aiAssistantSupportYes: '✅ نعم، تواصل مع الدعم',
+  aiAssistantSupportNo: '❌ لا',
+  askAiAboutThisProduct: '🤖 اسأل الذكاء الاصطناعي عن هذا الاشتراك',
+  stockAvailableInline: 'يوجد {stock}',
+  addEmailPassword: '📧 إضافة إيميل وباسورد',
+  enterBulkEmail: 'أرسل الإيميل الآن:',
+  enterBulkPassword: 'أرسل الباسورد الآن:',
+  enterBulkVerify: 'أرسل التحقق الآن أو /skip للتخطي:',
+  enterBulkExtra: 'أرسل أي ملاحظة إضافية الآن أو /skip للتخطي:',
+  bulkAccountSaved: '✅ تم حفظ الحساب.',
+  bulkAccountDuplicate: '⚠️ هذا الحساب موجود مسبقاً في المخزون.',
+  addAnotherAccount: '➕ إضافة حساب آخر',
+  done: '✅ تم',
+  fieldEmail: 'ايميل',
+  fieldPassword: 'باسورد',
+  fieldVerification: 'تحقق',
+  fieldExtra: 'إضافة شي آخر',
+  accountEntryTitle: 'الحساب #{index}',
+  searchDeleteDigitalProductStock: '🔍 البحث في المخزون وحذفه',
+  enterSearchDeleteDigitalProductStock: 'أرسل المخزون/الحسابات التي تريد البحث عنها وحذفها. يمكنك إرسال عنصر واحد أو عدة عناصر.',
+  digitalProductStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n🔒 تم الإبقاء على المباعة: {locked}\n\n{details}',
+  closeChat: '🔒 اغلاق الدردشة',
+  supportChatOpened: '✅ تم فتح دردشة مع الدعم. أرسل رسالتك الآن.',
+  supportChatAlreadyOpen: '✅ دردشة الدعم مفتوحة بالفعل. أرسل رسالتك الآن.',
+  supportChatClosedByUser: '🔒 قمت بإغلاق دردشة الدعم.',
+  supportChatClosedByAdmin: '🔒 قام الدعم بإغلاق الدردشة.',
+  supportChatClosedAdminNotice: '🔒 قام المستخدم بإغلاق دردشة الدعم.',
+  supportChatClosedUserNotice: '🔒 قام الدعم بإغلاق دردشة المستخدم.',
+  supportAdminReplyPrompt: 'أرسل ردك إلى المستخدم:',
+  supportUserMessageForwarded: '📨 تم إيصال رسالتك إلى الدعم.',
+  supportThreadAdminNotice: '📩 رسالة دعم مباشرة\n\nالمعرف: {username}\nالاسم: {name}\nايدي المستخدم: {userId}\n\nالرسالة: {message}',
+  digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nالصيغ السريعة المدعومة:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|ملاحظة إضافية\n\nويمكنك أيضاً استخدام زر «إضافة إيميل وباسورد» لإضافة حساب واحد خطوة بخطوة.',
+  digitalProductListButton: '{name} - {price} دولار | يوجد {stock}'
 });
 
 function isAdmin(userId) {
@@ -1238,13 +1329,14 @@ async function getCodeDeliveryPrefixHtml(userId) {
 }
 
 async function broadcastAnnouncement(messageText) {
-  const users = await User.findAll({ attributes: ['id'] });
+  const users = await User.findAll({ attributes: ['id', 'lang'] });
   let sent = 0;
   let failed = 0;
 
   for (const u of users) {
     try {
-      await bot.sendMessage(u.id, messageText);
+      const localizedText = await translateTextForLang(u.lang || 'en', messageText);
+      await bot.sendMessage(u.id, localizedText || messageText);
       sent += 1;
     } catch {
       failed += 1;
@@ -1930,14 +2022,20 @@ async function getAllDigitalSections() {
 
 async function getDigitalSectionDisplayName(section, userId) {
   const user = await User.findByPk(userId);
-  const lang = user?.lang || 'en';
-  return lang === 'ar' ? (section?.nameAr || section?.nameEn || '') : (section?.nameEn || section?.nameAr || '');
+  const lang = user?.lang === 'ar' ? 'ar' : 'en';
+  const preferred = lang === 'ar' ? (section?.nameAr || '') : (section?.nameEn || '');
+  const fallback = lang === 'ar' ? (section?.nameEn || '') : (section?.nameAr || '');
+  if (preferred) return preferred;
+  return fallback ? await translateTextForLang(lang, fallback) : '';
 }
 
 async function getMerchantDisplayName(merchant, userId) {
   const user = await User.findByPk(userId);
-  const lang = user?.lang || 'en';
-  return lang === 'ar' ? (merchant?.nameAr || merchant?.nameEn || '') : (merchant?.nameEn || merchant?.nameAr || '');
+  const lang = user?.lang === 'ar' ? 'ar' : 'en';
+  const preferred = lang === 'ar' ? (merchant?.nameAr || '') : (merchant?.nameEn || '');
+  const fallback = lang === 'ar' ? (merchant?.nameEn || '') : (merchant?.nameAr || '');
+  if (preferred) return preferred;
+  return fallback ? await translateTextForLang(lang, fallback) : '';
 }
 
 async function getMerchantAvailableStock(merchantId) {
@@ -2101,12 +2199,28 @@ function parseMerchantStockEntries(merchant, rawInput) {
 
   if (merchant.type === 'bulk') {
     const lines = inputText.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
-    if (lines.length % 2 !== 0) return { error: 'pair_mismatch' };
-
     const entries = [];
-    for (let i = 0; i < lines.length; i += 2) {
-      entries.push({ value: lines[i], extra: lines[i + 1] });
+    const pairBuffer = [];
+
+    for (const line of lines) {
+      if (line.includes('|')) {
+        const parsedLine = parseBulkStockPipeLine(line);
+        if (!parsedLine) return { error: 'pair_mismatch' };
+        entries.push(parsedLine);
+      } else {
+        pairBuffer.push(line);
+      }
     }
+
+    if (pairBuffer.length % 2 !== 0) return { error: 'pair_mismatch' };
+
+    for (let i = 0; i < pairBuffer.length; i += 2) {
+      entries.push({
+        value: pairBuffer[i],
+        extra: createStructuredBulkExtra(pairBuffer[i + 1])
+      });
+    }
+
     return { entries };
   }
 
@@ -2373,6 +2487,7 @@ async function showDigitalProductAdmin(userId, merchantId) {
         inline_keyboard: [
           [{ text: await getText(userId, 'addDigitalProductStock'), callback_data: `admin_digital_add_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'viewDigitalProductStock'), callback_data: `admin_view_digital_product_stock_${merchant.id}` }],
+          [{ text: await getText(userId, 'searchDeleteDigitalProductStock'), callback_data: `admin_search_delete_digital_product_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'searchDigitalProductDuplicates'), callback_data: `admin_search_digital_product_duplicates_${merchant.id}` }],
           [{ text: await getText(userId, 'deleteDigitalProductDuplicates'), callback_data: `admin_delete_digital_product_duplicates_${merchant.id}` }],
           [{ text: await getText(userId, 'editDigitalProductName'), callback_data: `admin_edit_digital_product_name_${merchant.id}` }],
@@ -2445,7 +2560,7 @@ async function showDigitalProductDetails(userId, merchantId) {
   }
   const stock = await getMerchantAvailableStock(merchant.id);
   const name = await getMerchantDisplayName(merchant, userId);
-  let details = getMerchantPlainDescription(merchant);
+  let details = await getMerchantDescriptionForUser(userId, merchant);
 
   if (!details) {
     details = merchant?.description?.type === 'photo' || merchant?.description?.type === 'video'
@@ -2473,6 +2588,7 @@ ${await getCurrentBalanceLineText(userId)}`,
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }],
+          [{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }],
           [{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]
         ]
       }
@@ -2480,6 +2596,530 @@ ${await getCurrentBalanceLineText(userId)}`,
   );
 }
 
+
+
+
+const AI_TEXT_CACHE = new Map();
+
+function containsArabicText(value) {
+  return /[\u0600-\u06FF]/.test(String(value || ''));
+}
+
+async function callOpenAIJson(messages, options = {}) {
+  if (!OPENAI_API_KEY) return null;
+  try {
+    const response = await axios.post(`${OPENAI_BASE_URL}/chat/completions`, {
+      model: OPENAI_MODEL,
+      messages,
+      temperature: options.temperature ?? 0.2,
+      max_tokens: options.maxTokens ?? 700,
+      response_format: { type: 'json_object' }
+    }, {
+      timeout: options.timeout ?? 25000,
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const content = response?.data?.choices?.[0]?.message?.content;
+    if (!content) return null;
+    return JSON.parse(content);
+  } catch (err) {
+    console.error('OpenAI JSON error:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+async function translateTextForLang(lang, textValue, options = {}) {
+  const targetLang = lang === 'ar' ? 'ar' : 'en';
+  const trimmed = String(textValue || '').trim();
+  if (!trimmed || !OPENAI_API_KEY) return trimmed;
+
+  const cacheKey = `translate:${targetLang}:${trimmed}`;
+  if (AI_TEXT_CACHE.has(cacheKey)) return AI_TEXT_CACHE.get(cacheKey);
+
+  const payload = await callOpenAIJson([
+    {
+      role: 'system',
+      content: 'You translate user-facing Telegram bot text. Keep emojis, line breaks, URLs, emails, usernames, product names, codes, and numbers unchanged unless translation is clearly needed. Return JSON with translated_text only.'
+    },
+    {
+      role: 'user',
+      content: `Target language: ${targetLang === 'ar' ? 'Arabic' : 'English'}\n\nTranslate this text for a Telegram bot. If it is already suitable, return it naturally without extra commentary.\n\n${trimmed}`
+    }
+  ], { temperature: 0, maxTokens: Math.min(1500, Math.max(250, trimmed.length * 2)) });
+
+  const translated = String(payload?.translated_text || '').trim() || trimmed;
+  AI_TEXT_CACHE.set(cacheKey, translated);
+  return translated;
+}
+
+async function translateTextForUserLanguage(userId, textValue, options = {}) {
+  const user = await User.findByPk(userId, { attributes: ['lang'] });
+  return await translateTextForLang(user?.lang || 'en', textValue, options);
+}
+
+async function getMerchantDescriptionForUser(userId, merchant) {
+  const plain = getMerchantPlainDescription(merchant);
+  if (!plain) return '';
+  return await translateTextForUserLanguage(userId, plain);
+}
+
+function createStructuredBulkExtra(password, verify = '', note = '') {
+  return JSON.stringify({
+    password: String(password || '').trim(),
+    verify: String(verify || '').trim(),
+    note: String(note || '').trim()
+  });
+}
+
+function parseStructuredStockExtra(extra) {
+  const raw = String(extra || '').trim();
+  if (!raw) return { password: '', verify: '', note: '', structured: false };
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const password = String(parsed.password || parsed.pass || '').trim();
+      const verify = String(parsed.verify || parsed.verification || parsed.check || '').trim();
+      const note = String(parsed.note || parsed.extra || parsed.additional || '').trim();
+      if (password || verify || note) {
+        return { password, verify, note, structured: true };
+      }
+    }
+  } catch {
+    // ignore JSON parse errors
+  }
+
+  return { password: raw, verify: '', note: '', structured: false };
+}
+
+function getMerchantStockCompositeKey(value, extra = '') {
+  const parsed = parseStructuredStockExtra(extra);
+  const normalizedExtra = (parsed.password || parsed.verify || parsed.note)
+    ? createStructuredBulkExtra(parsed.password, parsed.verify, parsed.note)
+    : String(extra || '').trim();
+  return `${String(value || '').trim()}\n${normalizedExtra}`;
+}
+
+function buildMerchantStockRowText(rowOrEntry) {
+  if (!rowOrEntry) return '';
+  const value = String(rowOrEntry.value || '').trim();
+  const rawExtra = String(rowOrEntry.extra || '').trim();
+  const parsed = parseStructuredStockExtra(rawExtra);
+  const looksLikeAccount = Boolean(value.includes('@') || rawExtra.startsWith('{') || parsed.verify || parsed.note);
+
+  if (looksLikeAccount && (parsed.password || rawExtra)) {
+    const lines = [
+      `Email: ${value}`,
+      `Password: ${parsed.password || rawExtra}`
+    ];
+    if (parsed.verify) lines.push(`Verification: ${parsed.verify}`);
+    if (parsed.note) lines.push(`Extra: ${parsed.note}`);
+    return lines.join('\n');
+  }
+
+  return rawExtra ? `${value}\n${rawExtra}` : value;
+}
+
+function parseBulkStockPipeLine(line) {
+  const parts = String(line || '').split('|').map(v => v.trim());
+  if (parts.length < 2 || !parts[0] || !parts[1]) return null;
+  return {
+    value: parts[0],
+    extra: createStructuredBulkExtra(parts[1], parts[2] || '', parts.slice(3).join(' | '))
+  };
+}
+
+async function formatMerchantDeliveryHtml(userId, merchant, rawEntries = []) {
+  const entries = Array.isArray(rawEntries) ? rawEntries : [];
+  if (!entries.length) return '';
+
+  if (merchant?.type !== 'bulk') {
+    return formatCodesForHtml(entries.map(entry => buildMerchantStockRowText(entry)));
+  }
+
+  const titleLabel = await getText(userId, 'accountEntryTitle', { index: '{index}' });
+  const emailLabel = await getText(userId, 'fieldEmail');
+  const passwordLabel = await getText(userId, 'fieldPassword');
+  const verificationLabel = await getText(userId, 'fieldVerification');
+  const extraLabel = await getText(userId, 'fieldExtra');
+
+  return entries.map((entry, index) => {
+    const parsed = parseStructuredStockExtra(entry.extra);
+    const lines = [
+      `<b>${escapeHtml(titleLabel.replace('{index}', String(index + 1)))}</b>`,
+      `<b>${escapeHtml(emailLabel)}:</b>\n<code>${escapeHtml(entry.value)}</code>`,
+      `<b>${escapeHtml(passwordLabel)}:</b>\n<code>${escapeHtml(parsed.password || '')}</code>`
+    ];
+
+    if (parsed.verify) {
+      lines.push(`<b>${escapeHtml(verificationLabel)}:</b>\n<code>${escapeHtml(parsed.verify)}</code>`);
+    }
+
+    if (parsed.note) {
+      lines.push(`<b>${escapeHtml(extraLabel)}:</b>\n<code>${escapeHtml(parsed.note)}</code>`);
+    }
+
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+async function getDigitalStockInputReplyMarkup(userId, merchant) {
+  const rows = [];
+  if (merchant?.type === 'bulk') {
+    rows.push([{ text: await getText(userId, 'addEmailPassword'), callback_data: `admin_bulk_add_account_${merchant.id}` }]);
+  }
+  rows.push([{ text: await getText(userId, 'cancel'), callback_data: merchant?.category ? `admin_digital_product_${merchant.id}` : 'cancel_action' }]);
+  return { inline_keyboard: rows };
+}
+
+async function addSingleBulkAccountStock(merchant, accountData = {}) {
+  const value = String(accountData.email || '').trim();
+  const extra = createStructuredBulkExtra(accountData.password, accountData.verify, accountData.note);
+  if (!value || !String(accountData.password || '').trim()) {
+    return { success: false, reason: 'empty' };
+  }
+
+  const existingRows = await Code.findAll({ where: { merchantId: merchant.id }, attributes: ['value', 'extra'] });
+  const wantedKey = getMerchantStockCompositeKey(value, extra);
+  if (existingRows.some(row => getMerchantStockCompositeKey(row.value, row.extra) === wantedKey)) {
+    return { success: true, added: 0, duplicate: true };
+  }
+
+  await Code.create({ value, extra, merchantId: merchant.id, isUsed: false });
+  return { success: true, added: 1, duplicate: false };
+}
+
+async function deleteMerchantStockEntriesByInput(merchant, rawInput) {
+  const parsed = parseMerchantStockEntries(merchant, rawInput);
+  if (parsed.error) {
+    return { success: false, reason: parsed.error };
+  }
+
+  const wantedEntries = [];
+  const seenWanted = new Set();
+  for (const entry of parsed.entries) {
+    const key = getMerchantStockCompositeKey(entry.value, entry.extra);
+    if (!seenWanted.has(key)) {
+      seenWanted.add(key);
+      wantedEntries.push({ key, entry });
+    }
+  }
+
+  const rows = await Code.findAll({ where: { merchantId: merchant.id }, order: [['id', 'ASC']] });
+  const idsToDelete = [];
+  const missing = [];
+  let locked = 0;
+
+  for (const wanted of wantedEntries) {
+    const matches = rows.filter(row => getMerchantStockCompositeKey(row.value, row.extra) === wanted.key);
+    if (!matches.length) {
+      missing.push(buildMerchantStockRowText(wanted.entry));
+      continue;
+    }
+
+    for (const row of matches) {
+      if (row.isUsed) {
+        locked += 1;
+      } else {
+        idsToDelete.push(row.id);
+      }
+    }
+  }
+
+  if (idsToDelete.length) {
+    await Code.destroy({ where: { id: idsToDelete } });
+  }
+
+  let details = missing.slice(0, 25).join('\n\n');
+  if (missing.length > 25) {
+    details += `\n\n... +${missing.length - 25} more`;
+  }
+  if (!details) details = '-';
+
+  return {
+    success: true,
+    deleted: idsToDelete.length,
+    missing: missing.length,
+    locked,
+    details
+  };
+}
+
+function getSupportThreadKey(userId) {
+  return `support_thread_${Number(userId)}`;
+}
+
+async function getSupportThread(userId) {
+  const setting = await Setting.findOne({ where: { key: getSupportThreadKey(userId), lang: 'global' } });
+  if (!setting) return null;
+  try {
+    return JSON.parse(setting.value);
+  } catch {
+    return null;
+  }
+}
+
+async function isSupportThreadOpen(userId) {
+  const thread = await getSupportThread(userId);
+  return Boolean(thread?.open);
+}
+
+async function openSupportThread(userId, openedBy = 'user') {
+  await Setting.upsert({
+    key: getSupportThreadKey(userId),
+    lang: 'global',
+    value: JSON.stringify({ open: true, openedBy, updatedAt: new Date().toISOString() })
+  });
+}
+
+async function closeSupportThread(userId) {
+  await Setting.destroy({ where: { key: getSupportThreadKey(userId), lang: 'global' } });
+}
+
+async function getSupportUserCloseReplyMarkup(userId) {
+  return {
+    inline_keyboard: [[{ text: await getText(userId, 'closeChat'), callback_data: 'support_close' }]]
+  };
+}
+
+async function getSupportAdminReplyMarkup(targetUserId) {
+  return {
+    inline_keyboard: [[
+      { text: await getText(ADMIN_ID, 'replyToSupport'), callback_data: `support_reply_${targetUserId}` },
+      { text: await getText(ADMIN_ID, 'closeChat'), callback_data: `support_close_user_${targetUserId}` }
+    ]]
+  };
+}
+
+async function startSupportConversation(userId, openedBy = 'user') {
+  const alreadyOpen = await isSupportThreadOpen(userId);
+  if (!alreadyOpen) {
+    await openSupportThread(userId, openedBy);
+  }
+
+  await bot.sendMessage(
+    userId,
+    await getText(userId, alreadyOpen ? 'supportChatAlreadyOpen' : 'supportChatOpened'),
+    { reply_markup: await getSupportUserCloseReplyMarkup(userId) }
+  );
+}
+
+async function forwardSupportMessageToAdmin(userId, msg) {
+  const supportText = String(msg.text || msg.caption || '').trim();
+  const photoFileId = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
+  const videoFileId = msg.video ? msg.video.file_id : null;
+  const notifText = await getText(ADMIN_ID, 'supportThreadAdminNotice', {
+    userId,
+    username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
+    name: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد',
+    message: supportText || 'No message'
+  });
+  const replyMarkup = await getSupportAdminReplyMarkup(userId);
+
+  if (photoFileId) {
+    await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText, reply_markup: replyMarkup });
+  } else if (videoFileId) {
+    await bot.sendVideo(ADMIN_ID, videoFileId, { caption: notifText, reply_markup: replyMarkup });
+  } else {
+    await bot.sendMessage(ADMIN_ID, notifText, { reply_markup: replyMarkup });
+  }
+}
+
+async function closeSupportConversationForUser(userId, closedBy = 'user', adminId = ADMIN_ID) {
+  await closeSupportThread(userId);
+  try {
+    await bot.sendMessage(userId, await getText(userId, closedBy === 'user' ? 'supportChatClosedByUser' : 'supportChatClosedByAdmin'));
+  } catch {}
+
+  if (adminId) {
+    try {
+      const noticeKey = closedBy === 'user' ? 'supportChatClosedAdminNotice' : 'supportChatClosedUserNotice';
+      await bot.sendMessage(adminId, await getText(adminId, noticeKey));
+    } catch {}
+  }
+}
+
+function isSupportIntentText(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return /(support|agent|human|admin|help me|contact support|تواصل مع الدعم|الدعم|دعم|مشكلة|شكوى|اكلم الادمن|اكلم الدعم|مراسلة الدعم)/i.test(normalized);
+}
+
+function isAffirmativeText(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^(yes|y|ok|okay|sure|please|نعم|اي|أجل|ايوه|اريد|أريد|تمام|موافق)/i.test(normalized);
+}
+
+function isNegativeText(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^(no|n|cancel|later|لا|مو|ليس الآن|لاحقاً|الغاء|إلغاء)/i.test(normalized);
+}
+
+async function buildAssistantCatalogContext(userId, state = {}) {
+  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
+  const digitalSections = await getDigitalSections();
+  const sectionPayload = [];
+
+  for (const section of digitalSections) {
+    const products = await getDigitalProductsForSection(section.id);
+    const productPayload = [];
+    for (const product of products) {
+      productPayload.push({
+        id: product.id,
+        nameEn: product.nameEn,
+        nameAr: product.nameAr,
+        priceUSD: Number(product.price || 0),
+        stock: await getMerchantAvailableStock(product.id),
+        type: product.type,
+        details: truncateText(getMerchantPlainDescription(product), 220)
+      });
+    }
+
+    sectionPayload.push({
+      id: section.id,
+      nameEn: section.nameEn,
+      nameAr: section.nameAr,
+      products: productPayload
+    });
+  }
+
+  const generalMerchants = (await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] }))
+    .filter(merchant => !isDigitalSectionCategory(merchant.category))
+    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Code');
+
+  const generalCatalog = [];
+  for (const merchant of generalMerchants) {
+    generalCatalog.push({
+      id: merchant.id,
+      nameEn: merchant.nameEn,
+      nameAr: merchant.nameAr,
+      category: merchant.category,
+      priceUSD: Number(merchant.price || 0),
+      stock: await getMerchantAvailableStock(merchant.id),
+      type: merchant.type,
+      details: truncateText(getMerchantPlainDescription(merchant), 160)
+    });
+  }
+
+  const referralMerchant = await getReferralStockMerchant();
+  const chatgptFallbackStock = await Code.count({ where: { merchantId: referralMerchant.id, isUsed: false } });
+  const usdConfig = await getDepositConfig('USD');
+  const iqdConfig = await getDepositConfig('IQD');
+  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
+  const focusProduct = focusMerchantId ? await Merchant.findByPk(focusMerchantId) : null;
+
+  return {
+    currentUser: {
+      id: userId,
+      language: user?.lang || 'en',
+      ownBalanceUSD: Number(user?.balance || 0).toFixed(2)
+    },
+    chatgptCode: {
+      priceUSD: Number(await getChatGptPriceValue()).toFixed(2),
+      fallbackStock: chatgptFallbackStock
+    },
+    depositOptions: [
+      { currency: 'USD', nameEn: usdConfig.displayNameEn || 'Binance', nameAr: usdConfig.displayNameAr || 'بايننس' },
+      { currency: 'IQD', nameEn: iqdConfig.displayNameEn || 'Iraqi Dinar', nameAr: iqdConfig.displayNameAr || 'دينار عراقي' }
+    ],
+    digitalSections: sectionPayload,
+    generalCatalog,
+    focusProduct: focusProduct ? {
+      id: focusProduct.id,
+      nameEn: focusProduct.nameEn,
+      nameAr: focusProduct.nameAr,
+      priceUSD: Number(focusProduct.price || 0),
+      stock: await getMerchantAvailableStock(focusProduct.id),
+      type: focusProduct.type,
+      details: truncateText(getMerchantPlainDescription(focusProduct), 250)
+    } : null
+  };
+}
+
+async function buildFallbackAssistantReply(userId, userMessage, state = {}) {
+  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
+  const isArabic = (user?.lang || 'en') === 'ar';
+  const lines = [];
+  lines.push(await getText(userId, 'balanceInfoText', { balance: Number(user?.balance || 0).toFixed(2) }));
+
+  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
+  if (focusMerchantId) {
+    const merchant = await Merchant.findByPk(focusMerchantId);
+    if (merchant) {
+      lines.unshift(await getMerchantDisplayName(merchant, userId));
+      lines.push(await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) }));
+      lines.push(await getText(userId, 'remainingStockLine', { stock: await getMerchantAvailableStock(merchant.id) }));
+      const details = await getMerchantDescriptionForUser(userId, merchant);
+      if (details) lines.push(`${await getText(userId, 'productDescriptionLine', { description: details })}`);
+      return lines.join('\n');
+    }
+  }
+
+  const sections = await getDigitalSections();
+  const previewLines = [];
+  for (const section of sections.slice(0, 4)) {
+    const products = await getDigitalProductsForSection(section.id);
+    for (const product of products.slice(0, 3)) {
+      previewLines.push(`• ${await getMerchantDisplayName(product, userId)} - ${formatUsdPrice(product.price)} USD - ${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })}`);
+    }
+  }
+
+  if (previewLines.length) {
+    lines.push(isArabic ? 'الاشتراكات المتوفرة حالياً:' : 'Currently available subscriptions:');
+    lines.push(previewLines.join('\n'));
+  } else {
+    lines.push(await getText(userId, 'aiAssistantUnavailable'));
+  }
+
+  return lines.join('\n\n');
+}
+
+async function askBotAssistant(userId, userMessage, state = {}) {
+  const cleanMessage = String(userMessage || '').trim();
+  if (!cleanMessage) {
+    return { reply: await getText(userId, 'aiAssistantScopeLimit'), offerSupport: false, history: Array.isArray(state.history) ? state.history : [] };
+  }
+
+  if (isSupportIntentText(cleanMessage)) {
+    return {
+      reply: await getText(userId, 'aiAssistantContactSupportAsk'),
+      offerSupport: true,
+      history: Array.isArray(state.history) ? state.history : []
+    };
+  }
+
+  const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
+  if (!OPENAI_API_KEY) {
+    const fallbackReply = await buildFallbackAssistantReply(userId, cleanMessage, state);
+    return {
+      reply: `${await getText(userId, 'aiAssistantUnavailable')}\n\n${fallbackReply}`,
+      offerSupport: false,
+      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: fallbackReply }].slice(-8)
+    };
+  }
+
+  const context = await buildAssistantCatalogContext(userId, state);
+  const payload = await callOpenAIJson([
+    {
+      role: 'system',
+      content: 'You are the AI assistant inside a Telegram bot that sells digital subscriptions and codes. Answer ONLY about this bot, its available products, remaining stock, prices, payment flow, verification flow, and the current user own balance. Never reveal secrets, tokens, raw database content, admin-only settings, payment wallet addresses, internal configuration, or other users balances. If the user asks about anything outside the bot services, politely say you only help with this bot. If the user wants a human or support, set offer_support to true. Return strict JSON with keys reply and offer_support.'
+    },
+    {
+      role: 'system',
+      content: `Bot context JSON:\n${JSON.stringify(context)}`
+    },
+    ...previousHistory,
+    { role: 'user', content: cleanMessage }
+  ], { temperature: 0.2, maxTokens: 850 });
+
+  const reply = String(payload?.reply || '').trim() || await buildFallbackAssistantReply(userId, cleanMessage, state);
+  const offerSupport = Boolean(payload?.offer_support);
+  const nextHistory = [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: reply }].slice(-8);
+  return { reply, offerSupport, history: nextHistory };
+}
 
 function extractChatGptUpLinks(rawText) {
   const text = String(rawText || '');
@@ -3227,6 +3867,8 @@ const DEFAULT_BUTTONS = {
   discount: true,
   my_purchases: true,
   support: true,
+  ai_assistant: true,
+  change_language: true,
   chatgpt_code: true,
   digital_sections_group: true,
   free_code: true,
@@ -3244,6 +3886,8 @@ const DEFAULT_BUTTON_ORDER = [
   'referral',
   'discount',
   'support',
+  'ai_assistant',
+  'change_language',
   'free_code',
   'admin_panel'
 ];
@@ -3365,6 +4009,8 @@ async function getMenuButtonItems(userId) {
     { id: 'referral', name: await getText(userId, 'referral') },
     { id: 'discount', name: await getText(userId, 'discountButton') },
     { id: 'support', name: await getText(userId, 'support') },
+    { id: 'ai_assistant', name: await getText(userId, 'aiAssistant') },
+    { id: 'change_language', name: await getText(userId, 'changeLanguage') },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
   ];
@@ -4776,6 +5422,8 @@ async function sendMainMenu(userId) {
     referral: await getText(userId, 'referral'),
     discount: await getText(userId, 'discountButton'),
     support: await getText(userId, 'support'),
+    ai_assistant: await getText(userId, 'aiAssistant'),
+    change_language: await getText(userId, 'changeLanguage'),
     free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
@@ -5220,8 +5868,9 @@ async function processPurchase(userId, merchantId, quantity, discountCode = null
     });
 
     await t.commit();
-    const codesText = codes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value).join('\n\n');
-    return { success: true, codes: codesText, discountApplied: discountPercent, unitPrice, totalCost, newBalance: currentBalance - totalCost };
+    const rawEntries = codes.map(c => ({ value: c.value, extra: c.extra }));
+    const codesText = rawEntries.map(entry => buildMerchantStockRowText(entry)).join('\n\n');
+    return { success: true, codes: codesText, rawEntries, discountApplied: discountPercent, unitPrice, totalCost, newBalance: currentBalance - totalCost };
   } catch (err) {
     await t.rollback();
     console.error('Purchase transaction error:', err);
@@ -5613,14 +6262,23 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
     await tryAwardReferralIfEligible(userId);
 
-    await bot.sendMessage(userId, await getText(userId, 'start'), {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
-          [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
-        ]
-      }
-    });
+    const currentState = safeParseState(currentUser.state);
+    const needsLanguageChoice = isActuallyNewUser || currentState?.action === 'awaiting_language';
+
+    if (needsLanguageChoice) {
+      await setUserState(userId, { action: 'awaiting_language' });
+      await bot.sendMessage(userId, await getText(userId, 'start'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
+          ]
+        }
+      });
+      return;
+    }
+
+    await sendMainMenu(userId);
   } catch (err) {
     console.error('Error in /start:', err);
   }
@@ -5647,11 +6305,17 @@ bot.on('callback_query', async query => {
     }
 
     if (data.startsWith('lang_')) {
-      const newLang = data.split('_')[1];
+      const newLang = data.split('_')[1] === 'ar' ? 'ar' : 'en';
+      const existingUser = await User.findByPk(userId);
+      const currentState = safeParseState(existingUser?.state);
       await User.update({ lang: newLang }, { where: { id: userId } });
+      if (currentState?.action === 'awaiting_language') {
+        await clearUserState(userId);
+      }
       const canUse = await ensureUserAccess(userId, { sendJoinPrompt: true, sendCaptchaPrompt: true });
       if (canUse) {
         await tryAwardReferralIfEligible(userId);
+        await bot.sendMessage(userId, await getText(userId, 'languageUpdated')).catch(() => {});
         await sendMainMenu(userId);
       }
       await cleanupPressedMessage();
@@ -5689,6 +6353,7 @@ bot.on('callback_query', async query => {
     }
 
     if (data === 'back_to_menu') {
+      await clearUserState(userId);
       await sendMainMenu(userId);
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
@@ -5703,9 +6368,24 @@ bot.on('callback_query', async query => {
     }
 
 
-    if (data === 'support') {
-      await setUserState(userId, { action: 'support' });
-      await bot.sendMessage(userId, await getText(userId, 'sendReply'), {
+    if (data === 'change_language') {
+      await bot.sendMessage(userId, await getText(userId, 'start'), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }],
+            [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+          ]
+        }
+      });
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'ai_assistant') {
+      await setUserState(userId, { action: 'ai_assistant', history: [], awaitingSupportConfirm: false });
+      await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcome'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId)
       });
       await cleanupPressedMessage();
@@ -5713,12 +6393,59 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data.startsWith('support_reply_user_')) {
-      const adminId = parseInt(data.split('_')[3], 10);
-      await setUserState(userId, { action: 'support_reply_user', targetAdminId: adminId });
-      await bot.sendMessage(userId, await getText(userId, 'sendReply'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, 'support')
+    const aiAboutProductMatch = data.match(/^ai_about_product_(\d+)$/);
+    if (aiAboutProductMatch) {
+      const merchantId = parseInt(aiAboutProductMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      if (merchant) {
+        await setUserState(userId, { action: 'ai_assistant', history: [], focusMerchantId: merchantId, awaitingSupportConfirm: false });
+        await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcomeForProduct', { name: await getMerchantDisplayName(merchant, userId) }), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, `digital_product_${merchantId}`)
+        });
+      }
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'ai_support_yes') {
+      await clearUserState(userId);
+      await startSupportConversation(userId, 'ai');
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'ai_support_no') {
+      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
+      await setUserState(userId, { ...currentState, action: 'ai_assistant', awaitingSupportConfirm: false });
+      await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId)
       });
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'support_close') {
+      await closeSupportConversationForUser(userId, 'user', ADMIN_ID);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+
+    if (data === 'support') {
+      await clearUserState(userId);
+      await startSupportConversation(userId, 'menu');
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data.startsWith('support_reply_user_')) {
+      await clearUserState(userId);
+      await startSupportConversation(userId, 'reply_button');
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
@@ -5865,10 +6592,17 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data.startsWith('support_close_user_') && isAdmin(userId)) {
+      const targetUserId = parseInt(data.split('_')[3], 10);
+      await closeSupportConversationForUser(targetUserId, 'admin', userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data.startsWith('support_reply_') && isAdmin(userId)) {
       const targetUserId = parseInt(data.split('_')[2], 10);
       await setUserState(userId, { action: 'support_reply', targetUserId });
-      await bot.sendMessage(userId, await getText(userId, 'replyToSupport', { userId: targetUserId }), {
+      await bot.sendMessage(userId, await getText(userId, 'supportAdminReplyPrompt'), {
         reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
       });
       await bot.answerCallbackQuery(query.id);
@@ -6978,6 +7712,10 @@ bot.on('callback_query', async query => {
 
     if (data.startsWith('admin_digital_product_') && isAdmin(userId)) {
       const merchantId = parseInt(data.split('_')[3], 10);
+      const currentState = safeParseState((await User.findByPk(userId)).state);
+      if (['add_codes', 'bulk_account_entry', 'delete_digital_product_stock_by_input'].includes(currentState?.action)) {
+        await clearUserState(userId);
+      }
       await showDigitalProductAdmin(userId, merchantId);
       await bot.answerCallbackQuery(query.id);
       return;
@@ -6985,8 +7723,42 @@ bot.on('callback_query', async query => {
 
     if (data.startsWith('admin_digital_add_stock_') && isAdmin(userId)) {
       const merchantId = parseInt(data.split('_')[4], 10);
+      const merchant = await Merchant.findByPk(merchantId);
       await setUserState(userId, { action: 'add_codes', merchantId, returnTo: 'digital_product_admin' });
-      await bot.sendMessage(userId, await getText(userId, 'digitalStockInputPrompt'));
+      await bot.sendMessage(userId, await getText(userId, 'digitalStockInputPrompt'), {
+        reply_markup: await getDigitalStockInputReplyMarkup(userId, merchant)
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const bulkAddAccountMatch = data.match(/^admin_bulk_add_account_(\d+)$/);
+    if (bulkAddAccountMatch && isAdmin(userId)) {
+      const merchantId = parseInt(bulkAddAccountMatch[1], 10);
+      await setUserState(userId, { action: 'bulk_account_entry', merchantId, returnTo: 'digital_product_admin', step: 'email', draft: {} });
+      await bot.sendMessage(userId, await getText(userId, 'enterBulkEmail'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, `admin_digital_product_${merchantId}`)
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const bulkAddAnotherMatch = data.match(/^admin_bulk_account_again_(\d+)$/);
+    if (bulkAddAnotherMatch && isAdmin(userId)) {
+      const merchantId = parseInt(bulkAddAnotherMatch[1], 10);
+      await setUserState(userId, { action: 'bulk_account_entry', merchantId, returnTo: 'digital_product_admin', step: 'email', draft: {} });
+      await bot.sendMessage(userId, await getText(userId, 'enterBulkEmail'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, `admin_digital_product_${merchantId}`)
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const bulkDoneMatch = data.match(/^admin_bulk_account_done_(\d+)$/);
+    if (bulkDoneMatch && isAdmin(userId)) {
+      const merchantId = parseInt(bulkDoneMatch[1], 10);
+      await clearUserState(userId);
+      await showDigitalProductAdmin(userId, merchantId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7094,6 +7866,17 @@ bot.on('callback_query', async query => {
       const merchantId = parseInt(viewDigitalProductStockMatch[1], 10);
       await sendDigitalProductStockPreview(userId, merchantId);
       await showDigitalProductAdmin(userId, merchantId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const searchDeleteDigitalProductStockMatch = data.match(/^admin_search_delete_digital_product_stock_(\d+)$/);
+    if (searchDeleteDigitalProductStockMatch && isAdmin(userId)) {
+      const merchantId = parseInt(searchDeleteDigitalProductStockMatch[1], 10);
+      await setUserState(userId, { action: 'delete_digital_product_stock_by_input', merchantId, returnTo: 'digital_product_admin' });
+      await bot.sendMessage(userId, await getText(userId, 'enterSearchDeleteDigitalProductStock'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, `admin_digital_product_${merchantId}`)
+      });
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -7483,37 +8266,16 @@ bot.on('message', async msg => {
       if (photo) fileId = photo[photo.length - 1].file_id;
       else if (video) fileId = video.file_id;
 
-      const supportReplyText = `${await getText(userId, 'replyMessage')}\n\n${replyMsg}`;
+      const supportReplyText = `${await getText(targetUserId, 'replyMessage')}\n\n${replyMsg}`;
       if (fileId) {
-        if (photo) await bot.sendPhoto(targetUserId, fileId, { caption: supportReplyText });
-        else await bot.sendVideo(targetUserId, fileId, { caption: supportReplyText });
+        if (photo) await bot.sendPhoto(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
+        else await bot.sendVideo(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
       } else {
-        await bot.sendMessage(targetUserId, supportReplyText);
+        await bot.sendMessage(targetUserId, supportReplyText, { reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
       }
 
-      const replyButton = { inline_keyboard: [[{ text: await getText(targetUserId, 'replyToSupport'), callback_data: `support_reply_user_${userId}` }]] };
-      await bot.sendMessage(targetUserId, await getText(targetUserId, 'replyToSupport'), { reply_markup: replyButton });
-      await bot.sendMessage(userId, await getText(userId, 'supportMessageSent'));
-      await clearUserState(userId);
-      return;
-    }
-
-    if (state?.action === 'support_reply_user') {
-      const targetAdminId = state.targetAdminId;
-      const supportText = text || '';
-      const photoFileId = photo ? photo[photo.length - 1].file_id : null;
-      const notifText = await getText(targetAdminId, 'supportNotification', {
-        userId,
-        username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
-        name: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد',
-        message: supportText || 'No message'
-      });
-      if (photoFileId) {
-        await bot.sendPhoto(targetAdminId, photoFileId, { caption: notifText });
-      } else {
-        await bot.sendMessage(targetAdminId, notifText);
-      }
-      await bot.sendMessage(userId, await getText(userId, 'supportMessageSent'));
+      await openSupportThread(targetUserId, 'admin_reply');
+      await bot.sendMessage(userId, await getText(userId, 'supportUserMessageForwarded'));
       await clearUserState(userId);
       return;
     }
@@ -7845,9 +8607,9 @@ bot.on('message', async msg => {
         const saveResult = await addMerchantStockEntriesWithDedup(merchant, text || '');
         if (!saveResult.success) {
           if (saveResult.reason === 'pair_mismatch') {
-            await bot.sendMessage(userId, await getText(userId, 'invalidBulkStockPairs'));
+            await bot.sendMessage(userId, await getText(userId, 'invalidBulkStockPairs'), { reply_markup: await getDigitalStockInputReplyMarkup(userId, merchant) });
           } else {
-            await bot.sendMessage(userId, await getText(userId, 'emptyStockInput'));
+            await bot.sendMessage(userId, await getText(userId, 'emptyStockInput'), { reply_markup: await getDigitalStockInputReplyMarkup(userId, merchant) });
           }
           return;
         }
@@ -7855,7 +8617,7 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, await getText(userId, 'codesAddedDetailed', {
           added: saveResult.added,
           duplicates: saveResult.duplicates
-        }));
+        }), { reply_markup: await getDigitalStockInputReplyMarkup(userId, merchant) });
         const returnTo = state.returnTo || '';
         const merchantId = state.merchantId;
         const shouldBroadcastDigitalStock = isDigitalSectionCategory(merchant.category) && saveResult.added > 0;
@@ -7873,6 +8635,100 @@ bot.on('message', async msg => {
           });
         }
         return;
+      }
+
+      if (state.action === 'delete_digital_product_stock_by_input') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        const deleteResult = await deleteMerchantStockEntriesByInput(merchant, text || '');
+        if (!deleteResult.success) {
+          await bot.sendMessage(userId, deleteResult.reason === 'pair_mismatch'
+            ? await getText(userId, 'invalidBulkStockPairs')
+            : await getText(userId, 'enterSearchDeleteDigitalProductStock'));
+          return;
+        }
+
+        await bot.sendMessage(userId, await getText(userId, 'digitalProductStockSearchDeleteResult', {
+          deleted: deleteResult.deleted,
+          missing: deleteResult.missing,
+          locked: deleteResult.locked,
+          details: deleteResult.details
+        }));
+        await clearUserState(userId);
+        await showDigitalProductAdmin(userId, merchant.id);
+        return;
+      }
+
+      if (state.action === 'bulk_account_entry') {
+        const merchant = await Merchant.findByPk(state.merchantId);
+        if (!merchant) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          await clearUserState(userId);
+          return;
+        }
+
+        const trimmed = String(text || '').trim();
+        const draft = state.draft || {};
+
+        if (state.step === 'email') {
+          if (!trimmed) {
+            await bot.sendMessage(userId, await getText(userId, 'enterBulkEmail'));
+            return;
+          }
+          await setUserState(userId, { ...state, step: 'password', draft: { ...draft, email: trimmed } });
+          await bot.sendMessage(userId, await getText(userId, 'enterBulkPassword'));
+          return;
+        }
+
+        if (state.step === 'password') {
+          if (!trimmed) {
+            await bot.sendMessage(userId, await getText(userId, 'enterBulkPassword'));
+            return;
+          }
+          await setUserState(userId, { ...state, step: 'verify', draft: { ...draft, password: trimmed } });
+          await bot.sendMessage(userId, await getText(userId, 'enterBulkVerify'));
+          return;
+        }
+
+        if (state.step === 'verify') {
+          await setUserState(userId, { ...state, step: 'extra', draft: { ...draft, verify: trimmed === '/skip' ? '' : trimmed } });
+          await bot.sendMessage(userId, await getText(userId, 'enterBulkExtra'));
+          return;
+        }
+
+        if (state.step === 'extra') {
+          const saveResult = await addSingleBulkAccountStock(merchant, {
+            email: draft.email,
+            password: draft.password,
+            verify: draft.verify || '',
+            note: trimmed === '/skip' ? '' : trimmed
+          });
+
+          if (!saveResult.success) {
+            await bot.sendMessage(userId, await getText(userId, 'emptyStockInput'));
+            return;
+          }
+
+          if (saveResult.added > 0 && isDigitalSectionCategory(merchant.category)) {
+            broadcastDigitalStockAdded(merchant, saveResult.added).catch(err => console.error('digital stock broadcast error:', err));
+          }
+
+          await setUserState(userId, { action: 'add_codes', merchantId: merchant.id, returnTo: 'digital_product_admin' });
+          await bot.sendMessage(userId, await getText(userId, saveResult.duplicate ? 'bulkAccountDuplicate' : 'bulkAccountSaved'), {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: await getText(userId, 'addAnotherAccount'), callback_data: `admin_bulk_account_again_${merchant.id}` }],
+                [{ text: await getText(userId, 'done'), callback_data: `admin_bulk_account_done_${merchant.id}` }]
+              ]
+            }
+          });
+          return;
+        }
       }
 
       if (state.action === 'edit_merchant') {
@@ -8776,25 +9632,49 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (state?.action === 'support') {
-      const supportText = text || '';
-      const photoFileId = photo ? photo[photo.length - 1].file_id : null;
-      const replyButton = {
-        inline_keyboard: [[{ text: await getText(ADMIN_ID, 'replyToSupport'), callback_data: `support_reply_${userId}` }]]
-      };
-      const notifText = await getText(ADMIN_ID, 'supportNotification', {
-        userId,
-        username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
-        name: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').trim() || 'لا يوجد',
-        message: supportText || 'No message'
-      });
-      if (photoFileId) {
-        await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText, reply_markup: replyButton });
-      } else {
-        await bot.sendMessage(ADMIN_ID, notifText, { reply_markup: replyButton });
+    if (state?.action === 'ai_assistant') {
+      const trimmed = String(text || '').trim();
+      if (state.awaitingSupportConfirm && isAffirmativeText(trimmed)) {
+        await clearUserState(userId);
+        await startSupportConversation(userId, 'ai_text_confirmation');
+        return;
       }
-      await bot.sendMessage(userId, await getText(userId, 'supportMessageSent'));
-      await clearUserState(userId);
+      if (state.awaitingSupportConfirm && isNegativeText(trimmed)) {
+        await setUserState(userId, { ...state, awaitingSupportConfirm: false });
+        await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), { reply_markup: await getBackAndCancelReplyMarkup(userId) });
+        return;
+      }
+
+      const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
+      const aiResult = await askBotAssistant(userId, trimmed, state);
+      await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
+
+      await setUserState(userId, {
+        action: 'ai_assistant',
+        history: aiResult.history,
+        focusMerchantId: state.focusMerchantId || null,
+        awaitingSupportConfirm: Boolean(aiResult.offerSupport)
+      });
+
+      const replyMarkup = aiResult.offerSupport
+        ? {
+            inline_keyboard: [
+              [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
+              [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
+              [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+            ]
+          }
+        : await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu');
+
+      await bot.sendMessage(userId, aiResult.reply, { reply_markup: replyMarkup });
+      return;
+    }
+
+    if (await isSupportThreadOpen(userId)) {
+      await forwardSupportMessageToAdmin(userId, msg);
+      await bot.sendMessage(userId, await getText(userId, 'supportUserMessageForwarded'), {
+        reply_markup: await getSupportUserCloseReplyMarkup(userId)
+      });
       return;
     }
 
@@ -8839,7 +9719,8 @@ bot.on('message', async msg => {
       if (result.success) {
         let msgText = await getText(userId, 'success');
         if (result.discountApplied) msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
-        msgText += `\n\n${formatCodesForHtml(result.codes)}`;
+        const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
+        msgText += `\n\n${deliveryHtml}`;
         const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
         await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
           merchant,
