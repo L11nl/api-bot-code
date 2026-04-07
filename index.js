@@ -3172,6 +3172,11 @@ async function buildFallbackAssistantReply(userId, userMessage, state = {}) {
     }
   }
 
+  const detectedMerchant = await resolveAssistantMerchantFromText(userId, userMessage, state);
+  if (detectedMerchant) {
+    return await buildAssistantMerchantInfoText(userId, detectedMerchant, extractAssistantQuantity(userMessage, 1));
+  }
+
   const sections = await getDigitalSections();
   const previewLines = [];
   for (const section of sections.slice(0, 4)) {
@@ -3210,6 +3215,10 @@ function normalizeAssistantText(value) {
     .replace(/[^A-Za-z0-9\u0600-\u06FF]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function isSlashCommandText(value) {
+  return /^\/[A-Za-z_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(String(value || '').trim());
 }
 
 function extractAssistantQuantity(value, fallback = 1) {
@@ -3760,6 +3769,22 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
     };
   }
 
+  if (merchant) {
+    const quantity = extractAssistantQuantity(cleanMessage, 1);
+    return {
+      handled: true,
+      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
+      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      nextState: {
+        action: 'ai_assistant',
+        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+        focusMerchantId: merchant.id,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: false
+      }
+    };
+  }
+
   return { handled: false };
 }
 
@@ -3830,6 +3855,53 @@ ${trainingText}`
   const offerSupport = Boolean(payload?.offer_support);
   const nextHistory = [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: reply }].slice(-8);
   return { reply, offerSupport, history: nextHistory };
+}
+
+async function processAssistantMessageTurn(userId, trimmed, state = {}) {
+  const deterministic = await handleDeterministicAssistantRequest(userId, trimmed, state);
+  if (deterministic.handled) {
+    if (deterministic.nextState) {
+      await setUserState(userId, deterministic.nextState);
+    } else {
+      await setUserState(userId, {
+        action: 'ai_assistant',
+        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+        focusMerchantId: state.focusMerchantId || null,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: false
+      });
+    }
+
+    await bot.sendMessage(userId, deterministic.reply, {
+      reply_markup: deterministic.replyMarkup || await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
+    });
+    return true;
+  }
+
+  const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
+  const aiResult = await askBotAssistant(userId, trimmed, state);
+  await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
+
+  await setUserState(userId, {
+    action: 'ai_assistant',
+    history: aiResult.history,
+    focusMerchantId: state.focusMerchantId || null,
+    awaitingSupportConfirm: Boolean(aiResult.offerSupport),
+    awaitingPurchaseConfirm: false
+  });
+
+  const replyMarkup = aiResult.offerSupport
+    ? {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
+          [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
+          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+        ]
+      }
+    : await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu');
+
+  await bot.sendMessage(userId, aiResult.reply, { reply_markup: replyMarkup });
+  return true;
 }
 
 function extractChatGptUpLinks(rawText) {
@@ -10398,6 +10470,12 @@ bot.on('message', async msg => {
 
     if (state?.action === 'ai_assistant') {
       const trimmed = String(text || '').trim();
+      if (isSlashCommandText(trimmed)) {
+        if (/^\/start(?:\s|$)/i.test(trimmed)) {
+          await clearUserState(userId);
+        }
+        return;
+      }
       if (state.awaitingSupportConfirm && isAffirmativeText(trimmed)) {
         await clearUserState(userId);
         await startSupportConversation(userId, 'ai_text_confirmation');
@@ -10436,48 +10514,7 @@ bot.on('message', async msg => {
         return;
       }
 
-      const deterministic = await handleDeterministicAssistantRequest(userId, trimmed, state);
-      if (deterministic.handled) {
-        if (deterministic.nextState) {
-          await setUserState(userId, deterministic.nextState);
-        } else {
-          await setUserState(userId, {
-            action: 'ai_assistant',
-            history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-            focusMerchantId: state.focusMerchantId || null,
-            awaitingSupportConfirm: false,
-            awaitingPurchaseConfirm: false
-          });
-        }
-        await bot.sendMessage(userId, deterministic.reply, {
-          reply_markup: deterministic.replyMarkup || await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-        });
-        return;
-      }
-
-      const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
-      const aiResult = await askBotAssistant(userId, trimmed, state);
-      await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
-
-      await setUserState(userId, {
-        action: 'ai_assistant',
-        history: aiResult.history,
-        focusMerchantId: state.focusMerchantId || null,
-        awaitingSupportConfirm: Boolean(aiResult.offerSupport),
-        awaitingPurchaseConfirm: false
-      });
-
-      const replyMarkup = aiResult.offerSupport
-        ? {
-            inline_keyboard: [
-              [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
-              [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
-              [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-            ]
-          }
-        : await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu');
-
-      await bot.sendMessage(userId, aiResult.reply, { reply_markup: replyMarkup });
+      await processAssistantMessageTurn(userId, trimmed, state);
       return;
     }
 
@@ -10976,6 +11013,17 @@ bot.on('message', async msg => {
       }
       await clearUserState(userId);
       await sendMainMenu(userId);
+      return;
+    }
+
+    if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text)) {
+      await processAssistantMessageTurn(userId, String(text).trim(), {
+        action: 'ai_assistant',
+        history: [],
+        focusMerchantId: null,
+        awaitingSupportConfirm: false,
+        awaitingPurchaseConfirm: false
+      });
       return;
     }
 
