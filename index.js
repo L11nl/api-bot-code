@@ -3057,19 +3057,21 @@ async function closeSupportConversationForUser(userId, closedBy = 'user', adminI
 }
 
 function isSupportIntentText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
+  const normalized = normalizeAssistantText(value);
   if (!normalized) return false;
-  return /(support|agent|human|admin|help me|contact support|تواصل مع الدعم|الدعم|دعم|مشكلة|شكوى|اكلم الادمن|اكلم الدعم|مراسلة الدعم)/i.test(normalized);
+  return /(support|agent|human|representative|operator|customer service|contact support|talk to admin|talk to support|open support|need help|issue|problem|complaint|refund|replace|not working|admin help|live chat|الدعم|دعم|الاداره|الادارة|ادمن|المسؤول|مشكله|مشكلة|شكوى|استفسار|بدل|استبدال|ما يشتغل|لا يعمل|اكلم|أكلم|تواصل|مراسله|مراسلة|محادثه|محادثة|افتح الدعم|حولني للدعم|حولني للاداره|حولني للادارة|اريد مساعده|أريد مساعده|اريد مساعدة|أريد مساعدة|احتاج مساعده|احتاج مساعدة)/i.test(normalized);
 }
 
 function isAffirmativeText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return /^(yes|y|ok|okay|sure|please|نعم|اي|أجل|ايوه|اريد|أريد|تمام|موافق)/i.test(normalized);
+  const normalized = normalizeAssistantText(value);
+  if (!normalized) return false;
+  return /^(yes|y|ok|okay|sure|please|confirm|go ahead|do it|buy now|continue|نعم|اي|ايي|أجل|ايوه|اوكي|أوكي|اكيد|أكيد|تمام|موافق|نفذ|نفذه|نفذها|كمل|كمله|استمر|اشتر|اشتري|اريد|أريد)/i.test(normalized);
 }
 
 function isNegativeText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return /^(no|n|cancel|later|لا|مو|ليس الآن|لاحقاً|الغاء|إلغاء)/i.test(normalized);
+  const normalized = normalizeAssistantText(value);
+  if (!normalized) return false;
+  return /^(no|n|cancel|later|stop|not now|no thanks|don t|لا|مو|ليس الان|ليس الآن|لاحقا|لاحقاً|الغاء|إلغاء|مو هسه|لا شكرا|لا شكرًا|لا اريد|لا أريد|وقف|توقف)/i.test(normalized);
 }
 
 async function buildAssistantCatalogContext(userId, state = {}) {
@@ -3206,15 +3208,41 @@ function normalizeAssistantDigits(value) {
 function normalizeAssistantText(value) {
   return normalizeAssistantDigits(value)
     .toLowerCase()
-    .replace(/[\u0640]/g, '')
+    .replace(/[ـ]/g, '')
     .replace(/[أإآٱ]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')
     .replace(/ؤ/g, 'و')
     .replace(/ئ/g, 'ي')
-    .replace(/[^A-Za-z0-9\u0600-\u06FF]+/g, ' ')
+    .replace(/[^A-Za-z0-9؀-ۿ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+const ASSISTANT_STOP_WORDS = new Set([
+  'اريد', 'أريد', 'ابي', 'ارغب', 'محتاج', 'احتاج', 'عايز', 'ابغى', 'ابغي',
+  'شراء', 'اشتري', 'اشتر', 'buy', 'purchase', 'order', 'get', 'please', 'now',
+  'حساب', 'اشتراك', 'منتج', 'الخدمه', 'الخدمة', 'service', 'product', 'account',
+  'بكم', 'سعر', 'السعر', 'الاسعار', 'الأسعار', 'price', 'prices', 'cost',
+  'لو', 'من', 'في', 'عن', 'على', 'هذا', 'هذه', 'that', 'this', 'the', 'a', 'an'
+].map(v => normalizeAssistantText(v)));
+
+function getAssistantTokens(value) {
+  return normalizeAssistantText(value)
+    .split(' ')
+    .map(v => v.trim())
+    .filter(v => v.length >= 2 && !ASSISTANT_STOP_WORDS.has(v));
+}
+
+function getAssistantTokenOverlap(queryTokens, targetTokens) {
+  const q = Array.isArray(queryTokens) ? queryTokens : [];
+  const t = new Set(Array.isArray(targetTokens) ? targetTokens : []);
+  if (!q.length || !t.size) return 0;
+  let count = 0;
+  for (const token of q) {
+    if (t.has(token)) count += 1;
+  }
+  return count / q.length;
 }
 
 function isSlashCommandText(value) {
@@ -3223,34 +3251,49 @@ function isSlashCommandText(value) {
 
 function extractAssistantQuantity(value, fallback = 1) {
   const normalized = normalizeAssistantDigits(value);
-  const match = normalized.match(/\b(\d{1,3})\b/);
+  const match = normalized.match(/(\d{1,3})/);
   const qty = parseInt(match?.[1] || '', 10);
   if (Number.isInteger(qty) && qty > 0) return qty;
+
+  const words = [
+    { value: 1, patterns: [/one/i, /واحد/, /وحده/, /واحدة/] },
+    { value: 2, patterns: [/two/i, /اثنين/, /اثنان/, /ثنين/] },
+    { value: 3, patterns: [/three/i, /ثلاث/, /ثلاثه/, /ثلاثة/] },
+    { value: 4, patterns: [/four/i, /اربعه/, /اربعة/, /أربعه/, /أربعة/] },
+    { value: 5, patterns: [/five/i, /خمسه/, /خمسة/] }
+  ];
+
+  for (const item of words) {
+    if (item.patterns.some(pattern => pattern.test(String(value || '')))) {
+      return item.value;
+    }
+  }
+
   return fallback;
 }
 
 function isPurchaseIntentText(value) {
   const normalized = normalizeAssistantText(value);
-  return /(buy|purchase|order|get|اشتري|شراء|اريد شراء|أريد شراء|ابغي اشتري|اريد حساب|أريد حساب|اريد اشتراك|أريد اشتراك|خذ لي|جيب لي)/i.test(normalized);
+  return /(buy|purchase|order|get|take|renew|subscribe|اشتري|شراء|اريد شراء|أريد شراء|ابغي اشتري|اريد حساب|أريد حساب|اريد اشتراك|أريد اشتراك|اريد اخذ|أريد أخذ|خذ لي|جيب لي|اريد هذا|أريد هذا|جدد|تجديد|اشترك|فعله|فعله الي|فعله لي)/i.test(normalized);
 }
 
 function isPriceIntentText(value) {
   const normalized = normalizeAssistantText(value);
-  return /(price|prices|cost|how much|pricing|سعر|اسعار|الاسعار|الأسعار|بكم|كم السعر|تكلفه)/i.test(normalized);
+  return /(price|prices|cost|how much|pricing|rate|سعر|اسعار|الاسعار|الأسعار|بكم|كم السعر|كم سعره|تكلفه|تكلفة|يكلف|يكلفني)/i.test(normalized);
 }
 
 function isNeedMoreInfoText(value) {
   const normalized = normalizeAssistantText(value);
-  return /(more info|more details|details|tell me more|about|what is|تفاصيل|مزيد|اعرف اكثر|اعرف المزيد|شنو هذا|ما هو|اشرح|وصف)/i.test(normalized);
+  return /(more info|more details|details|tell me more|about|what is|what does|explain|describe|compare|تفاصيل|مزيد|اعرف اكثر|اعرف المزيد|شنو هذا|ما هو|اشرح|وصف|معلومات|شنو يفيد|شنو ميزاته|ماذا يقدم|كيف يعمل|قارن)/i.test(normalized);
 }
 
 function isAdminOpenIntentText(value) {
   const normalized = normalizeAssistantText(value);
-  return /(open|show|go to|take me to|افتح|وريني|اعرض|روح|خذني|دخلني|افتح لي)/i.test(normalized);
+  return /(open|show|go to|take me to|enter|افتح|وريني|اعرض|روح|خذني|دخلني|افتح لي|وديني|افتح واجهه|افتح واجهة)/i.test(normalized);
 }
 
 function isAssistantCancelIntentText(value) {
-  return isNegativeText(value) || /cancel purchase|الغ الشراء|الغي الشراء|إلغاء الشراء/i.test(String(value || ''));
+  return isNegativeText(value) || /cancel purchase|الغ الشراء|الغي الشراء|إلغاء الشراء|لا تكمل|لا تكمل الشراء/i.test(String(value || ''));
 }
 
 function getAssistantTrainingSettingKey() {
@@ -3322,17 +3365,36 @@ function parseAssistantTrainingCommand(value) {
 async function findAssistantTrainingAnswer(userMessage) {
   const normalizedMessage = normalizeAssistantText(userMessage);
   if (!normalizedMessage) return '';
+
+  const messageTokens = getAssistantTokens(userMessage);
   const items = await getAssistantTrainingExamples();
+
+  let bestAnswer = '';
+  let bestScore = 0;
 
   for (const item of items.slice().reverse()) {
     const normalizedQuestion = normalizeAssistantText(item.question);
     if (!normalizedQuestion) continue;
-    if (normalizedMessage === normalizedQuestion || normalizedMessage.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedMessage)) {
-      return item.answer;
+
+    let score = 0;
+    if (normalizedMessage === normalizedQuestion) score = 1000;
+    else if (normalizedMessage.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedMessage)) score = 850;
+    else {
+      const questionTokens = getAssistantTokens(item.question);
+      const overlap = getAssistantTokenOverlap(messageTokens, questionTokens);
+      const reverseOverlap = getAssistantTokenOverlap(questionTokens, messageTokens);
+      score = Math.round(Math.max(overlap, reverseOverlap) * 100);
+      if (messageTokens.length && questionTokens.length && overlap >= 0.74) score += 120;
+      if (questionTokens.length >= 2 && overlap >= 0.55 && reverseOverlap >= 0.55) score += 80;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAnswer = item.answer;
     }
   }
 
-  return '';
+  return bestScore >= 78 ? bestAnswer : '';
 }
 
 async function getAssistantCandidateMerchants() {
@@ -3349,27 +3411,52 @@ function getAssistantMerchantSearchBlob(merchant) {
   ].join(' '));
 }
 
+function getAssistantMerchantAliases(merchant) {
+  const raw = [merchant?.nameEn || '', merchant?.nameAr || '', merchant?.category || ''];
+  const aliases = [];
+  for (const item of raw) {
+    const normalized = normalizeAssistantText(item);
+    if (normalized) aliases.push(normalized);
+    const compact = normalized.replace(/\s+/g, '');
+    if (compact && compact !== normalized) aliases.push(compact);
+  }
+  return [...new Set(aliases.filter(Boolean))];
+}
+
 function scoreAssistantMerchantMatch(queryText, merchant) {
   const normalizedQuery = normalizeAssistantText(queryText);
   if (!normalizedQuery) return 0;
+
   const haystack = getAssistantMerchantSearchBlob(merchant);
   if (!haystack) return 0;
 
-  let score = 0;
   const compactQuery = normalizedQuery.replace(/\s+/g, '');
   const compactHaystack = haystack.replace(/\s+/g, '');
+  const queryTokens = getAssistantTokens(normalizedQuery);
+  const hayTokens = getAssistantTokens(haystack);
+  const aliases = getAssistantMerchantAliases(merchant);
 
-  if (compactQuery && compactHaystack.includes(compactQuery)) score += 100;
+  let score = 0;
 
-  const tokens = normalizedQuery.split(' ').filter(token => token.length >= 2);
-  for (const token of tokens) {
-    if (haystack.includes(token)) score += token.length >= 4 ? 18 : 8;
+  if (compactQuery && compactHaystack.includes(compactQuery)) score += 140;
+  if (compactQuery && aliases.some(alias => alias === compactQuery)) score += 220;
+  if (aliases.some(alias => normalizedQuery === alias)) score += 220;
+  if (aliases.some(alias => alias && normalizedQuery.includes(alias))) score += 120;
+  if (aliases.some(alias => alias && alias.includes(normalizedQuery) && normalizedQuery.length >= 3)) score += 100;
+
+  const overlap = getAssistantTokenOverlap(queryTokens, hayTokens);
+  const reverseOverlap = getAssistantTokenOverlap(hayTokens, queryTokens);
+  score += Math.round(overlap * 120);
+  score += Math.round(reverseOverlap * 50);
+
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) score += token.length >= 4 ? 16 : 7;
   }
 
   const nameEn = normalizeAssistantText(merchant?.nameEn || '');
   const nameAr = normalizeAssistantText(merchant?.nameAr || '');
-  if (nameEn && normalizedQuery.includes(nameEn)) score += 60;
-  if (nameAr && normalizedQuery.includes(nameAr)) score += 60;
+  if (nameEn && normalizedQuery.includes(nameEn)) score += 80;
+  if (nameAr && normalizedQuery.includes(nameAr)) score += 80;
 
   return score;
 }
@@ -3378,50 +3465,104 @@ async function resolveAssistantMerchantFromText(userId, userMessage, state = {})
   const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
   if (focusMerchantId) {
     const focused = await Merchant.findByPk(focusMerchantId);
-    if (focused) return focused;
-  }
-
-  const merchants = await getAssistantCandidateMerchants();
-  let bestMerchant = null;
-  let bestScore = 0;
-  for (const merchant of merchants) {
-    const score = scoreAssistantMerchantMatch(userMessage, merchant);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMerchant = merchant;
+    if (focused) {
+      const focusScore = scoreAssistantMerchantMatch(userMessage, focused);
+      if (focusScore >= 18 || !String(userMessage || '').trim()) return focused;
     }
   }
 
-  if (bestMerchant && bestScore >= 30) return bestMerchant;
+  const merchants = await getAssistantCandidateMerchants();
+  if (!merchants.length) return null;
 
-  if (!OPENAI_API_KEY || !merchants.length) return null;
+  const ranked = merchants
+    .map(merchant => ({ merchant, score: scoreAssistantMerchantMatch(userMessage, merchant) }))
+    .sort((a, b) => b.score - a.score);
+
+  const best = ranked[0] || null;
+  const second = ranked[1] || null;
+  if (best && best.score >= 90) return best.merchant;
+  if (best && best.score >= 58 && (!second || best.score - second.score >= 12)) return best.merchant;
+  if (best && best.score >= 45 && getAssistantTokens(userMessage).length <= 3) return best.merchant;
+
+  if (!OPENAI_API_KEY) return best?.score >= 35 ? best.merchant : null;
 
   const payload = await callOpenAIJson([
     {
       role: 'system',
-      content: 'Choose the single best matching merchant for the user query. Return JSON with merchant_id only when there is a strong match; otherwise return merchant_id as null.'
+      content: 'Choose the single best matching merchant for the user query. Return strict JSON with merchant_id, confidence, and reason. Use merchant_id null if there is no clear match. Confidence must be a number between 0 and 1.'
     },
     {
       role: 'user',
       content: JSON.stringify({
         query: String(userMessage || ''),
-        merchants: merchants.slice(0, 150).map(merchant => ({
-          id: merchant.id,
-          nameEn: merchant.nameEn,
-          nameAr: merchant.nameAr,
-          category: merchant.category,
-          details: truncateText(getMerchantPlainDescription(merchant), 120)
+        focusMerchantId,
+        merchants: ranked.slice(0, 25).map(item => ({
+          id: item.merchant.id,
+          nameEn: item.merchant.nameEn,
+          nameAr: item.merchant.nameAr,
+          category: item.merchant.category,
+          details: truncateText(getMerchantPlainDescription(item.merchant), 180),
+          localScore: item.score
         }))
       })
     }
-  ], { temperature: 0, maxTokens: 220 });
+  ], { temperature: 0.05, maxTokens: 260 });
 
-  const merchantId = parseInt(payload?.merchant_id, 10);
-  if (Number.isInteger(merchantId)) {
-    return await Merchant.findByPk(merchantId);
+  const chosenId = parseInt(payload?.merchant_id, 10);
+  const confidence = Number(payload?.confidence || 0);
+  if (Number.isInteger(chosenId) && confidence >= 0.56) {
+    const chosen = merchants.find(item => item.id === chosenId);
+    if (chosen) return chosen;
   }
 
-  return null;
+  return best?.score >= 35 ? best.merchant : null;
+}
+
+async function extractAssistantIntentPlan(userId, userMessage, state = {}) {
+  const cleanMessage = String(userMessage || '').trim();
+  if (!cleanMessage || !OPENAI_API_KEY) return null;
+
+  const merchants = await getAssistantCandidateMerchants();
+  const ranked = merchants
+    .map(merchant => ({ merchant, score: scoreAssistantMerchantMatch(cleanMessage, merchant) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20)
+    .map(item => ({
+      id: item.merchant.id,
+      nameEn: item.merchant.nameEn,
+      nameAr: item.merchant.nameAr,
+      category: item.merchant.category,
+      localScore: item.score
+    }));
+
+  const payload = await callOpenAIJson([
+    {
+      role: 'system',
+      content: 'Classify the user request for a Telegram subscription shop assistant. Return strict JSON with keys: intent, merchant_id, quantity, offer_support. intent must be one of purchase, price, details, support, admin_open, chat, unknown. Use merchant_id null when unknown. Use quantity as a positive integer when the user mentions it, otherwise 1.'
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        message: cleanMessage,
+        focusMerchantId: Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null,
+        isAdmin: Boolean(isAdmin(userId)),
+        merchants: ranked
+      })
+    }
+  ], { temperature: 0.05, maxTokens: 220 });
+
+  if (!payload || typeof payload !== 'object') return null;
+
+  const allowedIntents = new Set(['purchase', 'price', 'details', 'support', 'admin_open', 'chat', 'unknown']);
+  const intent = allowedIntents.has(String(payload.intent || '').trim()) ? String(payload.intent || '').trim() : 'unknown';
+  const merchantId = Number.isInteger(parseInt(payload.merchant_id, 10)) ? parseInt(payload.merchant_id, 10) : null;
+  const quantity = Math.max(1, parseInt(payload.quantity, 10) || 1);
+  return {
+    intent,
+    merchantId,
+    quantity,
+    offerSupport: Boolean(payload.offer_support)
+  };
 }
 
 async function buildAssistantMerchantInfoText(userId, merchant, quantity = 1) {
@@ -3677,7 +3818,10 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
       await saveAssistantTrainingExample(training.question, training.answer, userId);
       return {
         handled: true,
-        reply: `${await getText(userId, 'aiAssistantTrainingSaved')}\n\nQ: ${training.question}\nA: ${training.answer}`,
+        reply: `${await getText(userId, 'aiAssistantTrainingSaved')}
+
+Q: ${training.question}
+A: ${training.answer}`,
         replyMarkup: await getBackAndCancelReplyMarkup(userId)
       };
     }
@@ -3709,11 +3853,42 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
     };
   }
 
-  const merchant = await resolveAssistantMerchantFromText(userId, cleanMessage, state);
-  if (merchant && isPurchaseIntentText(cleanMessage)) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
+  const assistantPlan = await extractAssistantIntentPlan(userId, cleanMessage, state);
+  let merchant = await resolveAssistantMerchantFromText(userId, cleanMessage, state);
+  if (!merchant && assistantPlan?.merchantId) {
+    merchant = await Merchant.findByPk(assistantPlan.merchantId);
+  }
+
+  const requestedQuantity = assistantPlan?.quantity || extractAssistantQuantity(cleanMessage, 1);
+  const wantsPurchase = isPurchaseIntentText(cleanMessage) || assistantPlan?.intent === 'purchase';
+  const wantsPrice = isPriceIntentText(cleanMessage) || assistantPlan?.intent === 'price';
+  const wantsDetails = isNeedMoreInfoText(cleanMessage) || assistantPlan?.intent === 'details';
+  const wantsSupport = assistantPlan?.intent === 'support';
+
+  if (wantsSupport && !merchant) {
+    return {
+      handled: true,
+      reply: await getText(userId, 'aiAssistantContactSupportAsk'),
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
+          [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
+          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
+        ]
+      },
+      nextState: {
+        action: 'ai_assistant',
+        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
+        focusMerchantId: state.focusMerchantId || null,
+        awaitingSupportConfirm: true,
+        awaitingPurchaseConfirm: false
+      }
+    };
+  }
+
+  if (merchant && wantsPurchase) {
     const stock = await getMerchantAvailableStock(merchant.id);
-    if (stock < quantity || stock <= 0) {
+    if (stock < requestedQuantity || stock <= 0) {
       return {
         handled: true,
         reply: await getText(userId, 'aiAssistantPurchaseUnavailable', { stock }),
@@ -3723,8 +3898,10 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
 
     return {
       handled: true,
-      reply: `${await buildAssistantPurchaseConfirmationText(userId, merchant, quantity)}\n\n${await getText(userId, 'aiAssistantPurchaseNeedMore', { name: await getMerchantDisplayName(merchant, userId) })}`,
-      replyMarkup: await getAssistantPurchaseReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      reply: `${await buildAssistantPurchaseConfirmationText(userId, merchant, requestedQuantity)}
+
+${await getText(userId, 'aiAssistantPurchaseNeedMore', { name: await getMerchantDisplayName(merchant, userId) })}`,
+      replyMarkup: await getAssistantPurchaseReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
       nextState: {
         action: 'ai_assistant',
         history: Array.isArray(state.history) ? state.history.slice(-8) : [],
@@ -3732,17 +3909,16 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
         awaitingSupportConfirm: false,
         awaitingPurchaseConfirm: true,
         pendingMerchantId: merchant.id,
-        pendingQuantity: quantity
+        pendingQuantity: requestedQuantity
       }
     };
   }
 
-  if (merchant && (isPriceIntentText(cleanMessage) || isNeedMoreInfoText(cleanMessage))) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
+  if (merchant && (wantsPrice || wantsDetails)) {
     return {
       handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      reply: await buildAssistantMerchantInfoText(userId, merchant, requestedQuantity),
+      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
       nextState: {
         action: 'ai_assistant',
         history: Array.isArray(state.history) ? state.history.slice(-8) : [],
@@ -3753,7 +3929,7 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
     };
   }
 
-  if (!merchant && isPriceIntentText(cleanMessage)) {
+  if (!merchant && wantsPrice) {
     return {
       handled: true,
       reply: await buildAssistantPricesCatalogReply(userId),
@@ -3761,7 +3937,7 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
     };
   }
 
-  if (!merchant && isPurchaseIntentText(cleanMessage)) {
+  if (!merchant && wantsPurchase) {
     return {
       handled: true,
       reply: await getText(userId, 'aiAssistantNoProductMatch'),
@@ -3770,11 +3946,10 @@ async function handleDeterministicAssistantRequest(userId, cleanMessage, state =
   }
 
   if (merchant) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
     return {
       handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
+      reply: await buildAssistantMerchantInfoText(userId, merchant, requestedQuantity),
+      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
       nextState: {
         action: 'ai_assistant',
         history: Array.isArray(state.history) ? state.history.slice(-8) : [],
@@ -3835,7 +4010,7 @@ A: ${item.answer}`).join('\n\n')
   const payload = await callOpenAIJson([
     {
       role: 'system',
-      content: 'You are the AI assistant inside a Telegram bot that sells digital subscriptions and codes. Answer ONLY about this bot, its available products, remaining stock, prices, payment flow, verification flow, and the current user own balance. You may compare products, explain what a subscription is, suggest the next step, and keep answers concise and practical. Never reveal secrets, tokens, raw database content, admin-only settings, payment wallet addresses, internal configuration, or other users balances. If the user asks about anything outside the bot services, politely say you only help with this bot. If the user wants a human or support, set offer_support to true. Return strict JSON with keys reply and offer_support.'
+      content: 'You are the smart AI assistant inside a Telegram bot that sells digital subscriptions, accounts, and codes. Your primary job is to help the user understand products, compare options, know prices, know remaining stock, know payment steps, know delivery expectations, troubleshoot product-related questions, and decide what to buy. You may answer short general questions that are directly useful for choosing or using the products sold by this bot, even when the answer is not literally stored in the catalog. When prices, stock, balance, and payment options are present in context, treat them as the source of truth and never invent different values. If the user asks for support, has a complaint, says something is not working, or clearly wants a human, set offer_support to true. Never reveal secrets, tokens, raw database records, admin-only settings, internal implementation details, wallet addresses that are not already meant for users, or other users private information. If the question is totally unrelated to the bot or its products, gently steer the user back to the bot instead of refusing harshly. Return strict JSON with keys reply and offer_support.'
     },
     {
       role: 'system',
@@ -3849,10 +4024,10 @@ ${trainingText}`
     },
     ...previousHistory,
     { role: 'user', content: cleanMessage }
-  ], { temperature: 0.2, maxTokens: 850 });
+  ], { temperature: 0.35, maxTokens: 950 });
 
   const reply = String(payload?.reply || '').trim() || await buildFallbackAssistantReply(userId, cleanMessage, state);
-  const offerSupport = Boolean(payload?.offer_support);
+  const offerSupport = Boolean(payload?.offer_support) || isSupportIntentText(cleanMessage);
   const nextHistory = [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: reply }].slice(-8);
   return { reply, offerSupport, history: nextHistory };
 }
