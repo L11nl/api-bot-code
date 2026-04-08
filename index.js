@@ -1206,7 +1206,10 @@ Object.assign(DEFAULT_TEXTS.en, {
   aiAssistantOpenAdminPanel: 'admin panel',
   aiAssistantOpenStats: 'statistics',
   aiAssistantOpenReferrals: 'referral settings',
-  aiAssistantOpenBots: 'bots management'
+  aiAssistantOpenBots: 'bots management',
+  aiAssistantTurnedOn: '✅ AI assistant enabled.',
+  aiAssistantTurnedOff: '⛔ AI assistant disabled.',
+  aiAssistantDisabledNotice: '⛔ AI assistant is currently disabled by admin.'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
@@ -1233,7 +1236,10 @@ Object.assign(DEFAULT_TEXTS.ar, {
   aiAssistantOpenAdminPanel: 'لوحة التحكم',
   aiAssistantOpenStats: 'الإحصائيات',
   aiAssistantOpenReferrals: 'إعدادات الإحالة',
-  aiAssistantOpenBots: 'إدارة البوتات'
+  aiAssistantOpenBots: 'إدارة البوتات',
+  aiAssistantTurnedOn: '✅ تم تشغيل المساعد الذكي.',
+  aiAssistantTurnedOff: '⛔ تم إيقاف المساعد الذكي.',
+  aiAssistantDisabledNotice: '⛔ المساعد الذكي متوقف حالياً من قبل الأدمن.'
 });
 
 Object.assign(DEFAULT_TEXTS.en, {
@@ -1247,8 +1253,8 @@ Object.assign(DEFAULT_TEXTS.en, {
   binancePayStatusClosed: '❌ This Binance Pay order was closed or cancelled.',
   binancePayStatusError: '❌ Binance Pay returned an error for this order. Please create a new order.',
   binancePayCreateError: '❌ Failed to create the Binance Pay order right now. Please try again shortly.',
-  binancePayNotConfigured: '⚠️ Binance Pay Merchant API is not configured. Binance Auto note-code verification will be used instead.',
-  binancePayWebhookInvalid: '❌ Invalid Binance Pay webhook signature.',
+  binancePayNotConfigured: '⚠️ Binance Pay is not configured yet. Please set BINANCE_PAY_API_KEY and BINANCE_PAY_SECRET_KEY.',
+  binancePayWebhookInvalid: '❌ Binance Pay webhook is disabled in this build.',
   binancePayMismatch: '❌ Payment verified but amount or currency did not match the original order, so no balance was added.',
   binancePayApiTopupCreated: '✅ Binance Pay topup order created.',
   binancePayApiStatusNotFound: 'Order not found.'
@@ -1265,8 +1271,8 @@ Object.assign(DEFAULT_TEXTS.ar, {
   binancePayStatusClosed: '❌ تم إغلاق أو إلغاء هذا الطلب في Binance Pay.',
   binancePayStatusError: '❌ أعاد Binance Pay حالة خطأ لهذا الطلب. أنشئ طلبًا جديدًا.',
   binancePayCreateError: '❌ تعذر إنشاء طلب Binance Pay الآن. حاول مرة أخرى بعد قليل.',
-  binancePayNotConfigured: '⚠️ Binance Pay Merchant API غير مهيأ. سيتم استخدام تحقق Binance Auto عبر الرقم المرجعي في الملاحظات.',
-  binancePayWebhookInvalid: '❌ توقيع Webhook الخاص بـ Binance Pay غير صالح.',
+  binancePayNotConfigured: '⚠️ Binance Pay غير مهيأ بعد. يرجى ضبط BINANCE_PAY_API_KEY و BINANCE_PAY_SECRET_KEY.',
+  binancePayWebhookInvalid: '❌ Webhook الخاص بـ Binance Pay معطل في هذه النسخة.',
   binancePayMismatch: '❌ تم التحقق من الدفع لكن المبلغ أو العملة لا يطابقان الطلب الأصلي، لذلك لم تتم إضافة الرصيد.',
   binancePayApiTopupCreated: '✅ تم إنشاء طلب شحن Binance Pay.',
   binancePayApiStatusNotFound: 'الطلب غير موجود.'
@@ -1333,15 +1339,7 @@ async function safeDeleteChatMessage(chatId, messageId) {
 }
 
 function shouldAutoDeleteIncomingMessage(msg, state, admin = false) {
-  if (admin) return false;
-  if (!msg || msg.chat?.type !== 'private') return false;
-  if (msg.forward_from_chat) return false;
-  if (!state?.action) return false;
-
-  const textValue = String(msg.text || '').trim();
-  if (textValue.startsWith('/')) return false;
-
-  return Boolean(msg.text || msg.caption || msg.photo || msg.video || msg.document);
+  return false;
 }
 
 function scheduleAutoDeleteIncomingMessage(msg, state, admin = false, delayMs = 1500) {
@@ -1547,6 +1545,19 @@ async function getFreeCodeCooldownDays() {
 async function getBotEnabled() {
   const rawValue = await getGlobalSetting('bot_enabled', 'true');
   return String(rawValue).toLowerCase() !== 'false';
+}
+
+async function getAiAssistantEnabled() {
+  const rawValue = await getGlobalSetting('ai_assistant_enabled', 'true');
+  return String(rawValue).toLowerCase() !== 'false';
+}
+
+async function setAiAssistantEnabled(enabled) {
+  await Setting.upsert({
+    key: 'ai_assistant_enabled',
+    lang: 'global',
+    value: enabled ? 'true' : 'false'
+  });
 }
 
 async function getAllowedUserIds() {
@@ -2715,6 +2726,15 @@ async function showDigitalProductDetails(userId, merchantId) {
     await bot.sendVideo(userId, merchant.description.fileId);
   }
 
+  const aiAssistantEnabled = await getAiAssistantEnabled();
+  const inlineKeyboard = [
+    [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }]
+  ];
+  if (aiAssistantEnabled) {
+    inlineKeyboard.push([{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }]);
+  }
+  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]);
+
   await bot.sendMessage(
     userId,
     `${await getText(userId, 'digitalProductDetailsText', {
@@ -2727,11 +2747,7 @@ async function showDigitalProductDetails(userId, merchantId) {
 ${await getCurrentBalanceLineText(userId)}`,
     {
       reply_markup: {
-        inline_keyboard: [
-          [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }],
-          [{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }],
-          [{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]
-        ]
+        inline_keyboard: inlineKeyboard
       }
     }
   );
@@ -5211,8 +5227,8 @@ async function deleteDepositMethod(currency, index) {
 
 
 const DEFAULT_DEPOSIT_OPTION_VISIBILITY = {
-  IQD: true,
-  USD: true,
+  IQD: false,
+  USD: false,
   BINANCE_AUTO: true
 };
 
@@ -5238,8 +5254,6 @@ async function showDepositOptionsAdmin(userId) {
   const visibility = await getDepositOptionVisibility();
   const keyboard = {
     inline_keyboard: [
-      [{ text: `${visibility.IQD ? '✅' : '❌'} ${await getText(userId, 'depositOptionIQD')}`, callback_data: 'admin_toggle_deposit_option_IQD' }],
-      [{ text: `${visibility.USD ? '✅' : '❌'} ${await getText(userId, 'depositOptionUSD')}`, callback_data: 'admin_toggle_deposit_option_USD' }],
       [{ text: `${visibility.BINANCE_AUTO ? '✅' : '❌'} ${await getText(userId, 'depositOptionBinanceAuto')}`, callback_data: 'admin_toggle_deposit_option_BINANCE_AUTO' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin_manage_deposit_settings' }]
     ]
@@ -5255,14 +5269,12 @@ async function showCurrencyOptions(userId) {
   const lang = user?.lang || 'en';
   const visibility = await getDepositOptionVisibility();
   const rows = [];
-  if (visibility.IQD !== false) rows.push([{ text: await getDepositDisplayName(userId, 'IQD'), callback_data: 'deposit_currency_iqd' }]);
-  if (visibility.USD !== false) rows.push([{ text: await getDepositDisplayName(userId, 'USD'), callback_data: 'deposit_currency_usd' }]);
-  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance Auto (USDT)', callback_data: 'deposit_binance_auto' }]);
+  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance Pay (USDT)', callback_data: 'deposit_binance_auto' }]);
   rows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
   const extraText = visibility.BINANCE_AUTO === false ? '' : (lang === 'ar'
-    ? '\n\nللشحن عبر Binance Auto اختر: ⚡ Binance Auto (USDT)'
-    : '\n\nFor Binance Auto topup choose: ⚡ Binance Auto (USDT)');
+    ? '\n\nطريقة الشحن الحالية: ⚡ Binance Pay (USDT)'
+    : '\n\nCurrent topup method: ⚡ Binance Pay (USDT)');
 
   await bot.sendMessage(userId, `${await getText(userId, 'chooseCurrency')}${extraText}`, { reply_markup: { inline_keyboard: rows } });
 }
@@ -5275,8 +5287,8 @@ async function showBinanceAutoAmountOptions(userId) {
   buttons.push([{ text: await getText(userId, 'back'), callback_data: 'deposit' }]);
 
   const msg = lang === 'ar'
-    ? '⚡ اختر مبلغ الشحن عبر Binance Auto:'
-    : '⚡ Choose the Binance Auto deposit amount:';
+    ? '⚡ اختر مبلغ الشحن عبر Binance Pay:'
+    : '⚡ Choose the Binance Pay deposit amount:';
 
   await bot.sendMessage(userId, msg, {
     reply_markup: { inline_keyboard: buttons }
@@ -5288,31 +5300,10 @@ async function sendLegacyBinanceAutoInstructions(userId, amount) {
   const lang = user?.lang || 'en';
   const credentials = await getBinanceCredentials();
   const payId = credentials?.payId || BINANCE_PAY_ID || '842505320';
-  const verificationCode = generateBinanceNoteCode(userId);
 
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)
-
-قم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:
-
-<code>${escapeHtml(payId)}</code>
-
-ضع هذا الرقم في <b>الملاحظات / Note</b> داخل Binance أثناء التحويل:
-
-<code>${escapeHtml(verificationCode)}</code>
-
-بعد الدفع أرسل <b>نفس الرقم المرجعي</b> هنا ليتم التحقق تلقائياً.`
-    : `⚡ Binance Auto (USDT)
-
-Send <b>${amount}$</b> to the following Binance ID:
-
-<code>${escapeHtml(payId)}</code>
-
-Put this code inside the <b>Note</b> field in Binance while sending the payment:
-
-<code>${escapeHtml(verificationCode)}</code>
-
-After payment, send the <b>same reference code</b> here for automatic verification.`;
+    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل <b>Order ID</b> فقط هنا ليتم التحقق تلقائياً.`
+    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>Order ID</b> only here for automatic verification.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -5325,14 +5316,40 @@ After payment, send the <b>same reference code</b> here for automatic verificati
   await setUserState(userId, {
     action: 'binance_auto_session',
     amount,
-    verificationCode,
-    payId,
     createdAt: Date.now()
   });
 }
 
 async function sendBinanceAutoInstructions(userId, amount) {
-  await sendLegacyBinanceAutoInstructions(userId, amount);
+  if (!isBinancePayConfigured()) {
+    await bot.sendMessage(userId, await getText(userId, 'binancePayNotConfigured')).catch(() => {});
+    return;
+  }
+
+  const createResult = await createBinancePayTopupOrder({
+    userId,
+    amount,
+    currency: 'USDT',
+    source: 'telegram_bot',
+    terminalType: 'WAP'
+  });
+
+  if (!createResult.success || !createResult.payment) {
+    console.error('Binance Pay create order error:', createResult.reason || createResult.errorMessage || createResult);
+    await bot.sendMessage(userId, await getText(userId, 'binancePayCreateError'));
+    return;
+  }
+
+  await setUserState(userId, {
+    action: 'binance_pay_pending_order',
+    merchantTradeNo: createResult.payment.merchantTradeNo,
+    prepayId: createResult.payment.prepayId || null,
+    amount: Number(createResult.payment.amount || amount),
+    currency: createResult.payment.currency || 'USDT',
+    createdAt: Date.now()
+  });
+
+  await sendBinancePayCheckoutMessage(userId, createResult.payment);
 }
 
 
@@ -5618,8 +5635,6 @@ async function createBinancePayTopupOrder({ userId, amount, currency = 'USDT', s
     orderExpireTime: Date.now() + BINANCE_PAY_ORDER_EXPIRE_MS
   };
 
-  const webhookUrl = buildBinancePayWebhookUrl();
-  if (webhookUrl) requestBody.webhookUrl = webhookUrl;
   const effectiveReturnUrl = returnUrl || BINANCE_PAY_RETURN_URL;
   const effectiveCancelUrl = cancelUrl || BINANCE_PAY_CANCEL_URL;
   if (effectiveReturnUrl) requestBody.returnUrl = effectiveReturnUrl;
@@ -5981,6 +5996,19 @@ async function creditSuccessfulBinancePayOrder(paymentInput, settlement = {}) {
 
 async function notifyBinancePayCredit(result, source = 'query') {
   if (!result?.success || result.alreadyCredited || !result.payment) return;
+
+  try {
+    const userRecord = await User.findByPk(result.userId, { attributes: ['state'] }).catch(() => null);
+    const currentState = safeParseState(userRecord?.state);
+    if (currentState?.action === 'binance_pay_pending_order') {
+      const pendingTradeNo = String(currentState.merchantTradeNo || '').trim();
+      if (!pendingTradeNo || pendingTradeNo === String(result.payment.merchantTradeNo || '').trim()) {
+        await clearUserState(result.userId);
+      }
+    }
+  } catch (err) {
+    console.error('notifyBinancePayCredit clear state error:', err.message);
+  }
 
   try {
     await bot.sendMessage(result.userId, await getText(result.userId, 'depositSuccess', {
@@ -7037,8 +7065,7 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
 
   const expected = Number(expectedAmountUSDT || 0);
   const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
-  const verificationCode = normalizeBinanceNoteCode(options.verificationCode || orderNumber);
-  if ((!wantedIdentifier && !verificationCode) || !Number.isFinite(expected) || expected <= 0) {
+  if (!wantedIdentifier || !Number.isFinite(expected) || expected <= 0) {
     return { success: false, reason: 'invalid_payload' };
   }
 
@@ -7048,17 +7075,14 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const rows = fetched.rows || [];
-  const relevantRows = rows.filter(item => (
+  const matchedRows = rows.filter(item => (
     doesBinanceAmountMatch(item, expected)
     && isLikelyIncomingBinancePayment(item, credentials.payId || null)
+    && itemMatchesBinanceOrder(item, wantedIdentifier)
   ));
 
-  const exactIdentifierRows = wantedIdentifier
-    ? relevantRows.filter(item => itemMatchesBinanceOrder(item, wantedIdentifier))
-    : [];
-
-  if (exactIdentifierRows.length === 1) {
-    const matchedItem = exactIdentifierRows[0];
+  if (matchedRows.length === 1) {
+    const matchedItem = matchedRows[0];
     return {
       success: true,
       method: 'exact_order_id',
@@ -7071,47 +7095,20 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
       payId: credentials.payId || null,
       matchedItem,
       searchedRows: rows.length,
-      matchedRows: exactIdentifierRows.length,
-      amountMatchedRows: relevantRows.length,
-      payIdMatchedRows: relevantRows.length,
+      matchedRows: matchedRows.length,
+      amountMatchedRows: matchedRows.length,
+      payIdMatchedRows: matchedRows.length,
       matchScore: 100
-    };
-  }
-
-  const picked = pickBestBinanceMatch(relevantRows, orderNumber, verificationCode, {
-    sessionCreatedAt: options.sessionCreatedAt,
-    payId: credentials.payId || null
-  });
-
-  if (picked?.candidate?.item) {
-    const matchedItem = picked.candidate.item;
-    return {
-      success: true,
-      method: picked.candidate.method || 'note_code',
-      amount: getBinanceHistoryAmountUSDT(matchedItem),
-      txId: matchedItem.transactionId || matchedItem.orderId || matchedItem.prepayId || getBinanceTransactionUniqueKey(matchedItem) || orderNumber,
-      rawOrderId: orderNumber,
-      verificationCode,
-      currency: 'USDT',
-      transactionTime: getBinanceTransactionTime(matchedItem) || getBinanceClientNowMs(),
-      orderType: matchedItem.orderType || null,
-      payId: credentials.payId || null,
-      matchedItem,
-      searchedRows: rows.length,
-      matchedRows: picked.candidates.length,
-      amountMatchedRows: relevantRows.length,
-      payIdMatchedRows: relevantRows.length,
-      matchScore: picked.candidate.score || 0
     };
   }
 
   return {
     success: false,
-    reason: exactIdentifierRows.length > 1 ? 'ambiguous_match' : (picked.reason || 'no_match'),
+    reason: matchedRows.length > 1 ? 'ambiguous_match' : 'no_match',
     searchedRows: rows.length,
-    matchedRows: picked.candidates ? picked.candidates.length : exactIdentifierRows.length,
-    amountMatchedRows: relevantRows.length,
-    payIdMatchedRows: relevantRows.length,
+    matchedRows: matchedRows.length,
+    amountMatchedRows: matchedRows.length,
+    payIdMatchedRows: matchedRows.length,
     payId: credentials.payId || null
   };
 }
@@ -7123,10 +7120,9 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   const expectedAmount = Number(state?.amount || 0);
   const rawInput = String(options.rawInput || '').trim();
   const normalizedInput = normalizeBinanceIdentifier(rawInput);
-  const normalizedVerificationCode = normalizeBinanceNoteCode(state?.verificationCode || rawInput);
   const lang = user.lang === 'ar' ? 'ar' : 'en';
 
-  const duplicateCandidates = [...new Set([normalizedInput, normalizedVerificationCode].filter(Boolean))];
+  const duplicateCandidates = [...new Set([normalizedInput].filter(Boolean))];
 
   if (duplicateCandidates.length) {
     const existing = await BalanceTransaction.findOne({
@@ -7145,11 +7141,9 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
     }
   }
 
-  const effectiveInput = rawInput || state?.verificationCode || '';
-  const checkResult = await checkBinanceDeposit(effectiveInput, expectedAmount, {
+  const checkResult = await checkBinanceDeposit(rawInput, expectedAmount, {
     sessionCreatedAt: state?.createdAt,
-    userId,
-    verificationCode: state?.verificationCode || rawInput || ''
+    userId
   });
 
   if (checkResult.success) {
@@ -7184,7 +7178,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         type: 'deposit',
         status: 'completed',
         txid: txKey,
-        caption: `Binance Auto | method=${checkResult.method} | reference=${state?.verificationCode || rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | matched=${checkResult.matchedRows || 0}`
+        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | matched=${checkResult.matchedRows || 0}`
       }, { transaction: t });
 
       await t.commit();
@@ -7211,7 +7205,7 @@ New balance: ${newBalance.toFixed(2)}$`;
 ` +
         `Amount: ${expectedAmount} USD
 ` +
-        `Reference: ${state?.verificationCode || rawInput || '-'}
+        `Order ID: ${rawInput || '-'}
 ` +
         `Matched Tx ID: ${checkResult.txId || '-'}
 ` +
@@ -7239,7 +7233,6 @@ New balance: ${newBalance.toFixed(2)}$`;
     action: 'binance_auto_waiting_proof',
     amount: expectedAmount,
     orderId: rawInput || '',
-    verificationCode: state?.verificationCode || rawInput || '',
     createdAt: state?.createdAt || Date.now()
   });
 
@@ -7259,6 +7252,7 @@ async function sendMainMenu(userId) {
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const showFreeCode = await shouldShowFreeCodeButton(userId);
+  const aiAssistantEnabled = await getAiAssistantEnabled();
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
   const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
@@ -7294,6 +7288,7 @@ async function sendMainMenu(userId) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
     if (id === 'free_code' && !showFreeCode) continue;
+    if (id === 'ai_assistant' && !aiAssistantEnabled) continue;
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
@@ -7328,6 +7323,7 @@ async function showAdminPanel(userId) {
       [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
       [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
       [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
+      [{ text: `${await getText(userId, 'aiAssistant')} ${await getAiAssistantEnabled() ? '✅' : '⛔'}`, callback_data: 'admin_toggle_ai_assistant' }],
       [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
       [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
       [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
@@ -8234,6 +8230,18 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    const isAiCallbackAction = data === 'ai_assistant'
+      || /^ai_about_product_/.test(data)
+      || /^ai_support_/.test(data)
+      || /^ai_buy_/.test(data);
+
+    if (isAiCallbackAction && !(await getAiAssistantEnabled())) {
+      await clearUserState(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'aiAssistantDisabledNotice') });
+      return;
+    }
+
     if (data === 'ai_assistant') {
       await setUserState(userId, { action: 'ai_assistant', history: [], awaitingSupportConfirm: false });
       await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcome'), {
@@ -8647,21 +8655,8 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'deposit_currency_iqd') {
-      await setUserState(userId, { action: 'deposit_amount', currency: 'IQD' });
-      await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'deposit_currency_usd') {
-      await setUserState(userId, { action: 'deposit_amount', currency: 'USD' });
-      await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
-      });
+    if (data === 'deposit_currency_iqd' || data === 'deposit_currency_usd') {
+      await showBinanceAutoAmountOptions(userId);
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
@@ -8697,12 +8692,17 @@ bot.on('callback_query', async query => {
       }
 
       if (result.remoteStatus === 'PAID') {
+        await clearUserState(userId);
         await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binancePayStatusPaid') });
+        await sendMainMenu(userId);
       } else if (result.remoteStatus === 'EXPIRED') {
+        await clearUserState(userId);
         await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binancePayStatusExpired') });
       } else if (result.remoteStatus === 'CANCELED') {
+        await clearUserState(userId);
         await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binancePayStatusClosed') });
       } else if (result.remoteStatus === 'ERROR') {
+        await clearUserState(userId);
         await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binancePayStatusError') });
       } else {
         await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binancePayStatusPending') });
@@ -8710,6 +8710,14 @@ bot.on('callback_query', async query => {
       return;
     }
 
+
+    if (data === 'admin_toggle_ai_assistant' && isAdmin(userId)) {
+      const enabled = await getAiAssistantEnabled();
+      await setAiAssistantEnabled(!enabled);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, !enabled ? 'aiAssistantTurnedOn' : 'aiAssistantTurnedOff') });
+      await showAdminPanel(userId);
+      return;
+    }
 
     // -------------------------------------------------------------------
 
@@ -11538,27 +11546,19 @@ bot.on('message', async msg => {
 
 
     if (state?.action === 'binance_auto_waiting_proof') {
-      const imageFileId = photo ? photo[photo.length - 1].file_id : null;
-      const captionText = String(msg.caption || text || '').trim();
-
-      if (!imageFileId) {
-        await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ فشل التحقق.\n\nقم بإرسال صورة الدفع هنا.\n\nوسيقوم الأدمن بمراجعتها.'
-          : '❌ Verification failed.\n\nPlease send the payment screenshot here.\n\nThe admin will review it.');
-        return;
-      }
-
-      const manualMessage = `Binance Auto Manual Review | Reference: ${state.verificationCode || state.orderId || '-'} | ${captionText || 'No message'}`;
-      await requestDeposit(userId, state.amount, 'USD', manualMessage, imageFileId, msg.from || null);
-      await bot.sendMessage(userId, user.lang === 'ar'
-        ? '✅ تم استلام صورة الدفع وإرسالها للأدمن للمراجعة.'
-        : '✅ Payment screenshot received and sent to the admin for review.');
       await clearUserState(userId);
-      await sendMainMenu(userId);
+      await bot.sendMessage(userId, await getText(userId, 'binancePayStatusExpired'));
+      await showBinanceAutoAmountOptions(userId);
       return;
     }
 
     if (state?.action === 'ai_assistant') {
+      if (!(await getAiAssistantEnabled())) {
+        await clearUserState(userId);
+        await bot.sendMessage(userId, await getText(userId, 'aiAssistantDisabledNotice'));
+        await sendMainMenu(userId);
+        return;
+      }
       const trimmed = String(text || '').trim();
       if (isSlashCommandText(trimmed)) {
         if (/^\/start(?:\s|$)/i.test(trimmed)) {
@@ -11795,35 +11795,62 @@ bot.on('message', async msg => {
         });
         return;
       }
-      await showPaymentMethodsForDeposit(userId, amount, state.currency);
+      await sendBinanceAutoInstructions(userId, amount);
       return;
     }
 
-    if (state?.action === 'deposit_awaiting_proof') {
-      const imageFileId = photo ? photo[photo.length - 1].file_id : null;
-      const caption = String(msg.caption || text || '').trim();
-      if (!imageFileId) return;
-      await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
-      await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
+    if (state?.action === 'deposit_awaiting_proof' || state?.action === 'binance_auto_session' || state?.action === 'binance_auto_waiting_proof') {
       await clearUserState(userId);
-      await sendMainMenu(userId);
+      await bot.sendMessage(userId, await getText(userId, 'binancePayStatusExpired'));
+      await showBinanceAutoAmountOptions(userId);
       return;
     }
-    // -------------------------------------------------------------------
-    // معالج الدفع التلقائي عبر Binance
-    if (state?.action === 'binance_auto_session') {
-      const rawInput = String(text || '').trim();
-      if (!rawInput) {
-        await bot.sendMessage(userId, user.lang === 'ar'
-          ? `❌ أرسل الرقم المرجعي الذي وضعته في الملاحظات داخل Binance.\n\nالرقم الحالي: ${state?.verificationCode || '-'}`
-          : `❌ Send the same reference code that you placed in the Binance note field.\n\nCurrent code: ${state?.verificationCode || '-'}`);
+
+    if (state?.action === 'binance_pay_pending_order') {
+      const normalized = normalizeAssistantText(String(text || ''));
+      const shouldCheck = !normalized || /(check|status|paid|done|تحقق|تحقق من الدفع|تم الدفع|دفعت|اكتمل|حاله الدفع|حالة الدفع)/i.test(normalized);
+      if (shouldCheck) {
+        const result = await syncBinancePayOrderStatus({
+          merchantTradeNo: String(state.merchantTradeNo || ''),
+          prepayId: String(state.prepayId || '')
+        }, { source: 'user_message', notifyUser: true });
+
+        if (!result.success) {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+          return;
+        }
+
+        if (result.remoteStatus === 'PAID') {
+          await clearUserState(userId);
+          await sendMainMenu(userId);
+          return;
+        }
+
+        const statusKey = result.remoteStatus === 'EXPIRED'
+          ? 'binancePayStatusExpired'
+          : result.remoteStatus === 'CANCELED'
+            ? 'binancePayStatusClosed'
+            : result.remoteStatus === 'ERROR'
+              ? 'binancePayStatusError'
+              : 'binancePayStatusPending';
+
+        if (result.remoteStatus === 'EXPIRED' || result.remoteStatus === 'CANCELED' || result.remoteStatus === 'ERROR') {
+          await clearUserState(userId);
+        }
+
+        await bot.sendMessage(userId, await getText(userId, statusKey), {
+          reply_markup: result.remoteStatus === 'PENDING' || result.remoteStatus === 'INITIAL' || result.remoteStatus === 'CREATED'
+            ? await getBinancePayCheckoutReplyMarkup(userId, result.payment || state)
+            : await getBackAndCancelReplyMarkup(userId, 'deposit')
+        });
         return;
       }
 
-      await processBinanceAutoVerification(userId, state, { rawInput });
+      await bot.sendMessage(userId, await getText(userId, 'binancePayStatusPending'), {
+        reply_markup: await getBinancePayCheckoutReplyMarkup(userId, { merchantTradeNo: state.merchantTradeNo, checkoutUrl: null, universalUrl: null })
+      });
       return;
     }
-    // -------------------------------------------------------------------
 
     if (state?.action === 'redeem_via_service') {
       const service = await RedeemService.findByPk(state.serviceId);
@@ -12106,7 +12133,7 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text)) {
+    if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text) && (await getAiAssistantEnabled())) {
       await processAssistantMessageTurn(userId, String(text).trim(), {
         action: 'ai_assistant',
         history: [],
@@ -12122,11 +12149,6 @@ bot.on('message', async msg => {
     await bot.sendMessage(userId, '⏳ جار التحميل...').catch(() => {});
   }
 });
-
-app.post(getBinancePayWebhookPath(), handleBinancePayWebhook);
-if (getBinancePayWebhookPath() !== '/api/payments/binance-pay/webhook') {
-  app.post('/api/payments/binance-pay/webhook', handleBinancePayWebhook);
-}
 
 app.post('/api/payments/binance-pay/create-order', async (req, res) => {
   try {
@@ -12179,8 +12201,7 @@ app.post('/api/payments/binance-pay/create-order', async (req, res) => {
         universalUrl: result.payment.universalUrl,
         qrcodeLink: result.payment.qrcodeLink,
         qrContent: result.payment.qrContent,
-        expireTime: result.payment.expireTime,
-        webhookUrl: buildBinancePayWebhookUrl()
+        expireTime: result.payment.expireTime
       }
     });
   } catch (err) {
