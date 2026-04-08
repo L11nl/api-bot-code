@@ -13,9 +13,6 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const BINANCE_PAY_ID = process.env.BINANCE_PAY_ID || '842505320';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const OPENAI_BASE_URL = String(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 
 if (!TOKEN || Number.isNaN(ADMIN_ID) || !DATABASE_URL) {
   console.error('❌ Missing required environment variables');
@@ -987,18 +984,6 @@ Object.assign(DEFAULT_TEXTS.en, {
   digitalStockBroadcastMessage: '🧩 New stock is now available\n\nItem: {name}\nAdded: {count}\nPrice: {price} USD',
   changeLanguage: '🌐 Change Language',
   languageUpdated: '✅ Language updated.',
-  aiAssistant: '🤖 AI Assistant',
-  aiAssistantWelcome: '🤖 Bot Assistant\n\nAsk me about available subscriptions, stock, prices, payment steps, or your balance. I only answer about this bot and its available services.',
-  aiAssistantWelcomeForProduct: '🤖 Product Assistant\n\nAsk me anything about {name}: what it does, its price, remaining stock, and whether it suits you.',
-  aiAssistantThinking: '🤖 Thinking...',
-  aiAssistantUnavailable: '⚠️ AI features are not configured right now. Set OPENAI_API_KEY to enable smart translation and the assistant.',
-  aiAssistantScopeLimit: 'I can only help with this bot, its subscriptions, stock, prices, payment flow, and your own balance.',
-  aiAssistantContactSupportAsk: 'Would you like me to connect you with support?',
-  aiAssistantSupportOpened: '✅ Support chat opened. Send your message now.',
-  aiAssistantSupportDeclined: 'No problem. You can open support any time from the main menu.',
-  aiAssistantSupportYes: '✅ Yes, contact support',
-  aiAssistantSupportNo: '❌ No',
-  askAiAboutThisProduct: '🤖 Ask AI about this item',
   stockAvailableInline: 'Available {stock}',
   addEmailPassword: '📧 Add Email & Password',
   enterBulkEmail: 'Send the email now:',
@@ -1087,18 +1072,6 @@ Object.assign(DEFAULT_TEXTS.ar, {
   digitalStockBroadcastMessage: '🧩 تمت إضافة مخزون جديد الآن\n\nالمنتج: {name}\nالكمية المضافة: {count}\nالسعر: {price} دولار',
   changeLanguage: '🌐 تغيير اللغة',
   languageUpdated: '✅ تم تحديث اللغة.',
-  aiAssistant: '🤖 المساعد الذكي',
-  aiAssistantWelcome: '🤖 مساعد البوت الذكي\n\nاسألني عن الاشتراكات المتوفرة، المخزون، الأسعار، خطوات الدفع، أو رصيدك. أنا أجيب فقط عن هذا البوت وخدماته المتوفرة.',
-  aiAssistantWelcomeForProduct: '🤖 مساعد المنتج الذكي\n\nاسألني عن {name}: ما هو، ماذا يفعل، كم سعره، وكم تبقى منه في المخزون.',
-  aiAssistantThinking: '🤖 جاري التفكير...',
-  aiAssistantUnavailable: '⚠️ ميزات الذكاء الاصطناعي غير مفعلة حالياً. أضف OPENAI_API_KEY لتفعيل الترجمة الذكية والمساعد.',
-  aiAssistantScopeLimit: 'أنا أساعد فقط فيما يخص هذا البوت، الاشتراكات المتوفرة، المخزون، الأسعار، الشراء، الدفع، ورصيدك أنت فقط.',
-  aiAssistantContactSupportAsk: 'هل تريد أن أوصلك بالدعم؟',
-  aiAssistantSupportOpened: '✅ تم فتح دردشة الدعم. أرسل رسالتك الآن.',
-  aiAssistantSupportDeclined: 'لا مشكلة، يمكنك فتح الدعم في أي وقت من القائمة الرئيسية.',
-  aiAssistantSupportYes: '✅ نعم، تواصل مع الدعم',
-  aiAssistantSupportNo: '❌ لا',
-  askAiAboutThisProduct: '🤖 اسأل الذكاء الاصطناعي عن هذا الاشتراك',
   stockAvailableInline: 'يوجد {stock}',
   addEmailPassword: '📧 إضافة إيميل وباسورد',
   enterBulkEmail: 'أرسل الإيميل الآن:',
@@ -1132,57 +1105,9 @@ Object.assign(DEFAULT_TEXTS.ar, {
 });
 
 Object.assign(DEFAULT_TEXTS.en, {
-  aiAssistantPurchaseConfirm: '🛒 Purchase confirmation\n\nProduct: {name}\nQuantity: {qty}\nPrice per item: {price} USD\nTotal: {total} USD\nRemaining stock: {stock}\nYour balance: {balance} USD\n\nAre you sure you want me to complete this purchase now?',
-  aiAssistantPurchaseNeedMore: 'Would you like to know more about {name} before purchasing?',
-  aiAssistantPurchaseUnavailable: '❌ This item is currently unavailable in the requested quantity. Available stock: {stock}.',
-  aiAssistantPurchaseCancelled: '✅ Purchase request cancelled.',
-  aiAssistantPurchaseConfirmButton: '✅ Yes, buy now',
-  aiAssistantPurchaseMoreButton: 'ℹ️ Tell me more',
-  aiAssistantPurchaseCancelButton: '❌ Cancel',
-  aiAssistantProductHeader: '🧩 Product details',
-  aiAssistantPricesHeader: '💵 Current prices of available products:',
-  aiAssistantNoProductMatch: 'I could not identify the product exactly. Tell me the product name more clearly, for example: Buy CapCut account.',
-  aiAssistantTrainingSaved: '✅ Assistant training saved successfully.',
-  aiAssistantTrainingHelp: 'Use one of these formats:\ntrain assistant: question => answer\n\nor\nدرب المساعد: السؤال => الجواب',
-  aiAssistantAdminOpened: '✅ Done. I opened: {target}',
-  aiAssistantAdminNoMatch: 'I understood that you want to open an admin interface, but I could not determine which one exactly. Try for example: open stock interface, open prices, open merchants, open balances, or open subscriptions.',
-  aiAssistantOpenStocks: 'stock interface',
-  aiAssistantOpenPrices: 'prices interface',
-  aiAssistantOpenMerchants: 'merchants list',
-  aiAssistantOpenBalances: 'balance management',
-  aiAssistantOpenButtons: 'button management',
-  aiAssistantOpenSubscriptions: 'digital subscriptions',
-  aiAssistantOpenAdminPanel: 'admin panel',
-  aiAssistantOpenStats: 'statistics',
-  aiAssistantOpenReferrals: 'referral settings',
-  aiAssistantOpenBots: 'bots management'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
-  aiAssistantPurchaseConfirm: '🛒 تأكيد الشراء\n\nالمنتج: {name}\nالكمية: {qty}\nسعر القطعة: {price} دولار\nالإجمالي: {total} دولار\nالمخزون المتبقي: {stock}\nرصيدك الحالي: {balance} دولار\n\nهل أنت متأكد أنك تريد مني إتمام هذا الشراء الآن؟',
-  aiAssistantPurchaseNeedMore: 'هل تريد معرفة المزيد عن {name} قبل الشراء؟',
-  aiAssistantPurchaseUnavailable: '❌ هذا المنتج غير متوفر حالياً بالكمية المطلوبة. المتوفر الآن: {stock}.',
-  aiAssistantPurchaseCancelled: '✅ تم إلغاء طلب الشراء.',
-  aiAssistantPurchaseConfirmButton: '✅ نعم، اشترِ الآن',
-  aiAssistantPurchaseMoreButton: 'ℹ️ أريد معرفة المزيد',
-  aiAssistantPurchaseCancelButton: '❌ إلغاء',
-  aiAssistantProductHeader: '🧩 تفاصيل المنتج',
-  aiAssistantPricesHeader: '💵 أسعار المنتجات المتوفرة حالياً:',
-  aiAssistantNoProductMatch: 'لم أتمكن من تحديد المنتج بدقة. اكتب اسم المنتج بشكل أوضح، مثلاً: أريد شراء حساب كاب كات.',
-  aiAssistantTrainingSaved: '✅ تم حفظ تدريب المساعد بنجاح.',
-  aiAssistantTrainingHelp: 'استخدم أحد الشكلين التاليين:\ntrain assistant: question => answer\n\nأو\nدرب المساعد: السؤال => الجواب',
-  aiAssistantAdminOpened: '✅ تم. فتحت لك: {target}',
-  aiAssistantAdminNoMatch: 'فهمت أنك تريد فتح واجهة إدارية، لكني لم أحدد أي واجهة بالضبط. جرّب مثلاً: افتح المخزونات، افتح الأسعار، افتح التجار، افتح الأرصدة، أو افتح الاشتراكات.',
-  aiAssistantOpenStocks: 'واجهة المخزونات',
-  aiAssistantOpenPrices: 'واجهة الأسعار',
-  aiAssistantOpenMerchants: 'قائمة التجار',
-  aiAssistantOpenBalances: 'إدارة الأرصدة',
-  aiAssistantOpenButtons: 'إدارة الأزرار',
-  aiAssistantOpenSubscriptions: 'الاشتراكات الرقمية',
-  aiAssistantOpenAdminPanel: 'لوحة التحكم',
-  aiAssistantOpenStats: 'الإحصائيات',
-  aiAssistantOpenReferrals: 'إعدادات الإحالة',
-  aiAssistantOpenBots: 'إدارة البوتات'
 });
 
 function isAdmin(userId) {
@@ -2642,7 +2567,6 @@ ${await getCurrentBalanceLineText(userId)}`,
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }],
-          [{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }],
           [{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]
         ]
       }
@@ -2653,120 +2577,8 @@ ${await getCurrentBalanceLineText(userId)}`,
 
 
 
-const AI_TEXT_CACHE = new Map();
-
-function containsArabicText(value) {
-  return /[\u0600-\u06FF]/.test(String(value || ''));
-}
-
-function normalizeOpenAIContentToText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(part => {
-      if (typeof part === 'string') return part;
-      if (part && typeof part === 'object') return String(part.text || part.content || '');
-      return '';
-    }).join('\n').trim();
-  }
-  if (content && typeof content === 'object') {
-    return String(content.text || content.content || '').trim();
-  }
-  return '';
-}
-
-function extractJsonObjectFromText(rawValue) {
-  const raw = normalizeOpenAIContentToText(rawValue).trim();
-  if (!raw) return null;
-
-  const candidates = [raw];
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch?.[1]) candidates.push(fenceMatch[1].trim());
-
-  const firstBrace = raw.indexOf('{');
-  const lastBrace = raw.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    candidates.push(raw.slice(firstBrace, lastBrace + 1));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {}
-  }
-  return null;
-}
-
-async function callOpenAIJson(messages, options = {}) {
-  if (!OPENAI_API_KEY) return null;
-
-  const sendRequest = async (useJsonMode = true) => {
-    const body = {
-      model: OPENAI_MODEL,
-      messages,
-      temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 700
-    };
-
-    if (useJsonMode && options.disableResponseFormat !== true) {
-      body.response_format = { type: 'json_object' };
-    }
-
-    return await axios.post(`${OPENAI_BASE_URL}/chat/completions`, body, {
-      timeout: options.timeout ?? 25000,
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-  };
-
-  try {
-    const response = await sendRequest(true);
-    const message = response?.data?.choices?.[0]?.message;
-    const parsed = message?.parsed || extractJsonObjectFromText(message?.content);
-    if (parsed && typeof parsed === 'object') return parsed;
-  } catch (err) {
-    const status = err?.response?.status;
-    if (![400, 404, 415, 422].includes(status)) {
-      console.error('OpenAI JSON error:', err?.response?.data || err.message);
-    }
-  }
-
-  try {
-    const response = await sendRequest(false);
-    const message = response?.data?.choices?.[0]?.message;
-    const parsed = message?.parsed || extractJsonObjectFromText(message?.content);
-    if (parsed && typeof parsed === 'object') return parsed;
-    console.error('OpenAI JSON parse error: response was not valid JSON');
-  } catch (err) {
-    console.error('OpenAI JSON retry error:', err?.response?.data || err.message);
-  }
-
-  return null;
-}
-
 async function translateTextForLang(lang, textValue, options = {}) {
-  const targetLang = lang === 'ar' ? 'ar' : 'en';
-  const trimmed = String(textValue || '').trim();
-  if (!trimmed || !OPENAI_API_KEY) return trimmed;
-
-  const cacheKey = `translate:${targetLang}:${trimmed}`;
-  if (AI_TEXT_CACHE.has(cacheKey)) return AI_TEXT_CACHE.get(cacheKey);
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'You translate user-facing Telegram bot text. Keep emojis, line breaks, URLs, emails, usernames, product names, codes, and numbers unchanged unless translation is clearly needed. Return JSON with translated_text only.'
-    },
-    {
-      role: 'user',
-      content: `Target language: ${targetLang === 'ar' ? 'Arabic' : 'English'}\n\nTranslate this text for a Telegram bot. If it is already suitable, return it naturally without extra commentary.\n\n${trimmed}`
-    }
-  ], { temperature: 0, maxTokens: Math.min(1500, Math.max(250, trimmed.length * 2)) });
-
-  const translated = String(payload?.translated_text || '').trim() || trimmed;
-  AI_TEXT_CACHE.set(cacheKey, translated);
-  return translated;
+  return String(textValue || '').trim();
 }
 
 async function translateTextForUserLanguage(userId, textValue, options = {}) {
@@ -3054,1029 +2866,6 @@ async function closeSupportConversationForUser(userId, closedBy = 'user', adminI
       await bot.sendMessage(adminId, await getText(adminId, noticeKey));
     } catch {}
   }
-}
-
-function isSupportIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  if (!normalized) return false;
-  return /(support|agent|human|representative|operator|customer service|contact support|talk to admin|talk to support|open support|need help|issue|problem|complaint|refund|replace|not working|admin help|live chat|الدعم|دعم|الاداره|الادارة|ادمن|المسؤول|مشكله|مشكلة|شكوى|استفسار|بدل|استبدال|ما يشتغل|لا يعمل|اكلم|أكلم|تواصل|مراسله|مراسلة|محادثه|محادثة|افتح الدعم|حولني للدعم|حولني للاداره|حولني للادارة|اريد مساعده|أريد مساعده|اريد مساعدة|أريد مساعدة|احتاج مساعده|احتاج مساعدة)/i.test(normalized);
-}
-
-function isAffirmativeText(value) {
-  const normalized = normalizeAssistantText(value);
-  if (!normalized) return false;
-  return /^(yes|y|ok|okay|sure|please|confirm|go ahead|do it|buy now|continue|نعم|اي|ايي|أجل|ايوه|اوكي|أوكي|اكيد|أكيد|تمام|موافق|نفذ|نفذه|نفذها|كمل|كمله|استمر|اشتر|اشتري|اريد|أريد)/i.test(normalized);
-}
-
-function isNegativeText(value) {
-  const normalized = normalizeAssistantText(value);
-  if (!normalized) return false;
-  return /^(no|n|cancel|later|stop|not now|no thanks|don t|لا|مو|ليس الان|ليس الآن|لاحقا|لاحقاً|الغاء|إلغاء|مو هسه|لا شكرا|لا شكرًا|لا اريد|لا أريد|وقف|توقف)/i.test(normalized);
-}
-
-async function buildAssistantCatalogContext(userId, state = {}) {
-  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
-  const digitalSections = await getDigitalSections();
-  const sectionPayload = [];
-
-  for (const section of digitalSections) {
-    const products = await getDigitalProductsForSection(section.id);
-    const productPayload = [];
-    for (const product of products) {
-      productPayload.push({
-        id: product.id,
-        nameEn: product.nameEn,
-        nameAr: product.nameAr,
-        priceUSD: Number(product.price || 0),
-        stock: await getMerchantAvailableStock(product.id),
-        type: product.type,
-        details: truncateText(getMerchantPlainDescription(product), 220)
-      });
-    }
-
-    sectionPayload.push({
-      id: section.id,
-      nameEn: section.nameEn,
-      nameAr: section.nameAr,
-      products: productPayload
-    });
-  }
-
-  const generalMerchants = (await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] }))
-    .filter(merchant => !isDigitalSectionCategory(merchant.category))
-    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Code');
-
-  const generalCatalog = [];
-  for (const merchant of generalMerchants) {
-    generalCatalog.push({
-      id: merchant.id,
-      nameEn: merchant.nameEn,
-      nameAr: merchant.nameAr,
-      category: merchant.category,
-      priceUSD: Number(merchant.price || 0),
-      stock: await getMerchantAvailableStock(merchant.id),
-      type: merchant.type,
-      details: truncateText(getMerchantPlainDescription(merchant), 160)
-    });
-  }
-
-  const referralMerchant = await getReferralStockMerchant();
-  const chatgptFallbackStock = await Code.count({ where: { merchantId: referralMerchant.id, isUsed: false } });
-  const usdConfig = await getDepositConfig('USD');
-  const iqdConfig = await getDepositConfig('IQD');
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  const focusProduct = focusMerchantId ? await Merchant.findByPk(focusMerchantId) : null;
-
-  return {
-    currentUser: {
-      id: userId,
-      language: user?.lang || 'en',
-      ownBalanceUSD: Number(user?.balance || 0).toFixed(2)
-    },
-    chatgptCode: {
-      priceUSD: Number(await getChatGptPriceValue()).toFixed(2),
-      fallbackStock: chatgptFallbackStock
-    },
-    depositOptions: [
-      { currency: 'USD', nameEn: usdConfig.displayNameEn || 'Binance', nameAr: usdConfig.displayNameAr || 'بايننس' },
-      { currency: 'IQD', nameEn: iqdConfig.displayNameEn || 'Iraqi Dinar', nameAr: iqdConfig.displayNameAr || 'دينار عراقي' }
-    ],
-    digitalSections: sectionPayload,
-    generalCatalog,
-    focusProduct: focusProduct ? {
-      id: focusProduct.id,
-      nameEn: focusProduct.nameEn,
-      nameAr: focusProduct.nameAr,
-      priceUSD: Number(focusProduct.price || 0),
-      stock: await getMerchantAvailableStock(focusProduct.id),
-      type: focusProduct.type,
-      details: truncateText(getMerchantPlainDescription(focusProduct), 250)
-    } : null
-  };
-}
-
-async function buildFallbackAssistantReply(userId, userMessage, state = {}) {
-  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
-  const isArabic = (user?.lang || 'en') === 'ar';
-  const lines = [];
-  lines.push(await getText(userId, 'balanceInfoText', { balance: Number(user?.balance || 0).toFixed(2) }));
-
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  if (focusMerchantId) {
-    const merchant = await Merchant.findByPk(focusMerchantId);
-    if (merchant) {
-      lines.unshift(await getMerchantDisplayName(merchant, userId));
-      lines.push(await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) }));
-      lines.push(await getText(userId, 'remainingStockLine', { stock: await getMerchantAvailableStock(merchant.id) }));
-      const details = await getMerchantDescriptionForUser(userId, merchant);
-      if (details) lines.push(`${await getText(userId, 'productDescriptionLine', { description: details })}`);
-      return lines.join('\n');
-    }
-  }
-
-  const detectedMerchant = await resolveAssistantMerchantFromText(userId, userMessage, state);
-  if (detectedMerchant) {
-    return await buildAssistantMerchantInfoText(userId, detectedMerchant, extractAssistantQuantity(userMessage, 1));
-  }
-
-  const sections = await getDigitalSections();
-  const previewLines = [];
-  for (const section of sections.slice(0, 4)) {
-    const products = await getDigitalProductsForSection(section.id);
-    for (const product of products.slice(0, 3)) {
-      previewLines.push(`• ${await getMerchantDisplayName(product, userId)} - ${formatUsdPrice(product.price)} USD - ${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })}`);
-    }
-  }
-
-  if (previewLines.length) {
-    lines.push(isArabic ? 'الاشتراكات المتوفرة حالياً:' : 'Currently available subscriptions:');
-    lines.push(previewLines.join('\n'));
-  } else {
-    lines.push(await getText(userId, 'aiAssistantUnavailable'));
-  }
-
-  return lines.join('\n\n');
-}
-
-
-function normalizeAssistantDigits(value) {
-  return String(value || '')
-    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
-}
-
-function normalizeAssistantText(value) {
-  return normalizeAssistantDigits(value)
-    .toLowerCase()
-    .replace(/[ـ]/g, '')
-    .replace(/[أإآٱ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/[^A-Za-z0-9؀-ۿ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-const ASSISTANT_STOP_WORDS = new Set([
-  'اريد', 'أريد', 'ابي', 'ارغب', 'محتاج', 'احتاج', 'عايز', 'ابغى', 'ابغي',
-  'شراء', 'اشتري', 'اشتر', 'buy', 'purchase', 'order', 'get', 'please', 'now',
-  'حساب', 'اشتراك', 'منتج', 'الخدمه', 'الخدمة', 'service', 'product', 'account',
-  'بكم', 'سعر', 'السعر', 'الاسعار', 'الأسعار', 'price', 'prices', 'cost',
-  'لو', 'من', 'في', 'عن', 'على', 'هذا', 'هذه', 'that', 'this', 'the', 'a', 'an'
-].map(v => normalizeAssistantText(v)));
-
-function getAssistantTokens(value) {
-  return normalizeAssistantText(value)
-    .split(' ')
-    .map(v => v.trim())
-    .filter(v => v.length >= 2 && !ASSISTANT_STOP_WORDS.has(v));
-}
-
-function getAssistantTokenOverlap(queryTokens, targetTokens) {
-  const q = Array.isArray(queryTokens) ? queryTokens : [];
-  const t = new Set(Array.isArray(targetTokens) ? targetTokens : []);
-  if (!q.length || !t.size) return 0;
-  let count = 0;
-  for (const token of q) {
-    if (t.has(token)) count += 1;
-  }
-  return count / q.length;
-}
-
-function isSlashCommandText(value) {
-  return /^\/[A-Za-z_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(String(value || '').trim());
-}
-
-function extractAssistantQuantity(value, fallback = 1) {
-  const normalized = normalizeAssistantDigits(value);
-  const match = normalized.match(/(\d{1,3})/);
-  const qty = parseInt(match?.[1] || '', 10);
-  if (Number.isInteger(qty) && qty > 0) return qty;
-
-  const words = [
-    { value: 1, patterns: [/one/i, /واحد/, /وحده/, /واحدة/] },
-    { value: 2, patterns: [/two/i, /اثنين/, /اثنان/, /ثنين/] },
-    { value: 3, patterns: [/three/i, /ثلاث/, /ثلاثه/, /ثلاثة/] },
-    { value: 4, patterns: [/four/i, /اربعه/, /اربعة/, /أربعه/, /أربعة/] },
-    { value: 5, patterns: [/five/i, /خمسه/, /خمسة/] }
-  ];
-
-  for (const item of words) {
-    if (item.patterns.some(pattern => pattern.test(String(value || '')))) {
-      return item.value;
-    }
-  }
-
-  return fallback;
-}
-
-function isPurchaseIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(buy|purchase|order|get|take|renew|subscribe|اشتري|شراء|اريد شراء|أريد شراء|ابغي اشتري|اريد حساب|أريد حساب|اريد اشتراك|أريد اشتراك|اريد اخذ|أريد أخذ|خذ لي|جيب لي|اريد هذا|أريد هذا|جدد|تجديد|اشترك|فعله|فعله الي|فعله لي)/i.test(normalized);
-}
-
-function isPriceIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(price|prices|cost|how much|pricing|rate|سعر|اسعار|الاسعار|الأسعار|بكم|كم السعر|كم سعره|تكلفه|تكلفة|يكلف|يكلفني)/i.test(normalized);
-}
-
-function isNeedMoreInfoText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(more info|more details|details|tell me more|about|what is|what does|explain|describe|compare|تفاصيل|مزيد|اعرف اكثر|اعرف المزيد|شنو هذا|ما هو|اشرح|وصف|معلومات|شنو يفيد|شنو ميزاته|ماذا يقدم|كيف يعمل|قارن)/i.test(normalized);
-}
-
-function isAdminOpenIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(open|show|go to|take me to|enter|افتح|وريني|اعرض|روح|خذني|دخلني|افتح لي|وديني|افتح واجهه|افتح واجهة)/i.test(normalized);
-}
-
-function isAssistantCancelIntentText(value) {
-  return isNegativeText(value) || /cancel purchase|الغ الشراء|الغي الشراء|إلغاء الشراء|لا تكمل|لا تكمل الشراء/i.test(String(value || ''));
-}
-
-function getAssistantTrainingSettingKey() {
-  return 'assistant_training_examples';
-}
-
-async function getAssistantTrainingExamples() {
-  const raw = await getGlobalSetting(getAssistantTrainingSettingKey(), '[]');
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(item => item && typeof item === 'object')
-      .map(item => ({
-        question: String(item.question || '').trim(),
-        answer: String(item.answer || '').trim(),
-        createdAt: String(item.createdAt || ''),
-        createdBy: item.createdBy || null
-      }))
-      .filter(item => item.question && item.answer)
-      .slice(-80);
-  } catch {
-    return [];
-  }
-}
-
-async function saveAssistantTrainingExample(question, answer, adminId) {
-  const items = await getAssistantTrainingExamples();
-  const normalizedQuestion = normalizeAssistantText(question);
-  const remaining = items.filter(item => normalizeAssistantText(item.question) !== normalizedQuestion);
-  remaining.push({
-    question: String(question || '').trim(),
-    answer: String(answer || '').trim(),
-    createdAt: new Date().toISOString(),
-    createdBy: adminId
-  });
-
-  await Setting.upsert({
-    key: getAssistantTrainingSettingKey(),
-    lang: 'global',
-    value: JSON.stringify(remaining.slice(-80))
-  });
-}
-
-function parseAssistantTrainingCommand(value) {
-  const textValue = String(value || '').trim();
-  if (!textValue) return null;
-
-  const colonMatch = textValue.match(/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)\s*:\s*([\s\S]+)$/i);
-  if (colonMatch?.[1]) {
-    const body = colonMatch[1].trim();
-    const arrowSplit = body.split(/\s*=>\s*/);
-    if (arrowSplit.length >= 2) {
-      return {
-        question: arrowSplit.shift().trim(),
-        answer: arrowSplit.join(' => ').trim()
-      };
-    }
-  }
-
-  const qaMatch = textValue.match(/question\s*:\s*([\s\S]+?)\n+answer\s*:\s*([\s\S]+)/i)
-    || textValue.match(/السؤال\s*:\s*([\s\S]+?)\n+الجواب\s*:\s*([\s\S]+)/i);
-  if (qaMatch) {
-    return { question: qaMatch[1].trim(), answer: qaMatch[2].trim() };
-  }
-
-  return null;
-}
-
-async function findAssistantTrainingAnswer(userMessage) {
-  const normalizedMessage = normalizeAssistantText(userMessage);
-  if (!normalizedMessage) return '';
-
-  const messageTokens = getAssistantTokens(userMessage);
-  const items = await getAssistantTrainingExamples();
-
-  let bestAnswer = '';
-  let bestScore = 0;
-
-  for (const item of items.slice().reverse()) {
-    const normalizedQuestion = normalizeAssistantText(item.question);
-    if (!normalizedQuestion) continue;
-
-    let score = 0;
-    if (normalizedMessage === normalizedQuestion) score = 1000;
-    else if (normalizedMessage.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedMessage)) score = 850;
-    else {
-      const questionTokens = getAssistantTokens(item.question);
-      const overlap = getAssistantTokenOverlap(messageTokens, questionTokens);
-      const reverseOverlap = getAssistantTokenOverlap(questionTokens, messageTokens);
-      score = Math.round(Math.max(overlap, reverseOverlap) * 100);
-      if (messageTokens.length && questionTokens.length && overlap >= 0.74) score += 120;
-      if (questionTokens.length >= 2 && overlap >= 0.55 && reverseOverlap >= 0.55) score += 80;
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestAnswer = item.answer;
-    }
-  }
-
-  return bestScore >= 78 ? bestAnswer : '';
-}
-
-async function getAssistantCandidateMerchants() {
-  const merchants = await Merchant.findAll({ order: [['id', 'ASC']] });
-  return merchants.filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock');
-}
-
-function getAssistantMerchantSearchBlob(merchant) {
-  return normalizeAssistantText([
-    merchant?.nameEn || '',
-    merchant?.nameAr || '',
-    merchant?.category || '',
-    getMerchantPlainDescription(merchant) || ''
-  ].join(' '));
-}
-
-function getAssistantMerchantAliases(merchant) {
-  const raw = [merchant?.nameEn || '', merchant?.nameAr || '', merchant?.category || ''];
-  const aliases = [];
-  for (const item of raw) {
-    const normalized = normalizeAssistantText(item);
-    if (normalized) aliases.push(normalized);
-    const compact = normalized.replace(/\s+/g, '');
-    if (compact && compact !== normalized) aliases.push(compact);
-  }
-  return [...new Set(aliases.filter(Boolean))];
-}
-
-function scoreAssistantMerchantMatch(queryText, merchant) {
-  const normalizedQuery = normalizeAssistantText(queryText);
-  if (!normalizedQuery) return 0;
-
-  const haystack = getAssistantMerchantSearchBlob(merchant);
-  if (!haystack) return 0;
-
-  const compactQuery = normalizedQuery.replace(/\s+/g, '');
-  const compactHaystack = haystack.replace(/\s+/g, '');
-  const queryTokens = getAssistantTokens(normalizedQuery);
-  const hayTokens = getAssistantTokens(haystack);
-  const aliases = getAssistantMerchantAliases(merchant);
-
-  let score = 0;
-
-  if (compactQuery && compactHaystack.includes(compactQuery)) score += 140;
-  if (compactQuery && aliases.some(alias => alias === compactQuery)) score += 220;
-  if (aliases.some(alias => normalizedQuery === alias)) score += 220;
-  if (aliases.some(alias => alias && normalizedQuery.includes(alias))) score += 120;
-  if (aliases.some(alias => alias && alias.includes(normalizedQuery) && normalizedQuery.length >= 3)) score += 100;
-
-  const overlap = getAssistantTokenOverlap(queryTokens, hayTokens);
-  const reverseOverlap = getAssistantTokenOverlap(hayTokens, queryTokens);
-  score += Math.round(overlap * 120);
-  score += Math.round(reverseOverlap * 50);
-
-  for (const token of queryTokens) {
-    if (haystack.includes(token)) score += token.length >= 4 ? 16 : 7;
-  }
-
-  const nameEn = normalizeAssistantText(merchant?.nameEn || '');
-  const nameAr = normalizeAssistantText(merchant?.nameAr || '');
-  if (nameEn && normalizedQuery.includes(nameEn)) score += 80;
-  if (nameAr && normalizedQuery.includes(nameAr)) score += 80;
-
-  return score;
-}
-
-async function resolveAssistantMerchantFromText(userId, userMessage, state = {}) {
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  if (focusMerchantId) {
-    const focused = await Merchant.findByPk(focusMerchantId);
-    if (focused) {
-      const focusScore = scoreAssistantMerchantMatch(userMessage, focused);
-      if (focusScore >= 18 || !String(userMessage || '').trim()) return focused;
-    }
-  }
-
-  const merchants = await getAssistantCandidateMerchants();
-  if (!merchants.length) return null;
-
-  const ranked = merchants
-    .map(merchant => ({ merchant, score: scoreAssistantMerchantMatch(userMessage, merchant) }))
-    .sort((a, b) => b.score - a.score);
-
-  const best = ranked[0] || null;
-  const second = ranked[1] || null;
-  if (best && best.score >= 90) return best.merchant;
-  if (best && best.score >= 58 && (!second || best.score - second.score >= 12)) return best.merchant;
-  if (best && best.score >= 45 && getAssistantTokens(userMessage).length <= 3) return best.merchant;
-
-  if (!OPENAI_API_KEY) return best?.score >= 35 ? best.merchant : null;
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'Choose the single best matching merchant for the user query. Return strict JSON with merchant_id, confidence, and reason. Use merchant_id null if there is no clear match. Confidence must be a number between 0 and 1.'
-    },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        query: String(userMessage || ''),
-        focusMerchantId,
-        merchants: ranked.slice(0, 25).map(item => ({
-          id: item.merchant.id,
-          nameEn: item.merchant.nameEn,
-          nameAr: item.merchant.nameAr,
-          category: item.merchant.category,
-          details: truncateText(getMerchantPlainDescription(item.merchant), 180),
-          localScore: item.score
-        }))
-      })
-    }
-  ], { temperature: 0.05, maxTokens: 260 });
-
-  const chosenId = parseInt(payload?.merchant_id, 10);
-  const confidence = Number(payload?.confidence || 0);
-  if (Number.isInteger(chosenId) && confidence >= 0.56) {
-    const chosen = merchants.find(item => item.id === chosenId);
-    if (chosen) return chosen;
-  }
-
-  return best?.score >= 35 ? best.merchant : null;
-}
-
-async function extractAssistantIntentPlan(userId, userMessage, state = {}) {
-  const cleanMessage = String(userMessage || '').trim();
-  if (!cleanMessage || !OPENAI_API_KEY) return null;
-
-  const merchants = await getAssistantCandidateMerchants();
-  const ranked = merchants
-    .map(merchant => ({ merchant, score: scoreAssistantMerchantMatch(cleanMessage, merchant) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 20)
-    .map(item => ({
-      id: item.merchant.id,
-      nameEn: item.merchant.nameEn,
-      nameAr: item.merchant.nameAr,
-      category: item.merchant.category,
-      localScore: item.score
-    }));
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'Classify the user request for a Telegram subscription shop assistant. Return strict JSON with keys: intent, merchant_id, quantity, offer_support. intent must be one of purchase, price, details, support, admin_open, chat, unknown. Use merchant_id null when unknown. Use quantity as a positive integer when the user mentions it, otherwise 1.'
-    },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        message: cleanMessage,
-        focusMerchantId: Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null,
-        isAdmin: Boolean(isAdmin(userId)),
-        merchants: ranked
-      })
-    }
-  ], { temperature: 0.05, maxTokens: 220 });
-
-  if (!payload || typeof payload !== 'object') return null;
-
-  const allowedIntents = new Set(['purchase', 'price', 'details', 'support', 'admin_open', 'chat', 'unknown']);
-  const intent = allowedIntents.has(String(payload.intent || '').trim()) ? String(payload.intent || '').trim() : 'unknown';
-  const merchantId = Number.isInteger(parseInt(payload.merchant_id, 10)) ? parseInt(payload.merchant_id, 10) : null;
-  const quantity = Math.max(1, parseInt(payload.quantity, 10) || 1);
-  return {
-    intent,
-    merchantId,
-    quantity,
-    offerSupport: Boolean(payload.offer_support)
-  };
-}
-
-async function buildAssistantMerchantInfoText(userId, merchant, quantity = 1) {
-  const name = await getMerchantDisplayName(merchant, userId);
-  const stock = await getMerchantAvailableStock(merchant.id);
-  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
-  const total = unitPrice * Math.max(1, quantity);
-  const details = await getMerchantDescriptionForUser(userId, merchant);
-  const lines = [
-    `🧩 ${name}`,
-    await getText(userId, 'itemPriceLine', { price: formatUsdPrice(unitPrice) }),
-    await getText(userId, 'remainingStockLine', { stock }),
-    await getText(userId, 'currentBalanceLine', { balance: await getUserBalanceFormatted(userId) })
-  ];
-
-  if (quantity > 1) {
-    lines.push(await getText(userId, 'quantityPurchasedLine', { qty: quantity }));
-    lines.push(await getText(userId, 'totalPaidLine', { total: formatUsdPrice(total) }));
-  }
-
-  if (details) {
-    lines.push(await getText(userId, 'productDescriptionLine', { description: details }));
-  }
-
-  return lines.join('\n');
-}
-
-async function buildAssistantPricesCatalogReply(userId) {
-  const sections = await getDigitalSections();
-  const lines = [await getText(userId, 'aiAssistantPricesHeader')];
-
-  for (const section of sections.slice(0, 6)) {
-    const sectionName = await getDigitalSectionDisplayName(section, userId);
-    lines.push(`\n• ${sectionName}`);
-    const products = await getDigitalProductsForSection(section.id);
-    for (const product of products.slice(0, 6)) {
-      lines.push(`  - ${await getMerchantDisplayName(product, userId)}: ${formatUsdPrice(product.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })})`);
-    }
-  }
-
-  const generalMerchants = (await Merchant.findAll({ order: [['id', 'ASC']] }))
-    .filter(merchant => !isDigitalSectionCategory(merchant.category))
-    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock')
-    .slice(0, 10);
-
-  if (generalMerchants.length) {
-    lines.push('');
-    for (const merchant of generalMerchants) {
-      lines.push(`- ${await getMerchantDisplayName(merchant, userId)}: ${formatUsdPrice(merchant.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(merchant.id) })})`);
-    }
-  }
-
-  lines.push('');
-  lines.push(await getCurrentBalanceLineText(userId));
-  return lines.join('\n');
-}
-
-async function buildAssistantPurchaseConfirmationText(userId, merchant, quantity = 1) {
-  const stock = await getMerchantAvailableStock(merchant.id);
-  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
-  const total = unitPrice * Math.max(1, quantity);
-  return await getText(userId, 'aiAssistantPurchaseConfirm', {
-    name: await getMerchantDisplayName(merchant, userId),
-    qty: quantity,
-    price: formatUsdPrice(unitPrice),
-    total: formatUsdPrice(total),
-    stock,
-    balance: await getUserBalanceFormatted(userId)
-  });
-}
-
-async function getAssistantPurchaseReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
-  return {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'aiAssistantPurchaseMoreButton'), callback_data: `ai_buy_info_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'aiAssistantPurchaseCancelButton'), callback_data: 'ai_buy_no' }],
-      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
-    ]
-  };
-}
-
-async function getAssistantProductInfoReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
-  return {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'support'), callback_data: 'support' }],
-      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
-    ]
-  };
-}
-
-async function awardReferralRewardForMerchantPurchase(userId, totalCost) {
-  const userObj = await User.findByPk(userId);
-  if (!userObj?.referredBy) return;
-
-  const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
-  const rewardAmount = Number(totalCost || 0) * referralPercent / 100;
-  if (!(rewardAmount > 0)) return;
-
-  const referrer = await User.findByPk(userObj.referredBy);
-  if (!referrer) return;
-
-  await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
-  await User.update({ balance: parseFloat(referrer.balance) + rewardAmount }, { where: { id: referrer.id } });
-  await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
-}
-
-async function completeAssistantMerchantPurchase(userId, merchantId, quantity = 1, state = {}) {
-  const merchant = await Merchant.findByPk(merchantId);
-  if (!merchant) {
-    await bot.sendMessage(userId, await getText(userId, 'error'));
-    return { success: false, reason: 'merchant_not_found' };
-  }
-
-  const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-  if (available < quantity) {
-    await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseUnavailable', { stock: available }), {
-      reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    });
-    return { success: false, reason: 'not_enough_stock' };
-  }
-
-  const result = await processPurchase(userId, merchant.id, quantity, state.discountCode || null);
-  if (result.success) {
-    let msgText = await getText(userId, 'success');
-    if (result.discountApplied) {
-      msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
-    }
-    const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
-    msgText += `\n\n${deliveryHtml}`;
-    const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-    await clearUserState(userId);
-    await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
-      merchant,
-      totalCost: result.totalCost,
-      newBalance: result.newBalance,
-      quantity
-    });
-
-    const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-    await sendAdminCodeActionNotice(userId, {
-      sourceKey: 'balance',
-      serviceType: `${merchant.nameAr || merchant.nameEn}`,
-      codesCount: quantity,
-      remainingStockText: String(remainingMerchantStock)
-    });
-    await awardReferralRewardForMerchantPurchase(userId, result.totalCost || (merchant.price * quantity));
-    return { success: true };
-  }
-
-  if (result.reason === 'Insufficient balance') {
-    await clearUserState(userId);
-    await bot.sendMessage(
-      userId,
-      await getText(userId, 'insufficientBalance', {
-        balance: Number(result.balance || 0).toFixed(2),
-        price: Number(result.price || merchant.price || 0).toFixed(2),
-        needed: Number(result.totalCost || 0).toFixed(2)
-      }),
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-        }
-      }
-    );
-    return { success: false, reason: 'insufficient_balance' };
-  }
-
-  await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason || 'unknown error'}`);
-  return { success: false, reason: result.reason || 'unknown_error' };
-}
-
-async function showAdminAddCodesMenu(userId) {
-  const merchants = await Merchant.findAll();
-  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `add_codes_merchant_${m.id}` }]));
-  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-  await bot.sendMessage(userId, await getText(userId, 'addCodes'), { reply_markup: { inline_keyboard: buttons } });
-}
-
-async function showAdminSetPriceMenu(userId) {
-  const merchants = await Merchant.findAll();
-  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `set_price_merchant_${m.id}` }]));
-  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-  await bot.sendMessage(userId, await getText(userId, 'setPrice'), { reply_markup: { inline_keyboard: buttons } });
-}
-
-async function showAdminMerchantsListMenu(userId) {
-  const merchants = await Merchant.findAll();
-  let msg = await getText(userId, 'merchantList');
-  for (const m of merchants) {
-    msg += `ID: ${m.id} | ${m.nameEn} / ${m.nameAr} | Price: ${m.price} USD | Category: ${m.category} | Type: ${m.type}\n`;
-  }
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '✏️ Edit', callback_data: 'admin_edit_merchant' }],
-      [{ text: '🗑️ Delete', callback_data: 'admin_delete_merchant' }],
-      [{ text: '📂 Edit Category', callback_data: 'admin_edit_category' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-    ]
-  };
-  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
-}
-
-async function showAdminStatsSummary(userId) {
-  const totalCodes = await Code.count();
-  const totalSales = await BalanceTransaction.sum('amount', { where: { type: 'purchase', status: 'completed' } });
-  const pendingDeposits = await BalanceTransaction.count({ where: { type: 'deposit', status: 'pending' } });
-  await bot.sendMessage(userId,
-    `${await getText(userId, 'totalCodes', { count: totalCodes })}\n` +
-    `${await getText(userId, 'totalSales', { amount: Math.abs(totalSales || 0) })}\n` +
-    `${await getText(userId, 'pendingDeposits', { count: pendingDeposits })}`
-  );
-}
-
-async function executeAdminAssistantShortcut(userId, userMessage) {
-  if (!isAdmin(userId)) return { handled: false };
-  const normalized = normalizeAssistantText(userMessage);
-  if (!isAdminOpenIntentText(normalized)) return { handled: false };
-
-  const items = [
-    { targetTextKey: 'aiAssistantOpenStocks', patterns: [/مخزون|مخزونات|inventory|stock/i], handler: showAdminAddCodesMenu },
-    { targetTextKey: 'aiAssistantOpenSubscriptions', patterns: [/اشتراك|اشتراكات|subscriptions|digital/i], handler: showDigitalSubscriptionsAdmin },
-    { targetTextKey: 'aiAssistantOpenPrices', patterns: [/سعر|اسعار|الاسعار|الأسعار|prices|pricing/i], handler: showAdminSetPriceMenu },
-    { targetTextKey: 'aiAssistantOpenMerchants', patterns: [/تاجر|تجار|merchant/i], handler: showAdminMerchantsListMenu },
-    { targetTextKey: 'aiAssistantOpenBalances', patterns: [/رصيد|ارصده|أرصدة|balance/i], handler: showBalanceManagementAdmin },
-    { targetTextKey: 'aiAssistantOpenButtons', patterns: [/زر|ازرار|أزرار|buttons|menu/i], handler: showMenuButtonsAdmin },
-    { targetTextKey: 'aiAssistantOpenAdminPanel', patterns: [/لوحه التحكم|لوحة التحكم|admin panel|panel/i], handler: showAdminPanel },
-    { targetTextKey: 'aiAssistantOpenStats', patterns: [/احصائيات|إحصائيات|stats|statistics/i], handler: showAdminStatsSummary },
-    { targetTextKey: 'aiAssistantOpenReferrals', patterns: [/احاله|إحالة|احالات|إحالات|referral/i], handler: showReferralSettingsAdmin },
-    { targetTextKey: 'aiAssistantOpenBots', patterns: [/بوتات|bots|manage bots/i], handler: showBotsList }
-  ];
-
-  for (const item of items) {
-    if (item.patterns.some(pattern => pattern.test(normalized))) {
-      await item.handler(userId);
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantAdminOpened', { target: await getText(userId, item.targetTextKey) })
-      };
-    }
-  }
-
-  return { handled: true, reply: await getText(userId, 'aiAssistantAdminNoMatch') };
-}
-
-async function handleDeterministicAssistantRequest(userId, cleanMessage, state = {}) {
-  if (!cleanMessage) return { handled: false };
-
-  if (isAdmin(userId)) {
-    const training = parseAssistantTrainingCommand(cleanMessage);
-    if (training?.question && training?.answer) {
-      await saveAssistantTrainingExample(training.question, training.answer, userId);
-      return {
-        handled: true,
-        reply: `${await getText(userId, 'aiAssistantTrainingSaved')}
-
-Q: ${training.question}
-A: ${training.answer}`,
-        replyMarkup: await getBackAndCancelReplyMarkup(userId)
-      };
-    }
-
-    if (/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)/i.test(String(cleanMessage || '').trim())) {
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantTrainingHelp'),
-        replyMarkup: await getBackAndCancelReplyMarkup(userId)
-      };
-    }
-
-    const adminShortcut = await executeAdminAssistantShortcut(userId, cleanMessage);
-    if (adminShortcut.handled) {
-      return {
-        handled: true,
-        reply: adminShortcut.reply,
-        replyMarkup: await getBackAndCancelReplyMarkup(userId, 'admin')
-      };
-    }
-  }
-
-  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
-  if (trainedAnswer) {
-    return {
-      handled: true,
-      reply: trainedAnswer,
-      replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    };
-  }
-
-  const assistantPlan = await extractAssistantIntentPlan(userId, cleanMessage, state);
-  let merchant = await resolveAssistantMerchantFromText(userId, cleanMessage, state);
-  if (!merchant && assistantPlan?.merchantId) {
-    merchant = await Merchant.findByPk(assistantPlan.merchantId);
-  }
-
-  const requestedQuantity = assistantPlan?.quantity || extractAssistantQuantity(cleanMessage, 1);
-  const wantsPurchase = isPurchaseIntentText(cleanMessage) || assistantPlan?.intent === 'purchase';
-  const wantsPrice = isPriceIntentText(cleanMessage) || assistantPlan?.intent === 'price';
-  const wantsDetails = isNeedMoreInfoText(cleanMessage) || assistantPlan?.intent === 'details';
-  const wantsSupport = assistantPlan?.intent === 'support';
-
-  if (wantsSupport && !merchant) {
-    return {
-      handled: true,
-      reply: await getText(userId, 'aiAssistantContactSupportAsk'),
-      replyMarkup: {
-        inline_keyboard: [
-          [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
-          [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
-          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-        ]
-      },
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: state.focusMerchantId || null,
-        awaitingSupportConfirm: true,
-        awaitingPurchaseConfirm: false
-      }
-    };
-  }
-
-  if (merchant && wantsPurchase) {
-    const stock = await getMerchantAvailableStock(merchant.id);
-    if (stock < requestedQuantity || stock <= 0) {
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantPurchaseUnavailable', { stock }),
-        replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-      };
-    }
-
-    return {
-      handled: true,
-      reply: `${await buildAssistantPurchaseConfirmationText(userId, merchant, requestedQuantity)}
-
-${await getText(userId, 'aiAssistantPurchaseNeedMore', { name: await getMerchantDisplayName(merchant, userId) })}`,
-      replyMarkup: await getAssistantPurchaseReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: true,
-        pendingMerchantId: merchant.id,
-        pendingQuantity: requestedQuantity
-      }
-    };
-  }
-
-  if (merchant && (wantsPrice || wantsDetails)) {
-    return {
-      handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, requestedQuantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      }
-    };
-  }
-
-  if (!merchant && wantsPrice) {
-    return {
-      handled: true,
-      reply: await buildAssistantPricesCatalogReply(userId),
-      replyMarkup: await getBackAndCancelReplyMarkup(userId)
-    };
-  }
-
-  if (!merchant && wantsPurchase) {
-    return {
-      handled: true,
-      reply: await getText(userId, 'aiAssistantNoProductMatch'),
-      replyMarkup: await getBackAndCancelReplyMarkup(userId)
-    };
-  }
-
-  if (merchant) {
-    return {
-      handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, requestedQuantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, requestedQuantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      }
-    };
-  }
-
-  return { handled: false };
-}
-
-async function askBotAssistant(userId, userMessage, state = {}) {
-  const cleanMessage = String(userMessage || '').trim();
-  if (!cleanMessage) {
-    return { reply: await getText(userId, 'aiAssistantScopeLimit'), offerSupport: false, history: Array.isArray(state.history) ? state.history : [] };
-  }
-
-  if (isSupportIntentText(cleanMessage)) {
-    return {
-      reply: await getText(userId, 'aiAssistantContactSupportAsk'),
-      offerSupport: true,
-      history: Array.isArray(state.history) ? state.history : []
-    };
-  }
-
-  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
-  if (trainedAnswer) {
-    const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
-    return {
-      reply: trainedAnswer,
-      offerSupport: false,
-      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: trainedAnswer }].slice(-8)
-    };
-  }
-
-  const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
-  if (!OPENAI_API_KEY) {
-    const fallbackReply = await buildFallbackAssistantReply(userId, cleanMessage, state);
-    return {
-      reply: `${await getText(userId, 'aiAssistantUnavailable')}
-
-${fallbackReply}`,
-      offerSupport: false,
-      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: fallbackReply }].slice(-8)
-    };
-  }
-
-  const context = await buildAssistantCatalogContext(userId, state);
-  const trainingExamples = await getAssistantTrainingExamples();
-  const trainingText = trainingExamples.length
-    ? trainingExamples.slice(-20).map((item, index) => `Example ${index + 1}
-Q: ${item.question}
-A: ${item.answer}`).join('\n\n')
-    : 'No custom training examples.';
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'You are the smart AI assistant inside a Telegram bot that sells digital subscriptions, accounts, and codes. Your primary job is to help the user understand products, compare options, know prices, know remaining stock, know payment steps, know delivery expectations, troubleshoot product-related questions, and decide what to buy. You may answer short general questions that are directly useful for choosing or using the products sold by this bot, even when the answer is not literally stored in the catalog. When prices, stock, balance, and payment options are present in context, treat them as the source of truth and never invent different values. If the user asks for support, has a complaint, says something is not working, or clearly wants a human, set offer_support to true. Never reveal secrets, tokens, raw database records, admin-only settings, internal implementation details, wallet addresses that are not already meant for users, or other users private information. If the question is totally unrelated to the bot or its products, gently steer the user back to the bot instead of refusing harshly. Return strict JSON with keys reply and offer_support.'
-    },
-    {
-      role: 'system',
-      content: `Bot context JSON:
-${JSON.stringify(context)}`
-    },
-    {
-      role: 'system',
-      content: `Admin training examples:
-${trainingText}`
-    },
-    ...previousHistory,
-    { role: 'user', content: cleanMessage }
-  ], { temperature: 0.35, maxTokens: 950 });
-
-  const reply = String(payload?.reply || '').trim() || await buildFallbackAssistantReply(userId, cleanMessage, state);
-  const offerSupport = Boolean(payload?.offer_support) || isSupportIntentText(cleanMessage);
-  const nextHistory = [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: reply }].slice(-8);
-  return { reply, offerSupport, history: nextHistory };
-}
-
-async function processAssistantMessageTurn(userId, trimmed, state = {}) {
-  const deterministic = await handleDeterministicAssistantRequest(userId, trimmed, state);
-  if (deterministic.handled) {
-    if (deterministic.nextState) {
-      await setUserState(userId, deterministic.nextState);
-    } else {
-      await setUserState(userId, {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: state.focusMerchantId || null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-    }
-
-    await bot.sendMessage(userId, deterministic.reply, {
-      reply_markup: deterministic.replyMarkup || await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    });
-    return true;
-  }
-
-  const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
-  const aiResult = await askBotAssistant(userId, trimmed, state);
-  await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
-
-  await setUserState(userId, {
-    action: 'ai_assistant',
-    history: aiResult.history,
-    focusMerchantId: state.focusMerchantId || null,
-    awaitingSupportConfirm: Boolean(aiResult.offerSupport),
-    awaitingPurchaseConfirm: false
-  });
-
-  const replyMarkup = aiResult.offerSupport
-    ? {
-        inline_keyboard: [
-          [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
-          [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
-          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-        ]
-      }
-    : await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu');
-
-  await bot.sendMessage(userId, aiResult.reply, { reply_markup: replyMarkup });
-  return true;
 }
 
 function extractChatGptUpLinks(rawText) {
@@ -4825,7 +3614,6 @@ const DEFAULT_BUTTONS = {
   discount: true,
   my_purchases: true,
   support: true,
-  ai_assistant: true,
   change_language: true,
   chatgpt_code: true,
   digital_sections_group: true,
@@ -4844,7 +3632,6 @@ const DEFAULT_BUTTON_ORDER = [
   'referral',
   'discount',
   'support',
-  'ai_assistant',
   'change_language',
   'free_code',
   'admin_panel'
@@ -4967,7 +3754,6 @@ async function getMenuButtonItems(userId) {
     { id: 'referral', name: await getText(userId, 'referral') },
     { id: 'discount', name: await getText(userId, 'discountButton') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'ai_assistant', name: await getText(userId, 'aiAssistant') },
     { id: 'change_language', name: await getText(userId, 'changeLanguage') },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
@@ -5376,10 +4162,31 @@ async function sendBinanceAutoInstructions(userId, amount) {
   const lang = user?.lang || 'en';
   const credentials = await getBinanceCredentials();
   const payId = credentials?.payId || BINANCE_PAY_ID || '842505320';
+  const noteCode = generateBinanceNoteCode(userId);
 
   const msg = lang === 'ar'
-    ? `⚡ Binance Auto (USDT)\n\nقم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:\n\n<code>${escapeHtml(payId)}</code>\n\nبعد الدفع أرسل <b>Order ID</b> فقط هنا ليتم التحقق تلقائياً.`
-    : `⚡ Binance Auto (USDT)\n\nSend <b>${amount}$</b> to the following Binance ID:\n\n<code>${escapeHtml(payId)}</code>\n\nAfter payment, send the <b>Order ID</b> only here for automatic verification.`;
+    ? `⚡ Binance Auto (USDT)
+
+قم بتحويل مبلغ <b>${amount}$</b> إلى رقم بايننس التالي:
+
+<code>${escapeHtml(payId)}</code>
+
+اكتب هذا الرقم في خانة <b>الملاحظات</b> داخل بايننس:
+
+<code>${escapeHtml(noteCode)}</code>
+
+بعد الدفع أرسل <b>نفس الرقم</b> هنا ليتم التحقق تلقائياً.`
+    : `⚡ Binance Auto (USDT)
+
+Send <b>${amount}$</b> to the following Binance ID:
+
+<code>${escapeHtml(payId)}</code>
+
+Write this number in the <b>notes</b> field inside Binance:
+
+<code>${escapeHtml(noteCode)}</code>
+
+After payment, send the <b>same number</b> here for automatic verification.`;
 
   const keyboard = {
     inline_keyboard: [
@@ -5392,6 +4199,7 @@ async function sendBinanceAutoInstructions(userId, amount) {
   await setUserState(userId, {
     action: 'binance_auto_session',
     amount,
+    noteCode,
     createdAt: Date.now()
   });
 }
@@ -5462,9 +4270,9 @@ function normalizeBinanceNoteCode(value) {
 }
 
 function generateBinanceNoteCode(userId) {
-  const userPart = String(userId || '').slice(-4).padStart(4, '0');
-  const randomPart = crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `BN${userPart}${randomPart}`;
+  const userPart = String(Math.abs(parseInt(userId, 10) || 0)).slice(-4).padStart(4, '0');
+  const randomPart = String(crypto.randomInt(1000, 10000));
+  return `${userPart}${randomPart}`;
 }
 
 function tryParseJson(value) {
@@ -6170,7 +4978,7 @@ function buildBinanceDuplicateCandidates(rawInput, checkResult = {}) {
   return [...new Set(values.map(normalizeBinanceIdentifier).filter(Boolean))];
 }
 
-async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}) {
+async function checkBinanceDeposit(noteCode, expectedAmountUSDT, options = {}) {
   const credentials = await getBinanceCredentials();
   if (!credentials?.apiKey || !credentials?.apiSecret) {
     console.error('❌ Binance API keys missing');
@@ -6178,8 +4986,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const expected = Number(expectedAmountUSDT || 0);
-  const wantedIdentifier = normalizeBinanceIdentifier(orderNumber);
-  if (!wantedIdentifier || !Number.isFinite(expected) || expected <= 0) {
+  const wantedNoteCode = normalizeBinanceNoteCode(noteCode);
+  if (!wantedNoteCode || !Number.isFinite(expected) || expected <= 0) {
     return { success: false, reason: 'invalid_payload' };
   }
 
@@ -6189,20 +4997,22 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
   }
 
   const rows = fetched.rows || [];
-  const matchedRows = rows.filter(item => (
+  const amountMatchedRows = rows.filter(item => (
     doesBinanceAmountMatch(item, expected)
     && isLikelyIncomingBinancePayment(item, credentials.payId || null)
-    && itemMatchesBinanceOrder(item, wantedIdentifier)
   ));
+
+  const matchedRows = amountMatchedRows.filter(item => itemMatchesBinanceNoteCode(item, wantedNoteCode));
 
   if (matchedRows.length === 1) {
     const matchedItem = matchedRows[0];
     return {
       success: true,
-      method: 'exact_order_id',
+      method: 'note_code_exact',
       amount: getBinanceHistoryAmountUSDT(matchedItem),
-      txId: matchedItem.transactionId || matchedItem.orderId || matchedItem.prepayId || getBinanceTransactionUniqueKey(matchedItem) || orderNumber,
-      rawOrderId: orderNumber,
+      txId: matchedItem.transactionId || matchedItem.orderId || matchedItem.prepayId || getBinanceTransactionUniqueKey(matchedItem) || wantedNoteCode,
+      rawOrderId: noteCode,
+      verificationCode: wantedNoteCode,
       currency: 'USDT',
       transactionTime: getBinanceTransactionTime(matchedItem) || getBinanceClientNowMs(),
       orderType: matchedItem.orderType || null,
@@ -6210,8 +5020,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
       matchedItem,
       searchedRows: rows.length,
       matchedRows: matchedRows.length,
-      amountMatchedRows: matchedRows.length,
-      payIdMatchedRows: matchedRows.length,
+      amountMatchedRows: amountMatchedRows.length,
+      payIdMatchedRows: amountMatchedRows.filter(item => getBinancePayIdMatchLevel(item, credentials.payId || null) > 0).length,
       matchScore: 100
     };
   }
@@ -6221,8 +5031,8 @@ async function checkBinanceDeposit(orderNumber, expectedAmountUSDT, options = {}
     reason: matchedRows.length > 1 ? 'ambiguous_match' : 'no_match',
     searchedRows: rows.length,
     matchedRows: matchedRows.length,
-    amountMatchedRows: matchedRows.length,
-    payIdMatchedRows: matchedRows.length,
+    amountMatchedRows: amountMatchedRows.length,
+    payIdMatchedRows: amountMatchedRows.filter(item => getBinancePayIdMatchLevel(item, credentials.payId || null) > 0).length,
     payId: credentials.payId || null
   };
 }
@@ -6279,7 +5089,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
       return { handled: true, success: false, reason: 'duplicate_tx' };
     }
 
-    const txKey = txDuplicateKeys[0] || normalizedInput;
+    const txKey = normalizeBinanceIdentifier(checkResult.txId || (checkResult.matchedItem ? getBinanceTransactionUniqueKey(checkResult.matchedItem) : '')) || txDuplicateKeys[0] || normalizedInput;
     const t = await sequelize.transaction();
     try {
       const freshUser = await User.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
@@ -6292,7 +5102,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
         type: 'deposit',
         status: 'completed',
         txid: txKey,
-        caption: `Binance Auto | method=${checkResult.method} | input=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | matched=${checkResult.matchedRows || 0}`
+        caption: `Binance Auto | method=${checkResult.method} | note=${rawInput || '-'} | tx=${checkResult.txId || '-'} | payId=${checkResult.payId || '-'} | amount=${expectedAmount} | searched=${checkResult.searchedRows || 0} | matched=${checkResult.matchedRows || 0}`
       }, { transaction: t });
 
       await t.commit();
@@ -6319,8 +5129,7 @@ New balance: ${newBalance.toFixed(2)}$`;
 ` +
         `Amount: ${expectedAmount} USD
 ` +
-        `Order ID: ${rawInput || '-'}
-` +
+        `Note Code: ${rawInput || '-'}\n` +
         `Matched Tx ID: ${checkResult.txId || '-'}
 ` +
         `Method: ${checkResult.method}
@@ -6346,7 +5155,7 @@ New balance: ${newBalance.toFixed(2)}$`;
   await setUserState(userId, {
     action: 'binance_auto_waiting_proof',
     amount: expectedAmount,
-    orderId: rawInput || '',
+    noteCode: rawInput || state?.noteCode || '',
     createdAt: state?.createdAt || Date.now()
   });
 
@@ -6380,7 +5189,6 @@ async function sendMainMenu(userId) {
     referral: await getText(userId, 'referral'),
     discount: await getText(userId, 'discountButton'),
     support: await getText(userId, 'support'),
-    ai_assistant: await getText(userId, 'aiAssistant'),
     change_language: await getText(userId, 'changeLanguage'),
     free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
@@ -7341,97 +6149,18 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'ai_assistant') {
-      await setUserState(userId, { action: 'ai_assistant', history: [], awaitingSupportConfirm: false });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcome'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId)
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const aiAboutProductMatch = data.match(/^ai_about_product_(\d+)$/);
-    if (aiAboutProductMatch) {
-      const merchantId = parseInt(aiAboutProductMatch[1], 10);
-      const merchant = await Merchant.findByPk(merchantId);
-      if (merchant) {
-        await setUserState(userId, { action: 'ai_assistant', history: [], focusMerchantId: merchantId, awaitingSupportConfirm: false });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcomeForProduct', { name: await getMerchantDisplayName(merchant, userId) }), {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, `digital_product_${merchantId}`)
-        });
-      }
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_support_yes') {
+    if (data === 'ai_assistant'
+      || /^ai_about_product_\d+$/.test(data)
+      || data === 'ai_support_yes'
+      || data === 'ai_support_no'
+      || /^ai_buy_yes_\d+_\d+$/.test(data)
+      || /^ai_buy_info_\d+_\d+$/.test(data)
+      || data === 'ai_buy_no') {
       await clearUserState(userId);
-      await startSupportConversation(userId, 'ai');
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_support_no') {
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await setUserState(userId, { ...currentState, action: 'ai_assistant', awaitingSupportConfirm: false });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), {
+      await bot.sendMessage(userId, user.lang === 'ar'
+        ? '⚠️ تم حذف المساعد الذكي من البوت.'
+        : '⚠️ The AI assistant has been removed from the bot.', {
         reply_markup: await getBackAndCancelReplyMarkup(userId)
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const aiBuyYesMatch = data.match(/^ai_buy_yes_(\d+)_(\d+)$/);
-    if (aiBuyYesMatch) {
-      const merchantId = parseInt(aiBuyYesMatch[1], 10);
-      const quantity = Math.max(1, parseInt(aiBuyYesMatch[2], 10) || 1);
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      await completeAssistantMerchantPurchase(userId, merchantId, quantity, currentState);
-      return;
-    }
-
-    const aiBuyInfoMatch = data.match(/^ai_buy_info_(\d+)_(\d+)$/);
-    if (aiBuyInfoMatch) {
-      const merchantId = parseInt(aiBuyInfoMatch[1], 10);
-      const quantity = Math.max(1, parseInt(aiBuyInfoMatch[2], 10) || 1);
-      const merchant = await Merchant.findByPk(merchantId);
-      if (merchant) {
-        const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-        await setUserState(userId, {
-          action: 'ai_assistant',
-          history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
-          focusMerchantId: merchantId,
-          awaitingSupportConfirm: false,
-          awaitingPurchaseConfirm: true,
-          pendingMerchantId: merchantId,
-          pendingQuantity: quantity
-        });
-        await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, quantity), {
-          reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchantId, quantity, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
-        });
-      }
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_buy_no') {
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await setUserState(userId, {
-        action: 'ai_assistant',
-        history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
-        focusMerchantId: currentState.focusMerchantId || null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
       });
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
@@ -10633,7 +9362,7 @@ bot.on('message', async msg => {
         return;
       }
 
-      const manualMessage = `Binance Auto Manual Review | Order ID: ${state.orderId || '-'} | ${captionText || 'No message'}`;
+      const manualMessage = `Binance Auto Manual Review | Note Code: ${state.noteCode || '-'} | ${captionText || 'No message'}`;
       await requestDeposit(userId, state.amount, 'USD', manualMessage, imageFileId, msg.from || null);
       await bot.sendMessage(userId, user.lang === 'ar'
         ? '✅ تم استلام صورة الدفع وإرسالها للأدمن للمراجعة.'
@@ -10644,563 +9373,14 @@ bot.on('message', async msg => {
     }
 
     if (state?.action === 'ai_assistant') {
-      const trimmed = String(text || '').trim();
-      if (isSlashCommandText(trimmed)) {
-        if (/^\/start(?:\s|$)/i.test(trimmed)) {
-          await clearUserState(userId);
-        }
-        return;
-      }
-      if (state.awaitingSupportConfirm && isAffirmativeText(trimmed)) {
-        await clearUserState(userId);
-        await startSupportConversation(userId, 'ai_text_confirmation');
-        return;
-      }
-      if (state.awaitingSupportConfirm && isNegativeText(trimmed)) {
-        await setUserState(userId, { ...state, awaitingSupportConfirm: false });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), { reply_markup: await getBackAndCancelReplyMarkup(userId) });
-        return;
-      }
-
-      if (state.awaitingPurchaseConfirm && isAffirmativeText(trimmed)) {
-        await completeAssistantMerchantPurchase(userId, parseInt(state.pendingMerchantId, 10), Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state);
-        return;
-      }
-      if (state.awaitingPurchaseConfirm && isNeedMoreInfoText(trimmed)) {
-        const merchant = await Merchant.findByPk(parseInt(state.pendingMerchantId, 10));
-        if (merchant) {
-          await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, Math.max(1, parseInt(state.pendingQuantity, 10) || 1)), {
-            reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-          });
-        }
-        return;
-      }
-      if (state.awaitingPurchaseConfirm && isAssistantCancelIntentText(trimmed)) {
-        await setUserState(userId, {
-          action: 'ai_assistant',
-          history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-          focusMerchantId: state.focusMerchantId || null,
-          awaitingSupportConfirm: false,
-          awaitingPurchaseConfirm: false
-        });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-        });
-        return;
-      }
-
-      await processAssistantMessageTurn(userId, trimmed, state);
-      return;
-    }
-
-    if (await isSupportThreadOpen(userId)) {
-      await forwardSupportMessageToAdmin(userId, msg);
-      await bot.sendMessage(userId, await getText(userId, 'supportUserMessageForwarded'), {
-        reply_markup: await getSupportUserCloseReplyMarkup(userId)
-      });
-      return;
-    }
-
-    if (state?.action === 'discount') {
-      const discountCode = String(text || '').trim();
-      const discount = await DiscountCode.findOne({ where: { code: discountCode } });
-      if (discount && (!discount.validUntil || discount.validUntil > new Date()) && discount.usedCount < discount.maxUses) {
-        await bot.sendMessage(userId, await getText(userId, 'discountApplied', { percent: discount.discountPercent }));
-        await setUserState(userId, { action: 'discount_ready', discountCode });
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'discountInvalid'));
-        await clearUserState(userId);
-      }
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'buy') {
-      const qty = parseInt(text, 10);
-      if (Number.isNaN(qty) || qty <= 0) {
-        await bot.sendMessage(userId, await getText(userId, 'invalidPurchaseQuantity'), {
-          reply_markup: {
-            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
-          }
-        });
-        return;
-      }
-      const merchant = await Merchant.findByPk(state.merchantId);
-      if (!merchant) {
-        await bot.sendMessage(userId, 'Merchant not found');
-        return;
-      }
-      const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-      if (qty > available) {
-        const backTarget = isDigitalSectionCategory(merchant.category) ? `digital_product_${merchant.id}` : 'buy';
-        await bot.sendMessage(userId, `${await getText(userId, 'noCodes')}\n${await getText(userId, 'remainingStockLine', { stock: available })}`, {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, backTarget)
-        });
-        return;
-      }
-      const result = await processPurchase(userId, merchant.id, qty, state.discountCode || null);
-      if (result.success) {
-        let msgText = await getText(userId, 'success');
-        if (result.discountApplied) msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
-        const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
-        msgText += `\n\n${deliveryHtml}`;
-        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
-          merchant,
-          totalCost: result.totalCost,
-          newBalance: result.newBalance,
-          quantity: qty
-        });
-
-        const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-        await sendAdminCodeActionNotice(userId, {
-          sourceKey: 'balance',
-          serviceType: `${merchant.nameAr || merchant.nameEn}`,
-          codesCount: qty,
-          remainingStockText: String(remainingMerchantStock)
-        });
-
-        const userObj = await User.findByPk(userId);
-        if (userObj.referredBy) {
-          const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
-          const rewardAmount = Number(result.totalCost || (merchant.price * qty)) * referralPercent / 100;
-          const referrer = await User.findByPk(userObj.referredBy);
-          if (referrer) {
-            await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
-            await User.update({ balance: parseFloat(referrer.balance) + rewardAmount }, { where: { id: referrer.id } });
-            await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
-          }
-        }
-      } else if (result.reason === 'Insufficient balance') {
-        await bot.sendMessage(
-          userId,
-          await getText(userId, 'insufficientBalance', {
-            balance: Number(result.balance || 0).toFixed(2),
-            price: Number(result.price || merchant.price || 0).toFixed(2),
-            needed: Number(result.totalCost || 0).toFixed(2)
-          }),
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-            }
-          }
-        );
-      } else {
-        const reasonText = String(result.reason || '').toLowerCase();
-        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
-          const fallbackMerchant = await getReferralStockMerchant();
-          const fallbackCodes = await Code.findAll({
-            where: { merchantId: fallbackMerchant.id, isUsed: false },
-            limit: qty,
-            order: [['id', 'ASC']]
-          });
-
-          if (fallbackCodes.length > 0) {
-            const t = await sequelize.transaction();
-            try {
-              await Code.update(
-                { isUsed: true, usedBy: userId, soldAt: new Date() },
-                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
-              );
-
-              const merchant = await getOrCreateChatGptMerchant();
-              const userObj = await User.findByPk(userId, { transaction: t });
-              const currentBalance = parseFloat(userObj.balance);
-              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
-              const totalCost = unitPrice * fallbackCodes.length;
-
-              if (currentBalance < totalCost) {
-                await t.rollback();
-                await bot.sendMessage(
-                  userId,
-                  await getText(userId, 'insufficientBalance', {
-                    balance: currentBalance.toFixed(2),
-                    price: unitPrice.toFixed(2),
-                    needed: totalCost.toFixed(2)
-                  }),
-                  {
-                    reply_markup: {
-                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-                    }
-                  }
-                );
-              } else {
-                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
-                await BalanceTransaction.create({
-                  userId,
-                  amount: -totalCost,
-                  type: 'purchase',
-                  status: 'completed'
-                }, { transaction: t });
-                await t.commit();
-
-                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
-                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-                await sendPurchaseDeliveryMessage(
-                  userId,
-                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
-                  {
-                    continueCallback: 'chatgpt_code',
-                    totalCost,
-                    newBalance: currentBalance - totalCost,
-                    quantity: deliveredCodes.length
-                  }
-                );
-
-                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
-                await sendAdminCodeActionNotice(userId, {
-                  sourceKey: 'balance',
-                  serviceType: 'ChatGPT GO',
-                  codesCount: deliveredCodes.length,
-                  remainingStockText: String(remainingFallback)
-                });
-              }
-            } catch (err) {
-              await t.rollback().catch(() => {});
-              console.error('chatgpt referral fallback error:', err);
-              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-            }
-          } else {
-            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-          }
-        } else {
-          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-        }
-      }
       await clearUserState(userId);
+      await bot.sendMessage(userId, user.lang === 'ar'
+        ? '⚠️ تم حذف المساعد الذكي من البوت.'
+        : '⚠️ The AI assistant has been removed from the bot.');
       await sendMainMenu(userId);
       return;
     }
 
-    if (state?.action === 'deposit_amount') {
-      const amount = parseFloat(text);
-      if (Number.isNaN(amount) || amount <= 0) {
-        await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
-        });
-        return;
-      }
-      await showPaymentMethodsForDeposit(userId, amount, state.currency);
-      return;
-    }
-
-    if (state?.action === 'deposit_awaiting_proof') {
-      const imageFileId = photo ? photo[photo.length - 1].file_id : null;
-      const caption = String(msg.caption || text || '').trim();
-      if (!imageFileId) return;
-      await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
-      await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-    // -------------------------------------------------------------------
-    // معالج الدفع التلقائي عبر Binance
-    if (state?.action === 'binance_auto_session') {
-      const rawInput = String(text || '').trim();
-      if (!rawInput) {
-        await bot.sendMessage(userId, user.lang === 'ar'
-          ? '❌ أرسل Order ID فقط.'
-          : '❌ Send the Order ID only.');
-        return;
-      }
-
-      await processBinanceAutoVerification(userId, state, { rawInput });
-      return;
-    }
-    // -------------------------------------------------------------------
-
-    if (state?.action === 'redeem_via_service') {
-      const service = await RedeemService.findByPk(state.serviceId);
-      if (!service) {
-        await bot.sendMessage(userId, 'Service not found');
-        await clearUserState(userId);
-        await sendMainMenu(userId);
-        return;
-      }
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await redeemCard(String(text || '').trim(), service.merchantDictId, service.platformId);
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-      if (result.success) {
-        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', { details: formatCardDetails(result.data) }));
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'redeem_smart') {
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await redeemCardSmart(String(text || '').trim());
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-      if (result.success) {
-        const serviceName = result.service ? `${result.service.nameEn} / ${result.service.nameAr}` : 'Auto';
-        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', {
-          details: `${formatCardDetails(result.data)}\n\n🏪 Selected Service: ${serviceName}`
-        }));
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'chatgpt_free_email') {
-      const email = String(text || '').trim();
-      if (!email.includes('@') || !email.includes('.')) {
-        await bot.sendMessage(userId, '❌ Invalid email format. Please send a valid email.');
-        return;
-      }
-      const result = await getChatGPTCode(email);
-      if (result.success) {
-        if (!state.fromPoints) {
-          await User.update({ freeChatgptReceived: true }, { where: { id: userId } });
-        }
-        await clearUserState(userId);
-        await bot.sendMessage(userId, await getText(userId, 'freeCodeSuccess', { code: formatCodesForHtml(result.codes || [result.code]) }), { parse_mode: 'HTML' });
-        await sendAdminCodeActionNotice(userId, {
-          sourceKey: state.fromPoints ? 'points' : 'free',
-          serviceType: 'ChatGPT GO',
-          codesCount: Array.isArray(result.codes) ? result.codes.length : 1,
-          remainingStockText: 'من الموقع'
-        });
-      } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-        await clearUserState(userId);
-      }
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'redeem_points_amount') {
-      const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
-      const requestedCodes = parseInt(String(text || '').trim(), 10);
-
-      if (Number.isNaN(requestedCodes) || requestedCodes <= 0) {
-        await bot.sendMessage(userId, await getText(userId, 'redeemPointsInvalidAmount', { requiredPoints }));
-        return;
-      }
-
-      const freshUser = await User.findByPk(userId);
-      const neededPoints = requestedCodes * requiredPoints;
-      if (Number(freshUser.referralPoints || 0) < neededPoints) {
-        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: freshUser.referralPoints, requiredPoints }));
-        await clearUserState(userId);
-        return;
-      }
-
-      const quantity = requestedCodes;
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity });
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-
-      if (result.success) {
-        const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
-        freshUser.referralPoints = Math.max(0, Number(freshUser.referralPoints || 0) - usedPoints);
-        await freshUser.save();
-        {
-        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
-      }
-        await sendAdminCodeActionNotice(userId, {
-          sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
-          serviceType: 'ChatGPT GO',
-          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
-          usedPoints,
-          remainingStockText: 'من الموقع'
-        });
-      } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-      }
-
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'chatgpt_buy_quantity') {
-      const qty = parseInt(text, 10);
-      if (Number.isNaN(qty) || qty <= 0 || qty > 70) {
-        await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'), {
-          reply_markup: {
-            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
-          }
-        });
-        return;
-      }
-
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      let result = await processAutoChatGptCode(userId, { isFree: false, quantity: qty });
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-
-      if (result.success) {
-        let successText = await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(result.codes) });
-        if (result.partial) {
-          successText += `
-
-⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
-        }
-        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${successText}`, {
-          continueCallback: 'chatgpt_code',
-          totalCost: result.totalCost,
-          newBalance: result.newBalance,
-          quantity: result.quantity
-        });
-        await sendAdminCodeActionNotice(userId, {
-          sourceKey: 'balance',
-          serviceType: 'ChatGPT GO',
-          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
-          remainingStockText: 'من الموقع'
-        });
-      } else if (result.reason === 'INSUFFICIENT_BALANCE') {
-        const freshUser = await User.findByPk(userId);
-        const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
-        const neededPoints = qty * requiredPoints;
-
-        if (Number(freshUser?.referralPoints || 0) >= neededPoints) {
-          const waitingPointsMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-          result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity: qty });
-          await bot.deleteMessage(userId, waitingPointsMsg.message_id).catch(() => {});
-
-          if (result.success) {
-            const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
-            freshUser.referralPoints = Math.max(0, Number(freshUser.referralPoints || 0) - usedPoints);
-            await freshUser.save();
-
-            let successText = await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) });
-            if (result.partial) {
-              successText += `
-
-⚠️ Requested: ${qty} | Delivered: ${result.quantity}`;
-            }
-            const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-            await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
-            await sendAdminCodeActionNotice(userId, {
-              sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
-              serviceType: 'ChatGPT GO',
-              codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
-              usedPoints,
-              remainingStockText: 'من الموقع'
-            });
-          } else {
-            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-          }
-        } else {
-          await bot.sendMessage(
-            userId,
-            await getText(userId, 'insufficientBalance', {
-              balance: result.balance,
-              price: result.price,
-              needed: result.totalCost
-            }),
-            {
-              reply_markup: {
-                inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-              }
-            }
-          );
-        }
-      } else {
-        const reasonText = String(result.reason || '').toLowerCase();
-        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
-          const fallbackMerchant = await getReferralStockMerchant();
-          const fallbackCodes = await Code.findAll({
-            where: { merchantId: fallbackMerchant.id, isUsed: false },
-            limit: qty,
-            order: [['id', 'ASC']]
-          });
-
-          if (fallbackCodes.length > 0) {
-            const t = await sequelize.transaction();
-            try {
-              await Code.update(
-                { isUsed: true, usedBy: userId, soldAt: new Date() },
-                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
-              );
-
-              const merchant = await getOrCreateChatGptMerchant();
-              const userObj = await User.findByPk(userId, { transaction: t });
-              const currentBalance = parseFloat(userObj.balance);
-              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
-              const totalCost = unitPrice * fallbackCodes.length;
-
-              if (currentBalance < totalCost) {
-                await t.rollback();
-                await bot.sendMessage(
-                  userId,
-                  await getText(userId, 'insufficientBalance', {
-                    balance: currentBalance.toFixed(2),
-                    price: unitPrice.toFixed(2),
-                    needed: totalCost.toFixed(2)
-                  }),
-                  {
-                    reply_markup: {
-                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-                    }
-                  }
-                );
-              } else {
-                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
-                await BalanceTransaction.create({
-                  userId,
-                  amount: -totalCost,
-                  type: 'purchase',
-                  status: 'completed'
-                }, { transaction: t });
-                await t.commit();
-
-                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}\n${c.extra}` : c.value);
-                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-                await sendPurchaseDeliveryMessage(
-                  userId,
-                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
-                  {
-                    continueCallback: 'chatgpt_code',
-                    totalCost,
-                    newBalance: currentBalance - totalCost,
-                    quantity: deliveredCodes.length
-                  }
-                );
-
-                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
-                await sendAdminCodeActionNotice(userId, {
-                  sourceKey: 'balance',
-                  serviceType: 'ChatGPT GO',
-                  codesCount: deliveredCodes.length,
-                  remainingStockText: String(remainingFallback)
-                });
-              }
-            } catch (err) {
-              await t.rollback().catch(() => {});
-              console.error('chatgpt referral fallback error:', err);
-              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-            }
-          } else {
-            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-          }
-        } else {
-          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
-        }
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text)) {
-      await processAssistantMessageTurn(userId, String(text).trim(), {
-        action: 'ai_assistant',
-        history: [],
-        focusMerchantId: null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-      return;
-    }
 
   } catch (err) {
     console.error('Message handler error:', err);
