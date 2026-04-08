@@ -1174,7 +1174,10 @@ function shouldAutoDeleteIncomingMessage(msg, state, admin = false) {
   if (admin) return false;
   if (!msg || msg.chat?.type !== 'private') return false;
   if (msg.forward_from_chat) return false;
-  if (!state?.action) return false;
+
+  // Auto-delete is opt-in only so normal purchase, deposit, support,
+  // and redemption replies never disappear unexpectedly.
+  if (!state?.action || state.autoDeleteIncoming !== true) return false;
 
   const textValue = String(msg.text || '').trim();
   if (textValue.startsWith('/')) return false;
@@ -7862,6 +7865,528 @@ bot.on('message', async msg => {
         });
         return;
       }
+    }
+
+    if (state?.action === 'discount') {
+      const discountCode = String(text || '').trim();
+      const discount = await DiscountCode.findOne({ where: { code: discountCode } });
+      if (discount && (!discount.validUntil || discount.validUntil > new Date()) && discount.usedCount < discount.maxUses) {
+        await bot.sendMessage(userId, await getText(userId, 'discountApplied', { percent: discount.discountPercent }));
+        await setUserState(userId, { action: 'discount_ready', discountCode });
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'discountInvalid'));
+        await clearUserState(userId);
+      }
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'buy') {
+      const qty = parseInt(text, 10);
+      if (Number.isNaN(qty) || qty <= 0) {
+        await bot.sendMessage(userId, await getText(userId, 'invalidPurchaseQuantity'), {
+          reply_markup: {
+            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+          }
+        });
+        return;
+      }
+      const merchant = await Merchant.findByPk(state.merchantId);
+      if (!merchant) {
+        await bot.sendMessage(userId, 'Merchant not found');
+        return;
+      }
+      const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+      if (qty > available) {
+        const backTarget = isDigitalSectionCategory(merchant.category) ? `digital_product_${merchant.id}` : 'buy';
+        await bot.sendMessage(userId, `${await getText(userId, 'noCodes')}
+${await getText(userId, 'remainingStockLine', { stock: available })}`, {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, backTarget)
+        });
+        return;
+      }
+      const result = await processPurchase(userId, merchant.id, qty, state.discountCode || null);
+      if (result.success) {
+        let msgText = await getText(userId, 'success');
+        if (result.discountApplied) msgText += `
+${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
+        const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
+        msgText += `
+
+${deliveryHtml}`;
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
+          merchant,
+          totalCost: result.totalCost,
+          newBalance: result.newBalance,
+          quantity: qty
+        });
+
+        const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'balance',
+          serviceType: `${merchant.nameAr || merchant.nameEn}`,
+          codesCount: qty,
+          remainingStockText: String(remainingMerchantStock)
+        });
+
+        const userObj = await User.findByPk(userId);
+        if (userObj.referredBy) {
+          const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
+          const rewardAmount = Number(result.totalCost || (merchant.price * qty)) * referralPercent / 100;
+          const referrer = await User.findByPk(userObj.referredBy);
+          if (referrer) {
+            await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
+            await User.update({ balance: parseFloat(referrer.balance) + rewardAmount }, { where: { id: referrer.id } });
+            await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
+          }
+        }
+      } else if (result.reason === 'Insufficient balance') {
+        await bot.sendMessage(
+          userId,
+          await getText(userId, 'insufficientBalance', {
+            balance: Number(result.balance || 0).toFixed(2),
+            price: Number(result.price || merchant.price || 0).toFixed(2),
+            needed: Number(result.totalCost || 0).toFixed(2)
+          }),
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+            }
+          }
+        );
+      } else {
+        const reasonText = String(result.reason || '').toLowerCase();
+        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
+          const fallbackMerchant = await getReferralStockMerchant();
+          const fallbackCodes = await Code.findAll({
+            where: { merchantId: fallbackMerchant.id, isUsed: false },
+            limit: qty,
+            order: [['id', 'ASC']]
+          });
+
+          if (fallbackCodes.length > 0) {
+            const t = await sequelize.transaction();
+            try {
+              await Code.update(
+                { isUsed: true, usedBy: userId, soldAt: new Date() },
+                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
+              );
+
+              const merchant = await getOrCreateChatGptMerchant();
+              const userObj = await User.findByPk(userId, { transaction: t });
+              const currentBalance = parseFloat(userObj.balance);
+              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
+              const totalCost = unitPrice * fallbackCodes.length;
+
+              if (currentBalance < totalCost) {
+                await t.rollback();
+                await bot.sendMessage(
+                  userId,
+                  await getText(userId, 'insufficientBalance', {
+                    balance: currentBalance.toFixed(2),
+                    price: unitPrice.toFixed(2),
+                    needed: totalCost.toFixed(2)
+                  }),
+                  {
+                    reply_markup: {
+                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+                    }
+                  }
+                );
+              } else {
+                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
+                await BalanceTransaction.create({
+                  userId,
+                  amount: -totalCost,
+                  type: 'purchase',
+                  status: 'completed'
+                }, { transaction: t });
+                await t.commit();
+
+                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}
+${c.extra}` : c.value);
+                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+                await sendPurchaseDeliveryMessage(
+                  userId,
+                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
+                  {
+                    continueCallback: 'chatgpt_code',
+                    totalCost,
+                    newBalance: currentBalance - totalCost,
+                    quantity: deliveredCodes.length
+                  }
+                );
+
+                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
+                await sendAdminCodeActionNotice(userId, {
+                  sourceKey: 'balance',
+                  serviceType: 'ChatGPT GO',
+                  codesCount: deliveredCodes.length,
+                  remainingStockText: String(remainingFallback)
+                });
+              }
+            } catch (err) {
+              await t.rollback().catch(() => {});
+              console.error('chatgpt referral fallback error:', err);
+              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+            }
+          } else {
+            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+          }
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'deposit_amount') {
+      const amount = parseFloat(text);
+      if (Number.isNaN(amount) || amount <= 0) {
+        await bot.sendMessage(userId, await getText(userId, 'enterDepositAmount'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'deposit')
+        });
+        return;
+      }
+      await showPaymentMethodsForDeposit(userId, amount, state.currency);
+      return;
+    }
+
+    if (state?.action === 'deposit_awaiting_proof') {
+      const imageFileId = photo ? photo[photo.length - 1].file_id : null;
+      const caption = String(msg.caption || text || '').trim();
+      if (!imageFileId) return;
+      await requestDeposit(userId, state.amount, state.currency, caption, imageFileId, msg.from || null);
+      await bot.sendMessage(userId, await getText(userId, 'depositProofReceived'));
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'binance_auto_session') {
+      const rawInput = String(text || '').trim();
+      if (!rawInput) {
+        await bot.sendMessage(userId, user.lang === 'ar'
+          ? '❌ أرسل رقم الملاحظة فقط.'
+          : '❌ Send the note number only.');
+        return;
+      }
+
+      await processBinanceAutoVerification(userId, state, { rawInput });
+      return;
+    }
+
+    if (state?.action === 'redeem_via_service') {
+      const service = await RedeemService.findByPk(state.serviceId);
+      if (!service) {
+        await bot.sendMessage(userId, 'Service not found');
+        await clearUserState(userId);
+        await sendMainMenu(userId);
+        return;
+      }
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await redeemCard(String(text || '').trim(), service.merchantDictId, service.platformId);
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+      if (result.success) {
+        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', { details: formatCardDetails(result.data) }));
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'redeem_smart') {
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await redeemCardSmart(String(text || '').trim());
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+      if (result.success) {
+        const serviceName = result.service ? `${result.service.nameEn} / ${result.service.nameAr}` : 'Auto';
+        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', {
+          details: `${formatCardDetails(result.data)}
+
+🏪 Selected Service: ${serviceName}`
+        }));
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'redeem_points_amount') {
+      const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
+      const requestedCodes = parseInt(String(text || '').trim(), 10);
+
+      if (Number.isNaN(requestedCodes) || requestedCodes <= 0) {
+        await bot.sendMessage(userId, await getText(userId, 'redeemPointsInvalidAmount', { requiredPoints }));
+        return;
+      }
+
+      const freshUser = await User.findByPk(userId);
+      const neededPoints = requestedCodes * requiredPoints;
+      if (Number(freshUser.referralPoints || 0) < neededPoints) {
+        await bot.sendMessage(userId, await getText(userId, 'notEnoughPoints', { points: freshUser.referralPoints, requiredPoints }));
+        await clearUserState(userId);
+        return;
+      }
+
+      const quantity = requestedCodes;
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity });
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (result.success) {
+        const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
+        freshUser.referralPoints = Math.max(0, Number(freshUser.referralPoints || 0) - usedPoints);
+        await freshUser.save();
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+          usedPoints,
+          remainingStockText: 'من الموقع'
+        });
+      } else {
+        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+      }
+
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'chatgpt_buy_quantity') {
+      const qty = parseInt(text, 10);
+      if (Number.isNaN(qty) || qty <= 0 || qty > 70) {
+        await bot.sendMessage(userId, await getText(userId, 'invalidQuantity'), {
+          reply_markup: {
+            inline_keyboard: [[{ text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }]]
+          }
+        });
+        return;
+      }
+
+      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+      let result = await processAutoChatGptCode(userId, { isFree: false, quantity: qty });
+      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
+
+      if (result.success) {
+        let successText = await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(result.codes) });
+        if (result.partial) {
+          successText += `
+
+⚠️ Requested: ${result.requestedQuantity} | Delivered: ${result.quantity}`;
+        }
+        const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+        await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${successText}`, {
+          continueCallback: 'chatgpt_code',
+          totalCost: result.totalCost,
+          newBalance: result.newBalance,
+          quantity: result.quantity
+        });
+        await sendAdminCodeActionNotice(userId, {
+          sourceKey: 'balance',
+          serviceType: 'ChatGPT GO',
+          codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+          remainingStockText: 'من الموقع'
+        });
+      } else if (result.reason === 'INSUFFICIENT_BALANCE') {
+        const freshUser = await User.findByPk(userId);
+        const requiredPoints = await getEffectiveRedeemPointsForUser(userId);
+        const neededPoints = qty * requiredPoints;
+
+        if (Number(freshUser?.referralPoints || 0) >= neededPoints) {
+          const waitingPointsMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
+          result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: true, quantity: qty });
+          await bot.deleteMessage(userId, waitingPointsMsg.message_id).catch(() => {});
+
+          if (result.success) {
+            const usedPoints = (parseInt(result.quantity, 10) || 0) * requiredPoints;
+            freshUser.referralPoints = Math.max(0, Number(freshUser.referralPoints || 0) - usedPoints);
+            await freshUser.save();
+
+            let successText = await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) });
+            if (result.partial) {
+              successText += `
+
+⚠️ Requested: ${qty} | Delivered: ${result.quantity}`;
+            }
+            const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+            await bot.sendMessage(userId, `${deliveryPrefix}${successText}`, { parse_mode: 'HTML' });
+            await sendAdminCodeActionNotice(userId, {
+              sourceKey: Number(freshUser.adminGrantedPoints || 0) >= usedPoints ? 'admin_points' : 'points',
+              serviceType: 'ChatGPT GO',
+              codesCount: Array.isArray(result.codes) ? result.codes.length : result.quantity,
+              usedPoints,
+              remainingStockText: 'من الموقع'
+            });
+          } else {
+            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+          }
+        } else {
+          await bot.sendMessage(
+            userId,
+            await getText(userId, 'insufficientBalance', {
+              balance: result.balance,
+              price: result.price,
+              needed: result.totalCost
+            }),
+            {
+              reply_markup: {
+                inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+              }
+            }
+          );
+        }
+      } else {
+        const reasonText = String(result.reason || '').toLowerCase();
+        if (reasonText.includes('no hay códigos disponibles') || reasonText.includes('no codes available')) {
+          const fallbackMerchant = await getReferralStockMerchant();
+          const fallbackCodes = await Code.findAll({
+            where: { merchantId: fallbackMerchant.id, isUsed: false },
+            limit: qty,
+            order: [['id', 'ASC']]
+          });
+
+          if (fallbackCodes.length > 0) {
+            const t = await sequelize.transaction();
+            try {
+              await Code.update(
+                { isUsed: true, usedBy: userId, soldAt: new Date() },
+                { where: { id: fallbackCodes.map(c => c.id) }, transaction: t }
+              );
+
+              const merchant = await getOrCreateChatGptMerchant();
+              const userObj = await User.findByPk(userId, { transaction: t });
+              const currentBalance = parseFloat(userObj.balance);
+              const unitPrice = await getChatGptUnitPrice(fallbackCodes.length);
+              const totalCost = unitPrice * fallbackCodes.length;
+
+              if (currentBalance < totalCost) {
+                await t.rollback();
+                await bot.sendMessage(
+                  userId,
+                  await getText(userId, 'insufficientBalance', {
+                    balance: currentBalance.toFixed(2),
+                    price: unitPrice.toFixed(2),
+                    needed: totalCost.toFixed(2)
+                  }),
+                  {
+                    reply_markup: {
+                      inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
+                    }
+                  }
+                );
+              } else {
+                await User.update({ balance: currentBalance - totalCost }, { where: { id: userId }, transaction: t });
+                await BalanceTransaction.create({
+                  userId,
+                  amount: -totalCost,
+                  type: 'purchase',
+                  status: 'completed'
+                }, { transaction: t });
+                await t.commit();
+
+                const deliveredCodes = fallbackCodes.map(c => c.extra ? `${c.value}
+${c.extra}` : c.value);
+                const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+                await sendPurchaseDeliveryMessage(
+                  userId,
+                  `${deliveryPrefix}${await getText(userId, 'purchaseSuccess', { code: formatCodesForHtml(deliveredCodes) })}`,
+                  {
+                    continueCallback: 'chatgpt_code',
+                    totalCost,
+                    newBalance: currentBalance - totalCost,
+                    quantity: deliveredCodes.length
+                  }
+                );
+
+                const remainingFallback = await Code.count({ where: { merchantId: fallbackMerchant.id, isUsed: false } });
+                await sendAdminCodeActionNotice(userId, {
+                  sourceKey: 'balance',
+                  serviceType: 'ChatGPT GO',
+                  codesCount: deliveredCodes.length,
+                  remainingStockText: String(remainingFallback)
+                });
+              }
+            } catch (err) {
+              await t.rollback().catch(() => {});
+              console.error('chatgpt referral fallback error:', err);
+              await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+            }
+          } else {
+            await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+          }
+        } else {
+          await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        }
+      }
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
+    }
+
+    if (state?.action === 'claim_referral_stock') {
+      const result = await claimReferralStockCodes(userId, text);
+      if (!result.success) {
+        if (result.reason === 'invalid_count') {
+          await bot.sendMessage(userId, await getText(userId, 'referralClaimAskCount', { maxCodes: result.maxCodes || 0 }));
+        } else if (result.reason === 'not_enough_stock') {
+          await bot.sendMessage(userId, await getText(userId, 'referralStockNotEnough'));
+          await clearUserState(userId);
+        } else if (result.reason === 'no_referrals') {
+          await bot.sendMessage(userId, await getText(userId, 'referralStockAccessDenied'));
+          await clearUserState(userId);
+        } else {
+          await bot.sendMessage(userId, await getText(userId, 'error'));
+        }
+        return;
+      }
+      const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
+      await bot.sendMessage(userId, `${deliveryPrefix}${await getText(userId, 'pointsRedeemed', { code: formatCodesForHtml(result.codes) })}`, { parse_mode: 'HTML' });
+
+      const identity = await getTelegramIdentityById(userId);
+      await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'referralClaimAdminNotice', {
+        name: identity.fullName,
+        username: identity.usernameText,
+        id: userId,
+        claimedNow: result.count,
+        claimedBefore: result.claimedBefore,
+        claimedAfter: result.claimedAfter,
+        eligibleNow: result.eligibleNow,
+        points: result.points,
+        adminGranted: result.adminGranted,
+        referrals: result.referralCount,
+        milestoneRewards: result.milestoneRewards
+      })).catch(() => {});
+
+      await bot.sendMessage(ADMIN_ID, await getText(ADMIN_ID, 'stockClaimAdminShort', {
+        name: identity.fullName,
+        username: identity.usernameText,
+        id: userId,
+        count: result.count
+      })).catch(() => {});
+
+      const referralMerchant = await getReferralStockMerchant();
+      const referralRemaining = await Code.count({ where: { merchantId: referralMerchant.id, isUsed: false } });
+      await sendAdminCodeActionNotice(userId, {
+        sourceKey: 'referral_stock',
+        serviceType: 'جائزة الإحالات',
+        codesCount: result.count,
+        remainingStockText: String(referralRemaining)
+      });
+
+      await clearUserState(userId);
+      await sendMainMenu(userId);
+      return;
     }
 
     if (state && isAdmin(userId)) {
