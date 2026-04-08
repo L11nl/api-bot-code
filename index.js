@@ -1678,8 +1678,18 @@ async function importReferralStockCodesFromPrivateChannel() {
   }
 
   const merchant = await getReferralStockMerchant();
+  const existingRows = await Code.findAll({
+    where: { merchantId: merchant.id },
+    attributes: ['value']
+  });
+  const existingCodes = new Set(
+    existingRows
+      .map(row => normalizeChatGptUpCode(row.value))
+      .filter(Boolean)
+  );
   const toCreate = [];
   const perPostImported = new Map();
+  let skippedDuplicates = 0;
 
   for (const post of cachedPosts) {
     const extracted = Array.isArray(post.extractedCodes) && post.extractedCodes.length ? post.extractedCodes : extractChatGptUpCodes(post.content || '');
@@ -1688,7 +1698,12 @@ async function importReferralStockCodesFromPrivateChannel() {
     for (const code of extracted) {
       const normalized = normalizeChatGptUpCode(code);
       if (!normalized) continue;
+      if (existingCodes.has(normalized)) {
+        skippedDuplicates += 1;
+        continue;
+      }
 
+      existingCodes.add(normalized);
       toCreate.push({ value: normalized, merchantId: merchant.id, isUsed: false });
       addedForPost += 1;
     }
@@ -1699,7 +1714,7 @@ async function importReferralStockCodesFromPrivateChannel() {
   }
 
   if (!toCreate.length) {
-    return { success: false, reason: 'no_codes', posts: cachedPosts.length, duplicates: 0 };
+    return { success: false, reason: 'no_codes', posts: cachedPosts.length, duplicates: skippedDuplicates };
   }
 
   await Code.bulkCreate(toCreate);
@@ -2837,6 +2852,7 @@ async function forwardSupportMessageToAdmin(userId, msg) {
   const supportText = String(msg.text || msg.caption || '').trim();
   const photoFileId = msg.photo ? msg.photo[msg.photo.length - 1].file_id : null;
   const videoFileId = msg.video ? msg.video.file_id : null;
+  const documentFileId = msg.document ? msg.document.file_id : null;
   const notifText = await getText(ADMIN_ID, 'supportThreadAdminNotice', {
     userId,
     username: msg.from?.username ? `@${msg.from.username}` : 'لا يوجد',
@@ -2849,6 +2865,8 @@ async function forwardSupportMessageToAdmin(userId, msg) {
     await bot.sendPhoto(ADMIN_ID, photoFileId, { caption: notifText, reply_markup: replyMarkup });
   } else if (videoFileId) {
     await bot.sendVideo(ADMIN_ID, videoFileId, { caption: notifText, reply_markup: replyMarkup });
+  } else if (documentFileId) {
+    await bot.sendDocument(ADMIN_ID, documentFileId, { caption: notifText, reply_markup: replyMarkup });
   } else {
     await bot.sendMessage(ADMIN_ID, notifText, { reply_markup: replyMarkup });
   }
@@ -7753,6 +7771,7 @@ bot.on('message', async msg => {
   const text = msg.text;
   const photo = msg.photo;
   const video = msg.video;
+  const document = msg.document;
 
   try {
     const user = await User.findByPk(userId);
@@ -7823,6 +7842,24 @@ bot.on('message', async msg => {
         }
         await Captcha.destroy({ where: { userId } });
         await sendJoinChannelMessage(userId);
+        return;
+      }
+    }
+
+    if (!isAdmin(userId) && await isSupportThreadOpen(userId)) {
+      const hasSupportPayload = Boolean(
+        (typeof text === 'string' && text.trim())
+        || photo
+        || video
+        || document
+      );
+      const isCommandMessage = typeof text === 'string' && text.trim().startsWith('/');
+
+      if (hasSupportPayload && !isCommandMessage) {
+        await forwardSupportMessageToAdmin(userId, msg);
+        await bot.sendMessage(userId, await getText(userId, 'supportMessageSent'), {
+          reply_markup: await getSupportUserCloseReplyMarkup(userId)
+        });
         return;
       }
     }
@@ -8003,13 +8040,29 @@ bot.on('message', async msg => {
       const targetUserId = state.targetUserId;
       const replyMsg = text || '';
       let fileId = null;
-      if (photo) fileId = photo[photo.length - 1].file_id;
-      else if (video) fileId = video.file_id;
+      let fileType = null;
+      if (photo) {
+        fileId = photo[photo.length - 1].file_id;
+        fileType = 'photo';
+      } else if (video) {
+        fileId = video.file_id;
+        fileType = 'video';
+      } else if (document) {
+        fileId = document.file_id;
+        fileType = 'document';
+      }
 
-      const supportReplyText = `${await getText(targetUserId, 'replyMessage')}\n\n${replyMsg}`;
+      const supportReplyText = `${await getText(targetUserId, 'replyMessage')}
+
+${replyMsg}`;
       if (fileId) {
-        if (photo) await bot.sendPhoto(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
-        else await bot.sendVideo(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
+        if (fileType === 'photo') {
+          await bot.sendPhoto(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
+        } else if (fileType === 'video') {
+          await bot.sendVideo(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
+        } else {
+          await bot.sendDocument(targetUserId, fileId, { caption: supportReplyText, reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
+        }
       } else {
         await bot.sendMessage(targetUserId, supportReplyText, { reply_markup: await getSupportUserCloseReplyMarkup(targetUserId) });
       }
