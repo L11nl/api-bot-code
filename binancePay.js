@@ -20,21 +20,24 @@ function getTransactionAmount(tx) { return parseFloat(tx?.amount || 0); }
 function getTransactionTime(tx) { return Number(tx?.transactionTime || 0); }
 
 async function verifyBinanceTransfer(params) {
-  console.log("==================================================");
-  console.log("🚀 تنبيه: البوت بدأ الآن محاولة الاتصال بالوسيط Render...");
+  console.log("🚀 جاري إرسال الطلب والمفاتيح إلى الوسيط Render...");
   
+  // 🔥 هذا هو الحل: سحب المفاتيح من ريلوي وإضافتها للطلب لكي لا تصل فارغة
+  const payload = {
+    ...params,
+    apiKey: process.env.BINANCE_PAY_API_KEY || process.env.BINANCE_API_KEY,
+    apiSecret: process.env.BINANCE_PAY_SECRET_KEY || process.env.BINANCE_SECRET_KEY
+  };
+
   try {
-    const response = await axios.post(PROXY_URL, params, {
+    const response = await axios.post(PROXY_URL, payload, {
       headers: { 'x-proxy-secret': PROXY_SECRET },
       timeout: 25000
     });
-    console.log("✅ ممتاز! وصل رد من الوسيط:", JSON.stringify(response.data));
-    console.log("==================================================");
+    console.log("✅ رد الوسيط:", JSON.stringify(response.data));
     return response.data;
   } catch (error) {
-    console.log("❌ حدث خطأ أثناء الاتصال بالوسيط!");
-    console.error("السبب:", error.message);
-    console.log("==================================================");
+    console.log("❌ خطأ في الاتصال:", error.message);
     return { success: false, reason: 'api_error' };
   }
 }
