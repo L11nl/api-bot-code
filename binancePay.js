@@ -1,8 +1,6 @@
 const axios = require('axios');
 
-// هذا هو رابط سيرفرك الجديد الذي صنعناه قبل قليل
 const PROXY_URL = "https://ok-bainac.onrender.com/verify-binance"; 
-
 const PROXY_SECRET = "123456789_my_secret_password";
 
 function generateDepositNote(prefix = 'TOOLS-') {
@@ -33,7 +31,6 @@ async function verifyBinanceTransfer(params) {
       },
       timeout: 25000
     });
-    
     return response.data;
   } catch (error) {
     console.error("Proxy Connection Error:", error.message);
