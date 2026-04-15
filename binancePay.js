@@ -11,7 +11,6 @@ function generateDepositNote(prefix = 'TOOLS-') {
   return `${normalizedPrefix}${suffix}`;
 }
 
-// دوال مساعدة تم تبسيطها للحفاظ على توافق التصدير (module.exports)
 function normalizeOrderId(value) { return String(value || '').trim(); }
 function normalizeNote(value) { return String(value || '').trim(); }
 function looksLikeOrderId(value) { return /^\d{11,}$/.test(String(value || '').trim()); }
@@ -23,28 +22,33 @@ function getTransactionAmount(transaction) { return parseFloat(transaction?.amou
 function getTransactionTime(transaction) { return Number(transaction?.transactionTime || 0); }
 
 // ==========================================
-// دالة الاتصال بـ Binance API (تطابق البايثون)
+// دالة الاتصال بـ Binance API (مع حل مشكلة التوقيت)
 // ==========================================
 async function getBinanceTransactions(apiKey, apiSecret) {
+  if (!apiKey || !apiSecret) return null;
+
   const url = "https://api.binance.com/sapi/v1/pay/transactions";
   const timestamp = Date.now();
   
-  const queryString = `timestamp=${timestamp}`;
+  // أضفنا recvWindow=60000 لتوسيع نافذة الوقت المسموح بها لتجنب أخطاء سيرفر Railway
+  const queryString = `recvWindow=60000&timestamp=${timestamp}`;
   const signature = crypto.createHmac('sha256', String(apiSecret)).update(queryString).digest('hex');
 
   try {
     const response = await axios.get(`${url}?${queryString}&signature=${signature}`, {
-      headers: { 'X-MBX-APIKEY': String(apiKey) }
+      headers: { 'X-MBX-APIKEY': String(apiKey) },
+      timeout: 15000 // إضافة مهلة محددة لتجنب تعليق الطلب
     });
     return response.data;
   } catch (error) {
-    console.error("Binance API Error:", error?.response?.data || error?.message);
+    // سيتم طباعة سبب الخطأ الحقيقي في سجلات Railway (Logs) إذا حدث
+    console.error("Binance API Error Details:", error?.response?.data || error?.message);
     return null;
   }
 }
 
 // ==========================================
-// دالة التحقق الرئيسية (نفس منطق البايثون بالضبط)
+// دالة التحقق الرئيسية 
 // ==========================================
 async function verifyBinanceTransfer({
   apiKey,
@@ -83,7 +87,7 @@ async function verifyBinanceTransfer({
     // لم يتم العثور على المطابقة أو المبلغ غير كافٍ
     return { success: false, reason: 'not_found' };
   } else {
-    // مشكلة في الاتصال بخوادم باينانس
+    // إذا رجعت getBinanceTransactions بـ null (بسبب خطأ في API)
     return { success: false, reason: 'api_error' };
   }
 }
