@@ -316,7 +316,7 @@ const DEFAULT_TEXTS = {
     manageDepositOptions: '🧩 Manage Deposit Options',
     depositOptionIQD: 'Iraqi Dinar button',
     depositOptionUSD: 'USD button',
-    depositOptionBinanceAuto: 'Binance (Auto) button',
+    depositOptionBinanceAuto: 'Binance Auto button',
     depositOptionsUpdated: '✅ Deposit options visibility updated!',
     referralSettings: '👥 Referral Settings',
     manageRedeemServices: '🔄 Manage Redeem Services',
@@ -682,7 +682,7 @@ const DEFAULT_TEXTS = {
     manageDepositOptions: '🧩 إدارة ظهور طرق الدفع',
     depositOptionIQD: 'زر الدينار العراقي',
     depositOptionUSD: 'زر الدولار USD',
-    depositOptionBinanceAuto: 'زر Binance (Auto)',
+    depositOptionBinanceAuto: 'زر Binance Auto',
     depositOptionsUpdated: '✅ تم تحديث ظهور طرق الدفع!',
     referralSettings: '👥 إعدادات الإحالة',
     manageRedeemServices: '🔄 إدارة خدمات الاسترداد',
@@ -1285,59 +1285,37 @@ Object.assign(DEFAULT_TEXTS.ar, {
 });
 
 Object.assign(DEFAULT_TEXTS.en, {
-  binanceTransferTitle: '⚡ Binance (USDT)',
+  binanceTransferTitle: '⚡ Binance (Auto)',
   binanceTransferNotConfigured: '⚠️ Binance transfer verification is not configured yet. Please set BINANCE_API_KEY, BINANCE_API_SECRET and BINANCE_PAY_ID.',
-  binanceTransferInstructions: `✅ <b>Order created.</b>
-
-💰 <b>Send:</b> <b>{amount} USDT</b>
-
-🆔 <b>To Binance ID</b>
-
-<code>{payId}</code>
-
-⚠️ <b>Very important for payment confirmation:</b>
-
-You must write this code:
-
-<code>{note}</code>
-
-in the payment note field (Note) when sending.`,
-    binanceTransferSendOrderIdHint: 'Send the Order ID only here. This message is for admin only.',
+  binanceTransferInstructions: '✅ <b>Order created.</b>\n\n💰 <b>Send:</b> <b>{amount} USDT</b>\n\n🆔 <b>To Binance ID</b>\n\n<code>{payId}</code>\n\n⚠️ <b>Important for payment confirmation:</b>\n\nYou must write this code:\n\n<code>{note}</code>\n\nin the payment note field (Note).',
+  binanceTransferCheckButton: '🧾 Verify via Order ID',
+  binanceTransferSendOrderIdHint: 'Send the Order ID here only.',
   binanceTransferChecking: '⏳ Checking your payment in Binance, please wait a few seconds...',
   binanceTransferVerified: '🎉 <b>Payment verified successfully!</b>\n✅ <b>{amount} USDT</b> has been added to your balance.\n\n💰 New balance: <b>{balance} USD</b>',
   binanceTransferNotFound: '❌ No matching payment was found yet, or the amount does not match.\nIf you just paid, please wait one minute and try again.',
   binanceTransferDuplicate: '❌ Sorry, this Order ID has already been used before.',
+  binanceTransferOrderIdExpired: '⌛ This Order ID has expired. Only transfers from the last hour can be verified.',
+  binanceTransferManualPrompt: 'Send the Order ID here:',
   binanceTransferNoPending: '❌ You do not have a pending Binance deposit request. Start a new deposit first.',
-  binanceTransferHelp: 'ℹ️ Wait for automatic verification after payment. If needed, the admin can check the Order ID manually.',
-  binanceTransferCheckByNotePending: '⏳ I checked using the note code, but the payment has not appeared yet. If you already paid, wait a minute and then send the Order ID here.'
+  binanceTransferHelp: 'ℹ️ Use the button below if you want to verify via Order ID.',
+  binanceTransferCheckByNotePending: '⏳ Payment not found yet. If you paid recently, wait a little and try again using the Order ID button.'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
-  binanceTransferTitle: '⚡ بايننس (USDT)',
+  binanceTransferTitle: '⚡ Binance (Auto)',
   binanceTransferNotConfigured: '⚠️ التحقق من تحويلات بايننس غير مهيأ بعد. يرجى ضبط BINANCE_API_KEY و BINANCE_API_SECRET و BINANCE_PAY_ID.',
-  binanceTransferInstructions: `✅ <b>تم إنشاء الطلب.</b>
-
-💰 <b>قم بأرسال :</b> <b>{amount} USDT</b>
-
-🆔 <b>إلى معرف بايننس</b>
-
-<code>{payId}</code>
-
-⚠️ <b>هام جدًا لتأكيد الدفع:</b>
-
-يجب عليك كتابة هذا الكود:
-
-<code>{note}</code>
-
-في خانة الملاحظات (Note) عند التحويل.`,
-    binanceTransferSendOrderIdHint: 'أرسل معرف الطلب (Order ID) فقط هنا. هذه الرسالة مخصصة للأدمن فقط.',
+  binanceTransferInstructions: '✅ <b>تم إنشاء الطلب.</b>\n\n💰 <b>قم بأرسال :</b> <b>{amount} USDT</b>\n\n🆔 <b>إلى معرف بايننس</b>\n\n<code>{payId}</code>\n\n⚠️ <b>هام جدًا لتأكيد الدفع:</b>\n\nيجب عليك كتابة هذا الكود:\n\n<code>{note}</code>\n\nفي خانة الملاحظات (Note) عند التحويل.',
+  binanceTransferCheckButton: '🧾 التحقق عبر معرف الطلب',
+  binanceTransferSendOrderIdHint: 'قم بأرسال معرف الطلب هنا:',
   binanceTransferChecking: '⏳ جاري التحقق من دفعتك في بايننس، يرجى الانتظار بضع ثوانٍ...',
   binanceTransferVerified: '🎉 <b>تم التحقق من الدفع بنجاح!</b>\n✅ تمت إضافة <b>{amount} USDT</b> إلى رصيدك.\n\n💰 رصيدك الجديد: <b>{balance} USD</b>',
   binanceTransferNotFound: '❌ لم يتم العثور على حوالة مطابقة حتى الآن أو أن المبلغ غير مطابق.\nإذا قمت بالدفع للتو، يرجى الانتظار دقيقة واحدة ثم المحاولة مرة أخرى.',
   binanceTransferDuplicate: '❌ عذرًا، هذا المعرف تم استخدامه من قبل.',
+  binanceTransferOrderIdExpired: '⌛ انتهت صلاحية معرف الطلب هذا. يمكن التحقق فقط من الحوالات التي مر عليها أقل من ساعة.',
+  binanceTransferManualPrompt: 'قم بأرسال معرف الطلب هنا:',
   binanceTransferNoPending: '❌ ليس لديك طلب إيداع بايننس قيد الانتظار. ابدأ طلب شحن جديد أولاً.',
-  binanceTransferHelp: 'ℹ️ انتظر التحقق التلقائي بعد الدفع. عند الحاجة فقط، يمكن للأدمن التحقق يدويًا عبر معرف الطلب.',
-  binanceTransferCheckByNotePending: '⏳ تم التحقق باستخدام كود الملاحظة، لكن الحوالة لم تظهر بعد. إذا كنت قد دفعت بالفعل، انتظر دقيقة ثم أرسل معرف الطلب هنا.'
+  binanceTransferHelp: 'ℹ️ استخدم الزر أدناه إذا أردت التحقق عبر معرف الطلب.',
+  binanceTransferCheckByNotePending: '⏳ لم تظهر الحوالة بعد. إذا دفعت قبل قليل، انتظر قليلًا ثم جرّب عبر زر معرف الطلب.'
 });
 
 function isAdmin(userId) {
@@ -5331,12 +5309,12 @@ async function showCurrencyOptions(userId) {
   const lang = user?.lang || 'en';
   const visibility = await getDepositOptionVisibility();
   const rows = [];
-  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance (Auto)', callback_data: 'deposit_binance_auto' }]);
+  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance (USDT)', callback_data: 'deposit_binance_auto' }]);
   rows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
   const extraText = visibility.BINANCE_AUTO === false ? '' : (lang === 'ar'
-    ? '\n\nطريقة الشحن الحالية: ⚡ Binance (Auto)'
-    : '\n\nCurrent topup method: ⚡ Binance (Auto)');
+    ? '\n\nطريقة الشحن الحالية: ⚡ Binance (USDT)'
+    : '\n\nCurrent topup method: ⚡ Binance (USDT)');
 
   await bot.sendMessage(userId, `${await getText(userId, 'chooseCurrency')}${extraText}`, { reply_markup: { inline_keyboard: rows } });
 }
@@ -5360,6 +5338,7 @@ async function showBinanceAutoAmountOptions(userId) {
 async function getBinanceTransferReplyMarkup(userId) {
   return {
     inline_keyboard: [
+      [{ text: await getText(userId, 'binanceTransferCheckButton'), callback_data: 'binance_transfer_prompt_order_id' }],
       [
         { text: await getText(userId, 'back'), callback_data: 'deposit_binance_auto' },
         { text: await getText(userId, 'cancel'), callback_data: 'cancel_action' }
@@ -7181,12 +7160,24 @@ async function getOrCreateBinanceTransferPaymentMethod(transaction = null) {
   }, { transaction });
 }
 
+async function reconcilePendingBinanceTransferOrders() {
+  const users = await User.findAll({ where: { state: { [Op.like]: '%binance_transfer_pending%' } }, attributes: ['id', 'state'] }).catch(() => []);
+  for (const user of users || []) {
+    const state = safeParseState(user.state);
+    if (state?.action !== 'binance_transfer_pending') continue;
+    try {
+      await processBinanceAutoVerification(user.id, state, { rawInput: '', silent: true });
+    } catch (err) {
+      console.error(`Binance transfer reconcile error for user ${user.id}:`, err.message);
+    }
+  }
+}
+
 async function processBinanceAutoVerification(userId, state, options = {}) {
   const user = await User.findByPk(userId);
   if (!user) return { handled: false };
 
   const lang = user.lang === 'ar' ? 'ar' : 'en';
-  const silent = options?.silent === true;
   const expectedAmount = Number(state?.amount || 0);
   const note = String(state?.note || '').trim();
   const rawInput = String(options.rawInput || '').trim();
@@ -7194,7 +7185,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
 
   if (!Number.isFinite(expectedAmount) || expectedAmount <= 0 || !note) {
     await clearUserState(userId);
-    if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferNoPending'));
+    await bot.sendMessage(userId, await getText(userId, 'binanceTransferNoPending'));
     return { handled: true, success: false, reason: 'invalid_state' };
   }
 
@@ -7208,18 +7199,20 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
     });
 
     if (existing) {
-      if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferDuplicate'));
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferDuplicate'));
       return { handled: true, success: false, reason: 'duplicate_tx' };
     }
   }
 
   const credentials = await getBinanceCredentials();
   if (!credentials?.apiKey || !credentials?.apiSecret || !(state?.payId || credentials?.payId)) {
-    if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferNotConfigured'));
+    await bot.sendMessage(userId, await getText(userId, 'binanceTransferNotConfigured'));
     return { handled: true, success: false, reason: 'binance_not_configured' };
   }
 
-  if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferChecking'));
+  if (!options.silent) {
+    await bot.sendMessage(userId, await getText(userId, 'binanceTransferChecking'));
+  }
 
   const checkResult = await verifyBinanceTransfer({
     apiKey: credentials.apiKey,
@@ -7228,22 +7221,40 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
     expectedAmount,
     expectedNote: note,
     orderIdToCheck: normalizedInput || '',
-    sessionCreatedAt: state?.createdAt || null
+    sessionCreatedAt: state?.createdAt || null,
+    recentWindowMs: normalizedInput ? (60 * 60 * 1000) : undefined
   });
 
   if (!checkResult.success) {
+    if (options.silent) {
+      return { handled: true, success: false, reason: checkResult.reason || 'not_found' };
+    }
     if (checkResult.reason === 'api_error') {
-      if (!silent) await bot.sendMessage(userId, getBinanceVerificationFailureReason('api_error', lang));
+      await bot.sendMessage(userId, getBinanceVerificationFailureReason('api_error', lang));
+    } else if (checkResult.reason === 'expired_order_id') {
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferOrderIdExpired'), {
+        reply_markup: await getBinanceTransferReplyMarkup(userId)
+      });
     } else if (!normalizedInput) {
-      if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferCheckByNotePending'), {
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferCheckByNotePending'), {
         reply_markup: await getBinanceTransferReplyMarkup(userId)
       });
     } else {
-      if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferNotFound'), {
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferNotFound'), {
         reply_markup: await getBinanceTransferReplyMarkup(userId)
       });
     }
     return { handled: true, success: false, reason: checkResult.reason || 'not_found' };
+  }
+
+  if (normalizedInput) {
+    const ageMs = Math.max(0, Date.now() - Number(checkResult.transactionTime || 0));
+    if (!Number.isFinite(ageMs) || ageMs > (60 * 60 * 1000)) {
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferOrderIdExpired'), {
+        reply_markup: await getBinanceTransferReplyMarkup(userId)
+      });
+      return { handled: true, success: false, reason: 'expired_order_id' };
+    }
   }
 
   const matchedOrderId = normalizeBinanceTransferOrderId(checkResult.orderId || normalizedInput || '');
@@ -7264,7 +7275,7 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
 
     if (existingDeposit) {
       await t.rollback().catch(() => {});
-      if (!silent) await bot.sendMessage(userId, await getText(userId, 'binanceTransferDuplicate'));
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferDuplicate'));
       return { handled: true, success: false, reason: 'duplicate_tx' };
     }
 
@@ -7320,23 +7331,10 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
   } catch (err) {
     await t.rollback().catch(() => {});
     console.error('processBinanceAutoVerification transaction error:', err);
-    if (!silent) await bot.sendMessage(userId, lang === 'ar'
+    await bot.sendMessage(userId, lang === 'ar'
       ? '❌ حدث خطأ أثناء إضافة الرصيد. حاول مرة أخرى أو تواصل مع الدعم.'
       : '❌ An error occurred while adding the balance. Please try again or contact support.');
     return { handled: true, success: false, reason: 'db_error' };
-  }
-}
-
-async function reconcilePendingBinanceTransferOrders() {
-  const users = await User.findAll({ where: { state: { [Op.like]: '%binance_transfer_pending%' } } }).catch(() => []);
-  for (const user of users) {
-    const state = safeParseState(user.state);
-    if (state?.action !== 'binance_transfer_pending') continue;
-    try {
-      await processBinanceAutoVerification(user.id, state, { rawInput: '', silent: true });
-    } catch (err) {
-      console.error('reconcilePendingBinanceTransferOrders error:', err.message);
-    }
   }
 }
 
@@ -8775,6 +8773,20 @@ bot.on('callback_query', async query => {
       }
       await sendBinanceAutoInstructions(userId, amount);
       await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'binance_transfer_prompt_order_id') {
+      const currentState = safeParseState((await User.findByPk(userId)).state);
+      if (currentState?.action !== 'binance_transfer_pending') {
+        await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'binanceTransferNoPending') });
+        return;
+      }
+
+      currentState.awaitingManualOrderId = true;
+      await setUserState(userId, currentState);
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferManualPrompt'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -11652,22 +11664,18 @@ bot.on('message', async msg => {
       const trimmedText = String(text || '').trim();
       const claimMatch = trimmedText.match(/^\/claim(?:@\w+)?(?:\s+(.+))?$/i);
       const claimOrderId = claimMatch?.[1] ? claimMatch[1].trim() : '';
-      const isOrderIdInput = /^\/claim(?:@\w+)?(?:\s+.+)?$/i.test(trimmedText) || looksLikeBinanceTransferOrderId(trimmedText);
+      const providedOrderId = looksLikeBinanceTransferOrderId(claimOrderId)
+        ? claimOrderId
+        : (looksLikeBinanceTransferOrderId(trimmedText) ? trimmedText : '');
 
-      if (isOrderIdInput && !isAdmin(userId)) {
+      if (providedOrderId && state.awaitingManualOrderId) {
+        state.awaitingManualOrderId = false;
+        await setUserState(userId, state);
+        await processBinanceAutoVerification(userId, state, { rawInput: providedOrderId });
         return;
       }
 
-      const wantsCheck = isAdmin(userId) && (!trimmedText
-        || /^\/claim(?:@\w+)?(?:\s+.+)?$/i.test(trimmedText)
-        || looksLikeBinanceTransferOrderId(trimmedText)
-        || /(check|status|paid|done|verify|claim|تحقق|تحقق من الدفع|تم الدفع|دفعت|اكتمل|حالة الدفع|حاله الدفع)/i.test(trimmedText));
-
-      if (wantsCheck) {
-        const valueToCheck = looksLikeBinanceTransferOrderId(claimOrderId)
-          ? claimOrderId
-          : (looksLikeBinanceTransferOrderId(trimmedText) ? trimmedText : '');
-        await processBinanceAutoVerification(userId, state, { rawInput: valueToCheck });
+      if (providedOrderId) {
         return;
       }
 
@@ -12267,26 +12275,11 @@ bot.on('message', async msg => {
     }
 
     if ((!state?.action || state?.action !== 'binance_transfer_pending') && /^\/claim(?:@\w+)?(?:\s+.*)?$/i.test(String(text || '').trim())) {
-      if (isAdmin(userId)) await bot.sendMessage(userId, await getText(userId, 'binanceTransferNoPending'));
+      await bot.sendMessage(userId, await getText(userId, 'binanceTransferNoPending'));
       return;
     }
 
     if ((!state?.action || state?.action !== 'binance_transfer_pending') && looksLikeBinanceTransferOrderId(String(text || '').trim())) {
-      if (!isAdmin(userId)) return;
-      const standaloneOrderId = normalizeBinanceTransferOrderId(String(text || '').trim());
-      const existingDeposit = await BalanceTransaction.findOne({
-        where: {
-          type: 'deposit',
-          status: 'completed',
-          txid: standaloneOrderId
-        }
-      });
-
-      if (existingDeposit) {
-        await bot.sendMessage(userId, await getText(userId, 'binanceTransferDuplicate'));
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'binanceTransferNoPending'));
-      }
       return;
     }
 
@@ -12501,9 +12494,9 @@ setInterval(async () => {
   try {
     await reconcilePendingBinanceTransferOrders();
   } catch (err) {
-    console.error('Binance transfer pending order reconciliation error:', err.message);
+    console.error('Binance transfer pending reconciliation error:', err.message);
   }
-}, BINANCE_PAY_PENDING_POLL_INTERVAL_MS);
+}, 30 * 1000);
 
 sequelize.sync({ alter: true }).then(async () => {
   console.log('✅ Database synced');
