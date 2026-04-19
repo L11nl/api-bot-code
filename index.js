@@ -1543,19 +1543,43 @@ function isRenamableTextValue(value) {
   return Boolean(text) && text.length <= 80 && !text.includes('\n') && !text.includes('{');
 }
 
+const MENU_BUTTON_TEXT_KEY_MAP = {
+  buy: 'buy',
+  chatgpt_code: 'chatgptCode',
+  my_balance: 'myBalanceButton',
+  deposit: 'deposit',
+  my_purchases: 'myPurchases',
+  redeem: 'redeem',
+  referral: 'referral',
+  discount: 'discountButton',
+  support: 'support',
+  ai_assistant: 'aiAssistant',
+  change_language: 'changeLanguage',
+  free_code: 'freeCodeMenu',
+  admin_panel: 'adminPanel',
+  digital_sections_group: 'digitalSectionsGroupButton'
+};
+
 const RENAMABLE_BUTTON_KEYS = [...new Set([
+  ...Object.keys(MENU_BUTTON_TEXT_KEY_MAP),
   ...Object.entries(DEFAULT_TEXTS.en || {}).filter(([, value]) => isRenamableTextValue(value)).map(([key]) => key),
   ...Object.entries(DEFAULT_TEXTS.ar || {}).filter(([, value]) => isRenamableTextValue(value)).map(([key]) => key)
 ])];
 
+function resolveButtonTextKey(buttonKey) {
+  const normalized = String(buttonKey || '').trim();
+  return MENU_BUTTON_TEXT_KEY_MAP[normalized] || normalized;
+}
+
 async function getTextByLang(key, lang, replacements = {}) {
   try {
     const normalizedLang = lang === 'ar' ? 'ar' : 'en';
-    const setting = await Setting.findOne({ where: { key, lang: normalizedLang } });
-    let text = setting ? setting.value : DEFAULT_TEXTS[normalizedLang]?.[key];
+    const resolvedKey = resolveButtonTextKey(key);
+    const setting = await Setting.findOne({ where: { key: resolvedKey, lang: normalizedLang } });
+    let text = setting ? setting.value : DEFAULT_TEXTS[normalizedLang]?.[resolvedKey];
 
     if (!text) {
-      text = DEFAULT_TEXTS.en?.[key] || key;
+      text = DEFAULT_TEXTS.en?.[resolvedKey] || resolvedKey;
     }
 
     for (const [k, v] of Object.entries(replacements)) {
@@ -1565,7 +1589,9 @@ async function getTextByLang(key, lang, replacements = {}) {
     return text;
   } catch (err) {
     console.error('Error in getTextByLang:', err);
-    return DEFAULT_TEXTS[lang === 'ar' ? 'ar' : 'en']?.[key] || DEFAULT_TEXTS.en?.[key] || key;
+    const normalizedLang = lang === 'ar' ? 'ar' : 'en';
+    const resolvedKey = resolveButtonTextKey(key);
+    return DEFAULT_TEXTS[normalizedLang]?.[resolvedKey] || DEFAULT_TEXTS.en?.[resolvedKey] || resolvedKey;
   }
 }
 
@@ -1576,6 +1602,11 @@ async function findButtonKeyByLabel(input) {
   const normalizedKey = raw.toLowerCase().replace(/[^a-z0-9_]/g, '');
   for (const key of RENAMABLE_BUTTON_KEYS) {
     if (normalizedKey === String(key || '').toLowerCase()) {
+      return key;
+    }
+
+    const resolvedKey = resolveButtonTextKey(key);
+    if (normalizedKey === String(resolvedKey || '').toLowerCase()) {
       return key;
     }
   }
@@ -1644,6 +1675,7 @@ async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
     for (const key of Object.keys(map || {})) {
       const iconId = map[key]?.[lang] || map[key]?.ar || map[key]?.en || '';
       if (!iconId) continue;
+      lookup[key] = iconId;
       const label = normalizeButtonLabel(await getTextByLang(key, lang));
       if (label) {
         lookup[label] = iconId;
@@ -1660,7 +1692,8 @@ async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
         if (!Array.isArray(row)) continue;
         for (const button of row) {
           if (!button || typeof button !== 'object' || button.icon_custom_emoji_id) continue;
-          const iconId = lookup[normalizeButtonLabel(button.text)];
+          const callbackKey = button.callback_data === 'admin' ? 'admin_panel' : String(button.callback_data || '').trim();
+          const iconId = lookup[callbackKey] || lookup[normalizeButtonLabel(button.text)];
           if (iconId) {
             button.icon_custom_emoji_id = iconId;
           }
@@ -10632,8 +10665,9 @@ bot.on('message', async msg => {
         const customEmojiIds = extractCustomEmojiIdsFromMessage(msg);
         const englishCustomEmojiId = customEmojiIds[0] || '';
 
-        await Setting.upsert({ key: state.targetKey, lang: 'ar', value: state.newArabicName || await getTextByLang(state.targetKey, 'ar') });
-        await Setting.upsert({ key: state.targetKey, lang: 'en', value: newEnglishName });
+        const resolvedTextKey = resolveButtonTextKey(state.targetKey);
+        await Setting.upsert({ key: resolvedTextKey, lang: 'ar', value: state.newArabicName || await getTextByLang(state.targetKey, 'ar') });
+        await Setting.upsert({ key: resolvedTextKey, lang: 'en', value: newEnglishName });
 
         if (state.arabicCustomEmojiId || englishCustomEmojiId) {
           const fallbackEmojiId = englishCustomEmojiId || state.arabicCustomEmojiId || '';
