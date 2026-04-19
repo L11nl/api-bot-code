@@ -1538,6 +1538,27 @@ function extractCustomEmojiIdsFromMessage(message) {
   )];
 }
 
+function stripCustomEmojiPlaceholdersFromMessage(message) {
+  const sourceText = String(message?.text || message?.caption || '');
+  const entities = [
+    ...(Array.isArray(message?.entities) ? message.entities : []),
+    ...(Array.isArray(message?.caption_entities) ? message.caption_entities : [])
+  ]
+    .filter(entity => entity?.type === 'custom_emoji' && Number.isInteger(entity.offset) && Number.isInteger(entity.length) && entity.length > 0)
+    .sort((a, b) => b.offset - a.offset);
+
+  if (!entities.length) {
+    return sourceText.trim();
+  }
+
+  let cleaned = sourceText;
+  for (const entity of entities) {
+    cleaned = cleaned.slice(0, entity.offset) + cleaned.slice(entity.offset + entity.length);
+  }
+
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
 function isRenamableTextValue(value) {
   const text = String(value || '');
   return Boolean(text) && text.length <= 80 && !text.includes('\n') && !text.includes('{');
@@ -10632,7 +10653,7 @@ bot.on('message', async msg => {
       }
 
       if (state.action === 'rename_button_set_ar') {
-        const newArabicName = String(text || '').trim();
+        const newArabicName = stripCustomEmojiPlaceholdersFromMessage(msg);
         if (!newArabicName) {
           await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameAr'), {
             reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
@@ -10654,7 +10675,7 @@ bot.on('message', async msg => {
       }
 
       if (state.action === 'rename_button_set_en') {
-        const newEnglishName = String(text || '').trim();
+        const newEnglishName = stripCustomEmojiPlaceholdersFromMessage(msg);
         if (!newEnglishName) {
           await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameEn'), {
             reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
