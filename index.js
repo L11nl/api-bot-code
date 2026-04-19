@@ -93,7 +93,8 @@ const Merchant = sequelize.define('Merchant', {
   price: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'single' },
-  description: { type: DataTypes.JSONB, allowNull: true }
+  description: { type: DataTypes.JSONB, allowNull: true },
+  showInMainMenu: { type: DataTypes.BOOLEAN, defaultValue: false }
 });
 
 const DigitalSection = sequelize.define('DigitalSection', {
@@ -470,7 +471,7 @@ const DEFAULT_TEXTS = {
     deleteReferralStockDuplicates: '🗑️ Delete Duplicate Codes',
     referralStockDuplicatesDeleted: '✅ Deleted {count} duplicate code(s) from referral stock.',
     referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
-    enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces:',
+    enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces, or send a TXT file:',
     referralStockCodesAdded: '✅ Referral stock codes added.\n📊 Added count: {count}',
     referralStockNotEnough: '❌ Not enough referral ChatGPT stock for this request.',
     referralStockNoCodesAvailable: '❌ No referral ChatGPT stock available right now.',
@@ -838,7 +839,7 @@ const DEFAULT_TEXTS = {
     deleteReferralStockDuplicates: '🗑️ حذف الكودات المكررة',
     referralStockDuplicatesDeleted: '✅ تم حذف {count} كود مكرر من مخزون الإحالات.',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
-    enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
+    enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات، أو أرسل ملف TXT:',
     referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.\n📊 عدد الأكواد المضافة: {count}',
     referralStockNotEnough: '❌ لا يوجد عدد كافٍ في مخزون ChatGPT الإحالات لهذا الطلب.',
     referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
@@ -1024,6 +1025,10 @@ Object.assign(DEFAULT_TEXTS.en, {
   digitalProductNameUpdated: '✅ Item name updated successfully!',
   digitalProductPriceUpdated: '✅ Item price updated successfully!',
   digitalProductDescriptionUpdated: '✅ Item details updated successfully!',
+  showInMainScreenOn: '🏠 Show in main screen: ✅ ON',
+  showInMainScreenOff: '🏠 Show in main screen: ❌ OFF',
+  showInMainScreenEnabled: '✅ This subscription is now visible to users on /start.',
+  showInMainScreenDisabled: '⛔ This subscription was hidden from the main screen.',
   noDigitalProductStock: 'No stock/accounts were added for this item yet.',
   digitalStockViewTitle: '📄 Added stock for: {name}\nTotal rows: {count}',
   stockEntryLabel: 'Entry #{index}',
@@ -1124,6 +1129,10 @@ Object.assign(DEFAULT_TEXTS.ar, {
   digitalProductNameUpdated: '✅ تم تحديث اسم المنتج بنجاح!',
   digitalProductPriceUpdated: '✅ تم تحديث سعر المنتج بنجاح!',
   digitalProductDescriptionUpdated: '✅ تم تحديث وصف المنتج بنجاح!',
+  showInMainScreenOn: '🏠 إظهار في الشاشة الرئيسية: ✅ مفعل',
+  showInMainScreenOff: '🏠 إظهار في الشاشة الرئيسية: ❌ متوقف',
+  showInMainScreenEnabled: '✅ أصبح هذا الاشتراك ظاهرًا للمستخدمين عند /start.',
+  showInMainScreenDisabled: '⛔ تم إخفاء هذا الاشتراك من الشاشة الرئيسية.',
   noDigitalProductStock: 'لا يوجد مخزون/حسابات مضافة لهذا المنتج حتى الآن.',
   digitalStockViewTitle: '📄 المخزون المضاف للمنتج: {name}\nإجمالي السطور: {count}',
   stockEntryLabel: 'العنصر #{index}',
@@ -1700,20 +1709,39 @@ async function deleteReferralStockDuplicateRows() {
 
 function normalizeChatGptUpCode(rawValue) {
   const cleaned = String(rawValue || '').trim();
-  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/i);
+  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})/i);
   if (!match) return '';
   return `http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`;
 }
 
-function extractChatGptUpCodes(textValue) {
+function extractChatGptUpCodes(textValue, options = {}) {
   const text = String(textValue || '');
-  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/ig;
+  const unique = Boolean(options && options.unique);
+  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})/ig;
   const found = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
     found.push(`http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`);
   }
-  return [...new Set(found)];
+  return unique ? [...new Set(found)] : found;
+}
+
+async function readTextFromTelegramTxtDocument(document) {
+  if (!document?.file_id) return '';
+
+  const fileName = String(document.file_name || '').trim();
+  const mimeType = String(document.mime_type || '').trim().toLowerCase();
+  const isTxt = mimeType === 'text/plain' || /\.txt$/i.test(fileName);
+  if (!isTxt) return '';
+
+  try {
+    const fileUrl = await bot.getFileLink(document.file_id);
+    const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
+    return Buffer.from(response.data || '').toString('utf8').replace(/^\uFEFF/, '');
+  } catch (err) {
+    console.error('readTextFromTelegramTxtDocument error:', err.response?.data || err.message || err);
+    return '';
+  }
 }
 
 
@@ -1956,7 +1984,7 @@ async function importReferralStockCodesFromPrivateChannel() {
 
 async function deleteReferralStockCodesByInput(inputText) {
   const merchant = await getReferralStockMerchant();
-  const codeLinks = extractChatGptUpCodes(inputText || '');
+  const codeLinks = extractChatGptUpCodes(inputText || '', { unique: true });
   let values = codeLinks;
 
   if (!values.length) {
@@ -2267,6 +2295,13 @@ async function getMerchantAvailableStock(merchantId) {
 async function getDigitalProductsForSection(sectionId) {
   return await Merchant.findAll({
     where: { category: getDigitalSectionCategory(sectionId) },
+    order: [['id', 'ASC']]
+  });
+}
+
+async function getMainScreenDigitalProducts() {
+  return await Merchant.findAll({
+    where: { showInMainMenu: true },
     order: [['id', 'ASC']]
   });
 }
@@ -2708,6 +2743,7 @@ async function showDigitalProductAdmin(userId, merchantId) {
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'addDigitalProductStock'), callback_data: `admin_digital_add_stock_${merchant.id}` }],
+          [{ text: await getText(userId, merchant.showInMainMenu ? 'showInMainScreenOn' : 'showInMainScreenOff'), callback_data: `admin_toggle_digital_product_main_${merchant.id}` }],
           [{ text: await getText(userId, 'viewDigitalProductStock'), callback_data: `admin_view_digital_product_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'searchDeleteDigitalProductStock'), callback_data: `admin_search_delete_digital_product_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'searchDigitalProductDuplicates'), callback_data: `admin_search_digital_product_duplicates_${merchant.id}` }],
@@ -2776,7 +2812,8 @@ async function showDigitalProductDetails(userId, merchantId) {
 
   const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
   const section = sectionId ? await DigitalSection.findByPk(sectionId) : null;
-  if (!section || !section.isActive) {
+  const canAccessFromMainMenu = Boolean(merchant.showInMainMenu);
+  if ((!section || !section.isActive) && !canAccessFromMainMenu) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
@@ -2803,7 +2840,8 @@ async function showDigitalProductDetails(userId, merchantId) {
   if (aiAssistantEnabled) {
     inlineKeyboard.push([{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }]);
   }
-  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]);
+  const backCallback = section && section.isActive ? `digital_section_${sectionId}` : 'back_to_menu';
+  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: backCallback }]);
 
   await bot.sendMessage(
     userId,
@@ -7380,6 +7418,7 @@ async function sendMainMenu(userId) {
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
   const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
+  const mainScreenProducts = await getMainScreenDigitalProducts();
 
   const buttonLabels = {
     buy: await getText(userId, 'buy'),
@@ -7416,6 +7455,19 @@ async function sendMainMenu(userId) {
     if (visibility[id] !== false && buttonLabels[id]) {
       buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
     }
+  }
+
+  for (const product of mainScreenProducts) {
+    const name = await getMerchantDisplayName(product, userId);
+    const stock = await getMerchantAvailableStock(product.id);
+    buttons.push([{
+      text: `🧩 ${await getText(userId, 'digitalProductListButton', {
+        name,
+        price: formatUsdPrice(product.price),
+        stock
+      })}`,
+      callback_data: `digital_product_${product.id}`
+    }]);
   }
 
   await bot.sendMessage(userId, `${await getText(userId, 'menu')}
@@ -9960,6 +10012,22 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    const toggleDigitalProductMainMatch = data.match(/^admin_toggle_digital_product_main_(\d+)$/);
+    if (toggleDigitalProductMainMatch && isAdmin(userId)) {
+      const merchantId = parseInt(toggleDigitalProductMainMatch[1], 10);
+      const merchant = await Merchant.findByPk(merchantId);
+      if (merchant) {
+        merchant.showInMainMenu = !merchant.showInMainMenu;
+        await merchant.save();
+        await bot.sendMessage(userId, await getText(userId, merchant.showInMainMenu ? 'showInMainScreenEnabled' : 'showInMainScreenDisabled'));
+        await showDigitalProductAdmin(userId, merchantId);
+      } else {
+        await bot.sendMessage(userId, await getText(userId, 'error'));
+      }
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     const viewDigitalProductStockMatch = data.match(/^admin_view_digital_product_stock_(\d+)$/);
     if (viewDigitalProductStockMatch && isAdmin(userId)) {
       const merchantId = parseInt(viewDigitalProductStockMatch[1], 10);
@@ -10112,6 +10180,7 @@ bot.on('message', async msg => {
   const text = msg.text;
   const photo = msg.photo;
   const video = msg.video;
+  const document = msg.document;
 
   try {
     const user = await User.findByPk(userId);
@@ -10284,7 +10353,7 @@ bot.on('message', async msg => {
         if (forwardedPayload) {
           const cached = await cacheReferralCodesChannelPostMessage(forwardedPayload);
           if (cached) {
-            const extractedNow = extractChatGptUpCodes((forwardedPayload.text || forwardedPayload.caption || ''));
+            const extractedNow = extractChatGptUpCodes((forwardedPayload.text || forwardedPayload.caption || ''), { unique: true });
             importedHint = `
 
 ✅ تم أيضًا حفظ المنشور الذي قمت بإعادة توجيهه للقناة، وعدد الأكواد التي تم التقاطها منه: ${extractedNow.length}`;
@@ -11082,7 +11151,10 @@ bot.on('message', async msg => {
 
       if (state.action === 'add_referral_stock_codes') {
         const merchant = await getReferralStockMerchant();
-        const rawInput = String(text || msg.caption || '');
+        const txtDocumentContent = document ? await readTextFromTelegramTxtDocument(document) : '';
+        const rawInput = [String(text || ''), String(msg.caption || ''), String(txtDocumentContent || '')]
+          .filter(Boolean)
+          .join('\n');
         let values = extractChatGptUpCodes(rawInput);
 
         if (!values.length) {
@@ -11136,7 +11208,7 @@ bot.on('message', async msg => {
         const merchant = await getReferralStockMerchant();
         const rawInput = String(text || msg.caption || '');
 
-        let values = extractChatGptUpCodes(rawInput);
+        let values = extractChatGptUpCodes(rawInput, { unique: true });
         if (!values.length) {
           values = String(rawInput || '')
             .split(/\r?\n|\s+/)
