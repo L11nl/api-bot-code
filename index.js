@@ -1080,15 +1080,6 @@ Object.assign(DEFAULT_TEXTS.en, {
   enterSearchDeleteDigitalProductStock: 'Send the stock/accounts you want to search for and delete. You can send one entry or many entries.',
   digitalProductStockSearchDeleteResult: '✅ Deleted: {deleted}\n❌ Not found: {missing}\n🔒 Kept sold rows: {locked}\n\n{details}',
   closeChat: '🔒 Close Chat',
-  changeButtonNames: '✨ Change Button Names',
-  enterButtonNameToChange: 'Send the button key or current text you want to change, for example: change_language, deposit_binance_auto, lang_ar, or 🇺🇸 English',
-  buttonNameNotFound: '❌ Invalid button key/text. Send a key like: change_language, deposit_binance_auto, lang_ar, or send the current button text exactly.',
-  enterNewButtonNameAr: 'Send the new button name in Arabic:',
-  enterNewButtonNameEn: 'Send the new button name in English:',
-  buttonNameUpdated: '✅ Button name updated successfully.',
-  langEnglish: '🇺🇸 English',
-  langArabic: '🇮🇶 العربية',
-  depositBinanceAutoButton: '⚡ Binance (USDT)',
   supportChatOpened: '✅ A support chat has been opened. Send your message now.',
   supportChatAlreadyOpen: '✅ The support chat is already open. Send your message now.',
   supportChatClosedByUser: '🔒 You closed the support chat.',
@@ -1189,15 +1180,6 @@ Object.assign(DEFAULT_TEXTS.ar, {
   enterSearchDeleteDigitalProductStock: 'أرسل المخزون/الحسابات التي تريد البحث عنها وحذفها. يمكنك إرسال عنصر واحد أو عدة عناصر.',
   digitalProductStockSearchDeleteResult: '✅ تم حذف: {deleted}\n❌ غير موجود: {missing}\n🔒 تم الإبقاء على المباعة: {locked}\n\n{details}',
   closeChat: '🔒 اغلاق الدردشة',
-  changeButtonNames: '✨ تغيير اسماء الازرار',
-  enterButtonNameToChange: 'أرسل مفتاح الزر أو النص الحالي الذي تريد تغييره، مثال: change_language أو deposit_binance_auto أو lang_ar أو 🇺🇸 English',
-  buttonNameNotFound: '❌ مفتاح/نص الزر غير صحيح. أرسل مفتاحًا مثل: change_language أو deposit_binance_auto أو lang_ar، أو أرسل النص الحالي للزر كما يظهر.',
-  enterNewButtonNameAr: 'أرسل الاسم الجديد بالعربي:',
-  enterNewButtonNameEn: 'أرسل الاسم الجديد بالإنجليزي:',
-  buttonNameUpdated: '✅ تم تحديث اسم الزر بنجاح.',
-  langEnglish: '🇺🇸 English',
-  langArabic: '🇮🇶 العربية',
-  depositBinanceAutoButton: '⚡ Binance (USDT)',
   supportChatOpened: '✅ تم فتح دردشة مع الدعم. أرسل رسالتك الآن.',
   supportChatAlreadyOpen: '✅ دردشة الدعم مفتوحة بالفعل. أرسل رسالتك الآن.',
   supportChatClosedByUser: '🔒 قمت بإغلاق دردشة الدعم.',
@@ -1339,6 +1321,29 @@ Object.assign(DEFAULT_TEXTS.ar, {
   binanceTransferNoPending: '❌ ليس لديك طلب إيداع بايننس قيد الانتظار. ابدأ طلب شحن جديد أولاً.',
   binanceTransferHelp: 'ℹ️ استخدم الزر أدناه إذا أردت التحقق عبر معرف الطلب.',
   binanceTransferCheckByNotePending: '⏳ لم تظهر الحوالة بعد. إذا دفعت قبل قليل، انتظر قليلًا ثم جرّب عبر زر معرف الطلب.'
+});
+
+
+Object.assign(DEFAULT_TEXTS.en, {
+  changeButtonNames: '✨ Change Button Names',
+  enterButtonNameToChange: 'Send the button key you want to change, for example: change_language or deposit',
+  buttonNameNotFound: '❌ Invalid button key. Send a key like: change_language or deposit.',
+  enterNewButtonNameAr: 'Send the new button name in Arabic:',
+  enterNewButtonNameEn: 'Send the new button name in English:',
+  buttonNameUpdated: '✅ Button name updated successfully!',
+  customEmojiIdsTitle: '⭐ <b>Custom emoji IDs extracted successfully:</b>',
+  customEmojiNoMatch: '❌ No custom emoji was found in your message.'
+});
+
+Object.assign(DEFAULT_TEXTS.ar, {
+  changeButtonNames: '✨ تغيير اسماء الازرار',
+  enterButtonNameToChange: 'أرسل مفتاح الزر الذي تريد تغييره، مثال: change_language أو deposit',
+  buttonNameNotFound: '❌ مفتاح الزر غير صحيح. أرسل مفتاحًا مثل: change_language أو deposit.',
+  enterNewButtonNameAr: 'اختر الاسم الجديد بالعربي:',
+  enterNewButtonNameEn: 'اختر الاسم الجديد بالانكليزي:',
+  buttonNameUpdated: '✅ تم تحديث اسم الزر بنجاح!',
+  customEmojiIdsTitle: '⭐ <b>تم استخراج معرفات الايموجي المخصص بنجاح:</b>',
+  customEmojiNoMatch: '❌ لم أجد ايموجي مخصص في رسالتك.'
 });
 
 function isAdmin(userId) {
@@ -1511,81 +1516,253 @@ async function getText(userId, key, replacements = {}) {
   }
 }
 
-const RENAMABLE_BUTTON_TARGETS = {
-  buy: { textKeys: ['buy'], aliases: ['buy'] },
-  deposit: { textKeys: ['deposit'], aliases: ['deposit'] },
-  redeem: { textKeys: ['redeem'], aliases: ['redeem'] },
-  referral: { textKeys: ['referral'], aliases: ['referral'] },
-  discount: { textKeys: ['discountButton'], aliases: ['discount', 'discount_button'] },
-  my_purchases: { textKeys: ['myPurchases'], aliases: ['my_purchases', 'purchases'] },
-  support: { textKeys: ['support'], aliases: ['support'] },
-  ai_assistant: { textKeys: ['aiAssistant'], aliases: ['ai_assistant'] },
-  change_language: { textKeys: ['changeLanguage'], aliases: ['change_language', 'changeLanguage'] },
-  chatgpt_code: { textKeys: ['chatgptCode'], aliases: ['chatgpt_code', 'chatgptCode'] },
-  free_code: { textKeys: ['freeCodeMenu'], aliases: ['free_code', 'getFreeCode', 'freeCodeMenu'] },
-  admin_panel: { textKeys: ['adminPanel'], aliases: ['admin_panel', 'adminPanel'] },
-  digital_sections_group: { textKeys: ['digitalSectionsGroupButton'], aliases: ['digital_sections_group', 'digitalSectionsGroupButton'] },
-  deposit_binance_auto: { textKeys: ['depositBinanceAutoButton'], aliases: ['deposit_binance_auto', 'binance_auto', 'depositBinanceAutoButton'] },
-  lang_en: { textKeys: ['langEnglish'], aliases: ['lang_en', 'english', 'langEnglish'] },
-  lang_ar: { textKeys: ['langArabic'], aliases: ['lang_ar', 'arabic', 'langArabic'] }
+
+function normalizeButtonLabel(value) {
+  return String(value || '')
+    .replace(/[​-‍️]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractCustomEmojiIdsFromMessage(message) {
+  const entities = [
+    ...(Array.isArray(message?.entities) ? message.entities : []),
+    ...(Array.isArray(message?.caption_entities) ? message.caption_entities : [])
+  ];
+
+  return [...new Set(
+    entities
+      .filter(entity => entity?.type === 'custom_emoji' && entity.custom_emoji_id)
+      .map(entity => String(entity.custom_emoji_id))
+      .filter(Boolean)
+  )];
+}
+
+function stripCustomEmojiPlaceholdersFromMessage(message) {
+  const sourceText = String(message?.text || message?.caption || '');
+  const entities = [
+    ...(Array.isArray(message?.entities) ? message.entities : []),
+    ...(Array.isArray(message?.caption_entities) ? message.caption_entities : [])
+  ]
+    .filter(entity => entity?.type === 'custom_emoji' && Number.isInteger(entity.offset) && Number.isInteger(entity.length) && entity.length > 0)
+    .sort((a, b) => b.offset - a.offset);
+
+  if (!entities.length) {
+    return sourceText.trim();
+  }
+
+  let cleaned = sourceText;
+  for (const entity of entities) {
+    cleaned = cleaned.slice(0, entity.offset) + cleaned.slice(entity.offset + entity.length);
+  }
+
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+function isRenamableTextValue(value) {
+  const text = String(value || '');
+  return Boolean(text) && text.length <= 80 && !text.includes('\n') && !text.includes('{');
+}
+
+const MENU_BUTTON_TEXT_KEY_MAP = {
+  buy: 'buy',
+  chatgpt_code: 'chatgptCode',
+  my_balance: 'myBalanceButton',
+  deposit: 'deposit',
+  my_purchases: 'myPurchases',
+  redeem: 'redeem',
+  referral: 'referral',
+  discount: 'discountButton',
+  support: 'support',
+  ai_assistant: 'aiAssistant',
+  change_language: 'changeLanguage',
+  free_code: 'freeCodeMenu',
+  admin_panel: 'adminPanel',
+  digital_sections_group: 'digitalSectionsGroupButton'
 };
 
-function normalizeRenamableButtonInput(value) {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+const RENAMABLE_BUTTON_KEYS = [...new Set([
+  ...Object.keys(MENU_BUTTON_TEXT_KEY_MAP),
+  ...Object.entries(DEFAULT_TEXTS.en || {}).filter(([, value]) => isRenamableTextValue(value)).map(([key]) => key),
+  ...Object.entries(DEFAULT_TEXTS.ar || {}).filter(([, value]) => isRenamableTextValue(value)).map(([key]) => key)
+])];
+
+function resolveButtonTextKey(buttonKey) {
+  const normalized = String(buttonKey || '').trim();
+  return MENU_BUTTON_TEXT_KEY_MAP[normalized] || normalized;
 }
 
 async function getTextByLang(key, lang, replacements = {}) {
   try {
     const normalizedLang = lang === 'ar' ? 'ar' : 'en';
-    const setting = await Setting.findOne({ where: { key, lang: normalizedLang } });
-    let value = setting ? setting.value : DEFAULT_TEXTS[normalizedLang]?.[key];
-    if (!value) value = DEFAULT_TEXTS.en?.[key] || key;
-    for (const [k, v] of Object.entries(replacements)) {
-      value = value.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+    const resolvedKey = resolveButtonTextKey(key);
+    const setting = await Setting.findOne({ where: { key: resolvedKey, lang: normalizedLang } });
+    let text = setting ? setting.value : DEFAULT_TEXTS[normalizedLang]?.[resolvedKey];
+
+    if (!text) {
+      text = DEFAULT_TEXTS.en?.[resolvedKey] || resolvedKey;
     }
-    return value;
+
+    for (const [k, v] of Object.entries(replacements)) {
+      text = text.replace(new RegExp(`\{${k}\}`, 'g'), String(v));
+    }
+
+    return text;
   } catch (err) {
-    console.error('getTextByLang error:', err);
-    return DEFAULT_TEXTS[lang === 'ar' ? 'ar' : 'en']?.[key] || DEFAULT_TEXTS.en?.[key] || key;
+    console.error('Error in getTextByLang:', err);
+    const normalizedLang = lang === 'ar' ? 'ar' : 'en';
+    const resolvedKey = resolveButtonTextKey(key);
+    return DEFAULT_TEXTS[normalizedLang]?.[resolvedKey] || DEFAULT_TEXTS.en?.[resolvedKey] || resolvedKey;
   }
 }
 
-async function resolveRenamableButtonTarget(input) {
-  const normalizedInput = normalizeRenamableButtonInput(input);
-  if (!normalizedInput) return null;
+async function findButtonKeyByLabel(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
 
-  for (const [targetId, config] of Object.entries(RENAMABLE_BUTTON_TARGETS)) {
-    const aliases = [targetId, ...(Array.isArray(config.aliases) ? config.aliases : []), ...(Array.isArray(config.textKeys) ? config.textKeys : [])]
-      .map(normalizeRenamableButtonInput)
-      .filter(Boolean);
-    if (aliases.includes(normalizedInput)) {
-      return { id: targetId, textKeys: config.textKeys || [] };
+  const normalizedKey = raw.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  for (const key of RENAMABLE_BUTTON_KEYS) {
+    if (normalizedKey === String(key || '').toLowerCase()) {
+      return key;
+    }
+
+    const resolvedKey = resolveButtonTextKey(key);
+    if (normalizedKey === String(resolvedKey || '').toLowerCase()) {
+      return key;
     }
   }
 
-  for (const [targetId, config] of Object.entries(RENAMABLE_BUTTON_TARGETS)) {
-    for (const textKey of (config.textKeys || [])) {
-      const arText = normalizeRenamableButtonInput(await getTextByLang(textKey, 'ar'));
-      const enText = normalizeRenamableButtonInput(await getTextByLang(textKey, 'en'));
-      if (normalizedInput === arText || normalizedInput === enText) {
-        return { id: targetId, textKeys: config.textKeys || [] };
-      }
+  const target = normalizeButtonLabel(raw);
+  if (!target) return null;
+
+  for (const key of RENAMABLE_BUTTON_KEYS) {
+    const arText = normalizeButtonLabel(await getTextByLang(key, 'ar'));
+    const enText = normalizeButtonLabel(await getTextByLang(key, 'en'));
+    if (target === arText || target === enText) {
+      return key;
     }
   }
 
   return null;
 }
 
-async function updateRenamableButtonTexts(target, nameAr, nameEn) {
-  const textKeys = Array.isArray(target?.textKeys) ? target.textKeys : [];
-  for (const textKey of textKeys) {
-    await Setting.upsert({ key: textKey, lang: 'ar', value: String(nameAr || '').trim() });
-    await Setting.upsert({ key: textKey, lang: 'en', value: String(nameEn || '').trim() });
+async function getButtonCustomEmojiMap() {
+  const rawValue = await getGlobalSetting('button_custom_emoji_map', '{}');
+  try {
+    const parsed = JSON.parse(String(rawValue || '{}'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
 }
+
+async function saveButtonCustomEmojiMap(map) {
+  await Setting.upsert({
+    key: 'button_custom_emoji_map',
+    lang: 'global',
+    value: JSON.stringify(map || {})
+  });
+}
+
+async function setButtonCustomEmojiId(key, lang, emojiId) {
+  const normalizedLang = lang === 'ar' ? 'ar' : 'en';
+  const map = await getButtonCustomEmojiMap();
+  map[key] = map[key] || {};
+
+  if (emojiId) {
+    map[key][normalizedLang] = String(emojiId);
+  } else {
+    delete map[key][normalizedLang];
+  }
+
+  if (!Object.keys(map[key]).length) {
+    delete map[key];
+  }
+
+  await saveButtonCustomEmojiMap(map);
+}
+
+async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
+  try {
+    if (!replyMarkup || (!Array.isArray(replyMarkup.inline_keyboard) && !Array.isArray(replyMarkup.keyboard))) {
+      return replyMarkup;
+    }
+
+    const user = await User.findByPk(chatId);
+    const lang = user?.lang === 'ar' ? 'ar' : 'en';
+    const map = await getButtonCustomEmojiMap();
+    const lookup = {};
+
+    for (const key of Object.keys(map || {})) {
+      const iconId = map[key]?.[lang] || map[key]?.ar || map[key]?.en || '';
+      if (!iconId) continue;
+      lookup[key] = iconId;
+      const label = normalizeButtonLabel(await getTextByLang(key, lang));
+      if (label) {
+        lookup[label] = iconId;
+      }
+    }
+
+    const cloned = JSON.parse(JSON.stringify(replyMarkup));
+    const keyboards = [];
+    if (Array.isArray(cloned.inline_keyboard)) keyboards.push(cloned.inline_keyboard);
+    if (Array.isArray(cloned.keyboard)) keyboards.push(cloned.keyboard);
+
+    for (const keyboard of keyboards) {
+      for (const row of keyboard) {
+        if (!Array.isArray(row)) continue;
+        for (const button of row) {
+          if (!button || typeof button !== 'object' || button.icon_custom_emoji_id) continue;
+          const callbackKey = button.callback_data === 'admin' ? 'admin_panel' : String(button.callback_data || '').trim();
+          const iconId = lookup[callbackKey] || lookup[normalizeButtonLabel(button.text)];
+          if (iconId) {
+            button.icon_custom_emoji_id = iconId;
+          }
+        }
+      }
+    }
+
+    return cloned;
+  } catch (err) {
+    console.error('applyCustomEmojiIconsToReplyMarkup error:', err);
+    return replyMarkup;
+  }
+}
+
+async function decorateSendOptions(chatId, options = {}) {
+  if (!options || !options.reply_markup) return options;
+  return {
+    ...options,
+    reply_markup: await applyCustomEmojiIconsToReplyMarkup(chatId, options.reply_markup)
+  };
+}
+
+const originalBotSendMessage = bot.sendMessage.bind(bot);
+bot.sendMessage = async function patchedSendMessage(chatId, messageText, options = {}) {
+  return originalBotSendMessage(chatId, messageText, await decorateSendOptions(chatId, options));
+};
+
+const originalBotSendPhoto = bot.sendPhoto.bind(bot);
+bot.sendPhoto = async function patchedSendPhoto(chatId, photo, options = {}) {
+  return originalBotSendPhoto(chatId, photo, await decorateSendOptions(chatId, options));
+};
+
+const originalBotSendVideo = bot.sendVideo.bind(bot);
+bot.sendVideo = async function patchedSendVideo(chatId, video, options = {}) {
+  return originalBotSendVideo(chatId, video, await decorateSendOptions(chatId, options));
+};
+
+const originalBotEditMessageText = bot.editMessageText.bind(bot);
+bot.editMessageText = async function patchedEditMessageText(messageText, options = {}) {
+  const chatId = options?.chat_id;
+  return originalBotEditMessageText(messageText, chatId ? await decorateSendOptions(chatId, options) : options);
+};
+
+const originalBotEditMessageCaption = bot.editMessageCaption.bind(bot);
+bot.editMessageCaption = async function patchedEditMessageCaption(caption, options = {}) {
+  const chatId = options?.chat_id;
+  return originalBotEditMessageCaption(caption, chatId ? await decorateSendOptions(chatId, options) : options);
+};
 
 async function getGlobalSetting(key, defaultValue) {
   const setting = await Setting.findOne({ where: { key, lang: 'global' } });
@@ -5433,7 +5610,7 @@ async function showCurrencyOptions(userId) {
   const lang = user?.lang || 'en';
   const visibility = await getDepositOptionVisibility();
   const rows = [];
-  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: await getText(userId, 'depositBinanceAutoButton'), callback_data: 'deposit_binance_auto' }]);
+  if (visibility.BINANCE_AUTO !== false) rows.push([{ text: '⚡ Binance (USDT)', callback_data: 'deposit_binance_auto' }]);
   rows.push([{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]);
 
   const extraText = visibility.BINANCE_AUTO === false ? '' : (lang === 'ar'
@@ -8349,8 +8526,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       await bot.sendMessage(userId, await getText(userId, 'start'), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: await getText(userId, 'langEnglish'), callback_data: 'lang_en' }],
-            [{ text: await getText(userId, 'langArabic'), callback_data: 'lang_ar' }]
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }]
           ]
         }
       });
@@ -8451,8 +8628,8 @@ bot.on('callback_query', async query => {
       await bot.sendMessage(userId, await getText(userId, 'start'), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: await getText(userId, 'langEnglish'), callback_data: 'lang_en' }],
-            [{ text: await getText(userId, 'langArabic'), callback_data: 'lang_ar' }],
+            [{ text: '🇺🇸 English', callback_data: 'lang_en' }],
+            [{ text: '🇮🇶 العربية', callback_data: 'lang_ar' }],
             [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
           ]
         }
@@ -8690,6 +8867,15 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_change_button_names' && isAdmin(userId)) {
+      await setUserState(userId, { action: 'rename_button_pick_key' });
+      await bot.sendMessage(userId, await getText(userId, 'enterButtonNameToChange'), {
+        reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+      });
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
     if (data === 'admin_manage_menu_buttons' && isAdmin(userId)) {
       await showMenuButtonsAdmin(userId);
       await bot.answerCallbackQuery(query.id);
@@ -8875,14 +9061,6 @@ bot.on('callback_query', async query => {
           reply_markup: await getBalanceCenterReplyMarkup(userId)
         });
       }
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_change_button_names' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'change_button_names', step: 'target' });
-      await bot.sendMessage(userId, await getText(userId, 'enterButtonNameToChange'));
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
       return;
@@ -10450,54 +10628,90 @@ bot.on('message', async msg => {
         return;
       }
 
-      if (state.action === 'set_channel_message') {
-        const config = await getChannelConfig();
-        config.messageText = String(text || '').trim();
-        await config.save();
-        await bot.sendMessage(userId, await getText(userId, 'channelMessageSet'));
-        await clearUserState(userId);
-        await showChannelConfigAdmin(userId);
+      if (state.action === 'rename_button_pick_key') {
+        const incomingLabel = String(text || '').trim();
+        if (!incomingLabel) {
+          await bot.sendMessage(userId, await getText(userId, 'enterButtonNameToChange'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
+          return;
+        }
+
+        const matchedKey = await findButtonKeyByLabel(incomingLabel);
+        if (!matchedKey) {
+          await bot.sendMessage(userId, await getText(userId, 'buttonNameNotFound'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
+          return;
+        }
+
+        await setUserState(userId, { action: 'rename_button_set_ar', targetKey: matchedKey });
+        await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameAr'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+        });
         return;
       }
 
-      if (state.action === 'change_button_names') {
-        const trimmedText = String(text || '').trim();
-
-        if (state.step === 'target') {
-          const target = await resolveRenamableButtonTarget(trimmedText);
-          if (!target) {
-            await bot.sendMessage(userId, await getText(userId, 'buttonNameNotFound'));
-            return;
-          }
-
-          await setUserState(userId, {
-            action: 'change_button_names',
-            step: 'nameAr',
-            targetId: target.id,
-            textKeys: target.textKeys
+      if (state.action === 'rename_button_set_ar') {
+        const newArabicName = stripCustomEmojiPlaceholdersFromMessage(msg);
+        if (!newArabicName) {
+          await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameAr'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
           });
-          await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameAr'));
           return;
         }
 
-        if (!trimmedText) {
-          await bot.sendMessage(userId, await getText(userId, state.step === 'nameEn' ? 'enterNewButtonNameEn' : 'enterNewButtonNameAr'));
+        const customEmojiIds = extractCustomEmojiIdsFromMessage(msg);
+        await setUserState(userId, {
+          action: 'rename_button_set_en',
+          targetKey: state.targetKey,
+          newArabicName,
+          arabicCustomEmojiId: customEmojiIds[0] || ''
+        });
+        await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameEn'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+        });
+        return;
+      }
+
+      if (state.action === 'rename_button_set_en') {
+        const newEnglishName = stripCustomEmojiPlaceholdersFromMessage(msg);
+        if (!newEnglishName) {
+          await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameEn'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
           return;
         }
 
-        if (state.step === 'nameAr') {
-          await setUserState(userId, { ...state, step: 'nameEn', nameAr: trimmedText });
-          await bot.sendMessage(userId, await getText(userId, 'enterNewButtonNameEn'));
-          return;
+        const customEmojiIds = extractCustomEmojiIdsFromMessage(msg);
+        const englishCustomEmojiId = customEmojiIds[0] || '';
+
+        const resolvedTextKey = resolveButtonTextKey(state.targetKey);
+        await Setting.upsert({ key: resolvedTextKey, lang: 'ar', value: state.newArabicName || await getTextByLang(state.targetKey, 'ar') });
+        await Setting.upsert({ key: resolvedTextKey, lang: 'en', value: newEnglishName });
+
+        if (state.arabicCustomEmojiId || englishCustomEmojiId) {
+          const fallbackEmojiId = englishCustomEmojiId || state.arabicCustomEmojiId || '';
+          await setButtonCustomEmojiId(state.targetKey, 'ar', state.arabicCustomEmojiId || fallbackEmojiId);
+          await setButtonCustomEmojiId(state.targetKey, 'en', englishCustomEmojiId || state.arabicCustomEmojiId || fallbackEmojiId);
         }
 
-        await updateRenamableButtonTexts({ textKeys: state.textKeys || [] }, state.nameAr || trimmedText, trimmedText);
-        await bot.sendMessage(userId, await getText(userId, 'buttonNameUpdated'));
         await clearUserState(userId);
+        await bot.sendMessage(userId, await getText(userId, 'buttonNameUpdated'));
         await showAdminPanel(userId);
         return;
       }
     }
+
+    if (isAdmin(userId) && !state) {
+      const customEmojiIds = extractCustomEmojiIdsFromMessage(msg);
+      if (customEmojiIds.length) {
+        const lines = customEmojiIds.map((emojiId, index) => `${index + 1}. <code>${escapeHtml(emojiId)}</code>`).join('\n');
+        await bot.sendMessage(userId, `${await getText(userId, 'customEmojiIdsTitle')}\n\n${lines}`, { parse_mode: 'HTML' });
+        return;
+      }
+    }
+
 
     if (state?.action === 'support_reply' && isAdmin(userId)) {
       const targetUserId = state.targetUserId;
