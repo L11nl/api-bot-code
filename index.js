@@ -68,6 +68,7 @@ const User = sequelize.define('User', {
   freeChatgptReceived: { type: DataTypes.BOOLEAN, defaultValue: false },
   lastFreeCodeClaimAt: { type: DataTypes.DATE, allowNull: true },
   forceFreeCodeButton: { type: DataTypes.BOOLEAN, defaultValue: false },
+  freeCodeRenewalVersionClaimed: { type: DataTypes.INTEGER, defaultValue: 0 },
   creatorDiscountPercent: { type: DataTypes.INTEGER, defaultValue: 0 },
   adminGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
   referralMilestoneGrantedPoints: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -422,6 +423,8 @@ const DEFAULT_TEXTS = {
     currentReferralPercent: 'Current referral reward percentage: {percent}%',
     currentFreeCodeDays: 'Free-code cooldown: {days} day(s)',
     manageFreeCodeAccess: '🎁 Manage Free Code Access',
+    renewFreeCode: '🔄 Renew Code',
+    renewFreeCodeDone: '✅ Free code renewed for all users for 24 hours. Each user can claim once until you press it again.',
     enableFreeCodeForUser: '✅ Enable for User',
     disableFreeCodeForUser: '⛔ Disable for User',
     enterFreeCodeAccessUserId: 'Send the Telegram user ID:',
@@ -788,6 +791,8 @@ const DEFAULT_TEXTS = {
     currentReferralPercent: 'نسبة مكافأة الإحالة الحالية: {percent}%',
     currentFreeCodeDays: 'مدة ظهور الكود المجاني: {days} يوم',
     manageFreeCodeAccess: '🎁 إدارة الكود المجاني',
+    renewFreeCode: '🔄 تجديد الكود',
+    renewFreeCodeDone: '✅ تم تجديد الكود لجميع المستخدمين لمدة 24 ساعة. كل مستخدم يمكنه أخذ كود مرة واحدة إلى أن تضغط الزر مرة ثانية.',
     enableFreeCodeForUser: '✅ تفعيل لمستخدم',
     disableFreeCodeForUser: '⛔ إخفاء عن مستخدم',
     enterFreeCodeAccessUserId: 'أرسل آيدي المستخدم:',
@@ -1582,6 +1587,19 @@ async function getFreeCodeCooldownDays() {
   return Number.isInteger(value) && value > 0 ? value : 5;
 }
 
+async function getActiveFreeCodeRenewalVersion() {
+  const rawVersion = await getGlobalSetting('free_code_renewal_version', '0');
+  const version = Math.max(0, parseInt(rawVersion, 10) || 0);
+  const rawExpiresAt = String(await getGlobalSetting('free_code_renewal_expires_at', '') || '').trim();
+
+  if (!version || !rawExpiresAt) return 0;
+
+  const expiresAt = new Date(rawExpiresAt);
+  if (Number.isNaN(expiresAt.getTime())) return 0;
+
+  return expiresAt.getTime() > Date.now() ? version : 0;
+}
+
 async function getBotEnabled() {
   const rawValue = await getGlobalSetting('bot_enabled', 'true');
   return String(rawValue).toLowerCase() !== 'false';
@@ -2144,6 +2162,12 @@ async function canUserClaimFreeCode(userId) {
   const user = await User.findByPk(userId);
   if (!user) return false;
   if (user.forceFreeCodeButton) return true;
+
+  const activeRenewalVersion = await getActiveFreeCodeRenewalVersion();
+  if (activeRenewalVersion > Number(user.freeCodeRenewalVersionClaimed || 0)) {
+    return true;
+  }
+
   if (!user.lastFreeCodeClaimAt) return true;
   const cooldownDays = await getFreeCodeCooldownDays();
   const nextAllowedAt = new Date(new Date(user.lastFreeCodeClaimAt).getTime() + (cooldownDays * 24 * 60 * 60 * 1000));
@@ -2154,6 +2178,12 @@ async function shouldShowFreeCodeButton(userId) {
   const user = await User.findByPk(userId);
   if (!user) return false;
   if (user.forceFreeCodeButton) return true;
+
+  const activeRenewalVersion = await getActiveFreeCodeRenewalVersion();
+  if (activeRenewalVersion > Number(user.freeCodeRenewalVersionClaimed || 0)) {
+    return true;
+  }
+
   return (await canUserClaimFreeCode(userId)) && !user.freeChatgptReceived;
 }
 
@@ -7452,6 +7482,7 @@ async function showReferralSettingsAdmin(userId) {
       [{ text: await getText(userId, 'deductReferralPoints'), callback_data: 'admin_deduct_points' }],
       [{ text: await getText(userId, 'grantCreatorDiscount'), callback_data: 'admin_grant_creator_discount' }],
       [{ text: await getText(userId, 'manageFreeCodeAccess'), callback_data: 'admin_manage_free_code_access' }],
+      [{ text: await getText(userId, 'renewFreeCode'), callback_data: 'admin_renew_free_code' }],
       [{ text: await getText(userId, 'referralStockSettings'), callback_data: 'admin_referral_stock_settings' }],
       [{ text: await getText(userId, 'toggleReferrals'), callback_data: 'admin_toggle_referrals' }],
       [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
@@ -8097,8 +8128,20 @@ async function processAutoChatGptCode(userId, options = {}) {
   if (isFree) {
     if (!fromPoints) {
       const freeUser = await User.findByPk(userId);
+      const activeRenewalVersion = await getActiveFreeCodeRenewalVersion();
+      const updatePayload = {};
+
       if (!freeUser?.forceFreeCodeButton) {
-        await User.update({ freeChatgptReceived: true, lastFreeCodeClaimAt: new Date() }, { where: { id: userId } });
+        updatePayload.freeChatgptReceived = true;
+        updatePayload.lastFreeCodeClaimAt = new Date();
+      }
+
+      if (activeRenewalVersion > Number(freeUser?.freeCodeRenewalVersionClaimed || 0)) {
+        updatePayload.freeCodeRenewalVersionClaimed = activeRenewalVersion;
+      }
+
+      if (Object.keys(updatePayload).length > 0) {
+        await User.update(updatePayload, { where: { id: userId } });
       }
     }
   } else {
@@ -8684,7 +8727,7 @@ bot.on('callback_query', async query => {
       }
 
       const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false, allowFallbackStock: false });
+      const result = await processAutoChatGptCode(userId, { isFree: true, fromPoints: false, allowFallbackStock: true });
       await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
 
       if (result.success) {
@@ -8699,7 +8742,7 @@ bot.on('callback_query', async query => {
           remainingStockText: 'من الموقع'
         });
       } else {
-        await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason}`);
+        await bot.sendMessage(userId, await getText(userId, 'noCodes'));
       }
 
       await sendMainMenu(userId);
@@ -9363,6 +9406,20 @@ bot.on('callback_query', async query => {
     if (data === 'admin_set_free_code_days' && isAdmin(userId)) {
       await setUserState(userId, { action: 'set_free_code_days' });
       await bot.sendMessage(userId, await getText(userId, 'enterFreeCodeDays'));
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_renew_free_code' && isAdmin(userId)) {
+      const currentVersion = Math.max(0, parseInt(await getGlobalSetting('free_code_renewal_version', '0'), 10) || 0);
+      const nextVersion = currentVersion + 1;
+      const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+
+      await Setting.upsert({ key: 'free_code_renewal_version', lang: 'global', value: String(nextVersion) });
+      await Setting.upsert({ key: 'free_code_renewal_expires_at', lang: 'global', value: expiresAt.toISOString() });
+
+      await bot.sendMessage(userId, await getText(userId, 'renewFreeCodeDone'));
+      await showReferralSettingsAdmin(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
