@@ -1326,8 +1326,8 @@ Object.assign(DEFAULT_TEXTS.ar, {
 
 Object.assign(DEFAULT_TEXTS.en, {
   changeButtonNames: '✨ Change Button Names',
-  enterButtonNameToChange: 'Send the exact current button name you want to change:',
-  buttonNameNotFound: '❌ I could not identify this button. Send the exact button text as it appears now.',
+  enterButtonNameToChange: 'Send the button key you want to change, for example: change_language or deposit',
+  buttonNameNotFound: '❌ Invalid button key. Send a key like: change_language or deposit.',
   enterNewButtonNameAr: 'Send the new button name in Arabic:',
   enterNewButtonNameEn: 'Send the new button name in English:',
   buttonNameUpdated: '✅ Button name updated successfully!',
@@ -1337,8 +1337,8 @@ Object.assign(DEFAULT_TEXTS.en, {
 
 Object.assign(DEFAULT_TEXTS.ar, {
   changeButtonNames: '✨ تغيير اسماء الازرار',
-  enterButtonNameToChange: 'أرسل اسم الزر الحالي الذي تريد تغييره كما هو ظاهر الآن:',
-  buttonNameNotFound: '❌ لم أتمكن من تحديد هذا الزر. أرسل نص الزر كما يظهر الآن بالضبط.',
+  enterButtonNameToChange: 'أرسل مفتاح الزر الذي تريد تغييره، مثال: change_language أو deposit',
+  buttonNameNotFound: '❌ مفتاح الزر غير صحيح. أرسل مفتاحًا مثل: change_language أو deposit.',
   enterNewButtonNameAr: 'اختر الاسم الجديد بالعربي:',
   enterNewButtonNameEn: 'اختر الاسم الجديد بالانكليزي:',
   buttonNameUpdated: '✅ تم تحديث اسم الزر بنجاح!',
@@ -1570,7 +1570,17 @@ async function getTextByLang(key, lang, replacements = {}) {
 }
 
 async function findButtonKeyByLabel(input) {
-  const target = normalizeButtonLabel(input);
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const normalizedKey = raw.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  for (const key of RENAMABLE_BUTTON_KEYS) {
+    if (normalizedKey === String(key || '').toLowerCase()) {
+      return key;
+    }
+  }
+
+  const target = normalizeButtonLabel(raw);
   if (!target) return null;
 
   for (const key of RENAMABLE_BUTTON_KEYS) {
