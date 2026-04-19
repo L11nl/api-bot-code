@@ -93,8 +93,7 @@ const Merchant = sequelize.define('Merchant', {
   price: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'single' },
-  description: { type: DataTypes.JSONB, allowNull: true },
-  showInMainMenu: { type: DataTypes.BOOLEAN, defaultValue: false }
+  description: { type: DataTypes.JSONB, allowNull: true }
 });
 
 const DigitalSection = sequelize.define('DigitalSection', {
@@ -471,7 +470,7 @@ const DEFAULT_TEXTS = {
     deleteReferralStockDuplicates: '🗑️ Delete Duplicate Codes',
     referralStockDuplicatesDeleted: '✅ Deleted {count} duplicate code(s) from referral stock.',
     referralStockCountText: 'Referral ChatGPT stock: {count} code(s).',
-    enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces, or send a TXT file:',
+    enterReferralStockCodes: 'Send referral ChatGPT stock codes separated by new lines or spaces:',
     referralStockCodesAdded: '✅ Referral stock codes added.\n📊 Added count: {count}',
     referralStockNotEnough: '❌ Not enough referral ChatGPT stock for this request.',
     referralStockNoCodesAvailable: '❌ No referral ChatGPT stock available right now.',
@@ -839,7 +838,7 @@ const DEFAULT_TEXTS = {
     deleteReferralStockDuplicates: '🗑️ حذف الكودات المكررة',
     referralStockDuplicatesDeleted: '✅ تم حذف {count} كود مكرر من مخزون الإحالات.',
     referralStockCountText: 'مخزون ChatGPT الإحالات: {count} كود.',
-    enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات، أو أرسل ملف TXT:',
+    enterReferralStockCodes: 'أرسل أكواد مخزون ChatGPT الإحالات مفصولة بأسطر جديدة أو مسافات:',
     referralStockCodesAdded: '✅ تمت إضافة أكواد مخزون الإحالات.\n📊 عدد الأكواد المضافة: {count}',
     referralStockNotEnough: '❌ لا يوجد عدد كافٍ في مخزون ChatGPT الإحالات لهذا الطلب.',
     referralStockNoCodesAvailable: '❌ لا يوجد حاليًا مخزون ChatGPT إحالات متاح.',
@@ -1025,10 +1024,6 @@ Object.assign(DEFAULT_TEXTS.en, {
   digitalProductNameUpdated: '✅ Item name updated successfully!',
   digitalProductPriceUpdated: '✅ Item price updated successfully!',
   digitalProductDescriptionUpdated: '✅ Item details updated successfully!',
-  showInMainScreenOn: '🏠 Show in main screen: ✅ ON',
-  showInMainScreenOff: '🏠 Show in main screen: ❌ OFF',
-  showInMainScreenEnabled: '✅ This subscription is now visible to users on /start.',
-  showInMainScreenDisabled: '⛔ This subscription was hidden from the main screen.',
   noDigitalProductStock: 'No stock/accounts were added for this item yet.',
   digitalStockViewTitle: '📄 Added stock for: {name}\nTotal rows: {count}',
   stockEntryLabel: 'Entry #{index}',
@@ -1129,10 +1124,6 @@ Object.assign(DEFAULT_TEXTS.ar, {
   digitalProductNameUpdated: '✅ تم تحديث اسم المنتج بنجاح!',
   digitalProductPriceUpdated: '✅ تم تحديث سعر المنتج بنجاح!',
   digitalProductDescriptionUpdated: '✅ تم تحديث وصف المنتج بنجاح!',
-  showInMainScreenOn: '🏠 إظهار في الشاشة الرئيسية: ✅ مفعل',
-  showInMainScreenOff: '🏠 إظهار في الشاشة الرئيسية: ❌ متوقف',
-  showInMainScreenEnabled: '✅ أصبح هذا الاشتراك ظاهرًا للمستخدمين عند /start.',
-  showInMainScreenDisabled: '⛔ تم إخفاء هذا الاشتراك من الشاشة الرئيسية.',
   noDigitalProductStock: 'لا يوجد مخزون/حسابات مضافة لهذا المنتج حتى الآن.',
   digitalStockViewTitle: '📄 المخزون المضاف للمنتج: {name}\nإجمالي السطور: {count}',
   stockEntryLabel: 'العنصر #{index}',
@@ -1332,6 +1323,31 @@ Object.assign(DEFAULT_TEXTS.ar, {
   binanceTransferCheckByNotePending: '⏳ لم تظهر الحوالة بعد. إذا دفعت قبل قليل، انتظر قليلًا ثم جرّب عبر زر معرف الطلب.'
 });
 
+
+Object.assign(DEFAULT_TEXTS.en, {
+  changeButtonNames: '✨ Change Button Names',
+  enterButtonNameToChange: 'Send the current button name exactly as it appears. You can also include a Premium custom emoji in the message.',
+  buttonNameDetected: '✅ Button detected: {name}',
+  buttonNameNotFound: '❌ I could not identify this button name. Send the button as it appears now.',
+  chooseNewArabicButtonName: 'Send the new Arabic button name now. If the message contains a Premium custom emoji, it will be saved as the button icon automatically.',
+  chooseNewEnglishButtonName: 'Send the new English button name now. If the message contains a Premium custom emoji, it will be saved as the button icon automatically.',
+  buttonNameUpdated: '✅ Button name updated successfully.\n\nArabic: {ar}\nEnglish: {en}',
+  customEmojiIdsExtracted: '⭐ <b>Custom emoji IDs extracted successfully:</b>\n\n{ids}\n\n<i>Tap the ID to copy it.</i>',
+  customEmojiNotFound: '❌ No custom emoji was found in your message.'
+});
+
+Object.assign(DEFAULT_TEXTS.ar, {
+  changeButtonNames: '✨ تغيير اسماء الازرار',
+  enterButtonNameToChange: 'أرسل اسم الزر الحالي كما يظهر لك الآن. ويمكنك أيضاً إرسال إيموجي مميز معه.',
+  buttonNameDetected: '✅ تم التعرف على الزر: {name}',
+  buttonNameNotFound: '❌ لم أتمكن من تحديد هذا الزر. أرسل اسم الزر كما يظهر لك حالياً.',
+  chooseNewArabicButtonName: 'أرسل الآن الاسم الجديد بالعربي. وإذا كانت الرسالة تحتوي على إيموجي مميز فسيتم حفظه تلقائياً كأيقونة للزر.',
+  chooseNewEnglishButtonName: 'أرسل الآن الاسم الجديد بالإنجليزي. وإذا كانت الرسالة تحتوي على إيموجي مميز فسيتم حفظه تلقائياً كأيقونة للزر.',
+  buttonNameUpdated: '✅ تم تحديث اسم الزر بنجاح.\n\nالعربي: {ar}\nالإنجليزي: {en}',
+  customEmojiIdsExtracted: '⭐ <b>تم استخراج معرفات الإيموجي المميز بنجاح:</b>\n\n{ids}\n\n<i>اضغط على المعرف لنسخه.</i>',
+  customEmojiNotFound: '❌ لم أجد إيموجي مميز في رسالتك.'
+});
+
 function isAdmin(userId) {
   return Number(userId) === ADMIN_ID;
 }
@@ -1501,6 +1517,343 @@ async function getText(userId, key, replacements = {}) {
     return DEFAULT_TEXTS.en?.[key] || key;
   }
 }
+
+
+const EDITABLE_BUTTON_TEXT_KEYS = [
+  'buy',
+  'chatgptCode',
+  'myBalance',
+  'myBalanceButton',
+  'deposit',
+  'depositNow',
+  'myPurchases',
+  'redeem',
+  'referral',
+  'discountButton',
+  'support',
+  'aiAssistant',
+  'changeLanguage',
+  'freeCodeMenu',
+  'adminPanel',
+  'manageBots',
+  'manageMenuButtons',
+  'changeButtonNames',
+  'manageChannel',
+  'manageDepositSettings',
+  'digitalSubscriptions',
+  'addMerchant',
+  'listMerchants',
+  'setPrice',
+  'setChatgptPrice',
+  'addCodes',
+  'paymentMethods',
+  'stats',
+  'referralSettings',
+  'manageRedeemServices',
+  'manageDiscountCodes',
+  'quantityDiscountSettings',
+  'botControl',
+  'balanceManagement',
+  'sendAnnouncement',
+  'editCodeDeliveryMessage',
+  'back',
+  'cancel',
+  'approve',
+  'reject',
+  'confirm',
+  'buyNow',
+  'showDescription',
+  'yes',
+  'no',
+  'setReferralPercent',
+  'setRedeemPoints',
+  'setFreeCodeDays',
+  'editReferralMilestones',
+  'referralEligibleUsers',
+  'grantPoints',
+  'deductReferralPoints',
+  'grantCreatorDiscount',
+  'manageFreeCodeAccess',
+  'enableFreeCodeForUser',
+  'disableFreeCodeForUser',
+  'renewFreeCode',
+  'referralStockSettings',
+  'toggleReferrals',
+  'addReferralStockCodes',
+  'viewReferralStockCount',
+  'searchReferralStockDuplicates',
+  'importReferralStockFromPrivateChannel',
+  'searchDeleteReferralStockCodes',
+  'privateReferralChannelButton',
+  'deleteReferralStockDuplicates',
+  'usersWithBalance',
+  'addBalanceAdmin',
+  'deductBalanceAdmin',
+  'enableBot',
+  'disableBot',
+  'botAllowedUsers',
+  'setBulkDiscountThreshold',
+  'setBulkDiscountPrice',
+  'setChannelLink',
+  'setChannelMessage',
+  'enableVerification',
+  'disableVerification',
+  'setIQDRate',
+  'setUSDTWallet',
+  'setIQDWallet',
+  'editCurrencyNames',
+  'editDepositInstructions',
+  'editUSDName',
+  'editIQDName',
+  'editUSDInstructions',
+  'editIQDInstructions',
+  'manageIQDMethods',
+  'manageUSDMethods',
+  'addDepositMethod',
+  'deleteDepositMethod',
+  'editDepositTemplates',
+  'editIQDTemplateAr',
+  'editIQDTemplateEn',
+  'editUSDTemplateAr',
+  'editUSDTemplateEn',
+  'editIQDNameAr',
+  'editIQDNameEn',
+  'editUSDNameAr',
+  'editUSDNameEn',
+  'digitalSubscriptionsMenu',
+  'addDigitalSectionToMainMenu',
+  'editDigitalSectionName',
+  'deleteDigitalSection',
+  'addDigitalProductInSection',
+  'addDigitalProductStock',
+  'viewDigitalProductStock',
+  'searchDeleteDigitalProductStock',
+  'searchDigitalProductDuplicates',
+  'deleteDigitalProductDuplicates',
+  'editDigitalProductName',
+  'editDigitalProductPrice',
+  'editDigitalProductDescription',
+  'deleteDigitalProduct',
+  'addEmailPassword',
+  'addAnotherAccount',
+  'done',
+  'closeChat',
+  'aiAssistantSupportYes',
+  'aiAssistantSupportNo',
+  'askAiAboutThisProduct',
+  'aiAssistantPurchaseConfirmButton',
+  'aiAssistantPurchaseMoreButton',
+  'aiAssistantPurchaseCancelButton'
+];
+
+function getButtonIconSettingKey(key) {
+  return `button_icon_${key}`;
+}
+
+async function getTextForLang(lang, key) {
+  const setting = await Setting.findOne({ where: { key, lang } });
+  return setting?.value || DEFAULT_TEXTS[lang]?.[key] || DEFAULT_TEXTS.en?.[key] || key;
+}
+
+async function getUserLang(userId) {
+  const user = await User.findByPk(userId, { attributes: ['lang'] });
+  return user?.lang === 'ar' ? 'ar' : 'en';
+}
+
+function getMessageTextContent(msg) {
+  return String(msg?.text ?? msg?.caption ?? '').trim();
+}
+
+function getMessageEntityList(msg) {
+  if (Array.isArray(msg?.entities) && msg.entities.length) return msg.entities;
+  if (Array.isArray(msg?.caption_entities) && msg.caption_entities.length) return msg.caption_entities;
+  return [];
+}
+
+function getCustomEmojiEntities(msg) {
+  return getMessageEntityList(msg)
+    .filter(entity => entity?.type === 'custom_emoji' && entity?.custom_emoji_id)
+    .map(entity => ({
+      offset: Number(entity.offset || 0),
+      length: Number(entity.length || 0),
+      custom_emoji_id: String(entity.custom_emoji_id)
+    }));
+}
+
+function stripCustomEmojiEntities(text, entities = []) {
+  const source = String(text || '');
+  if (!source || !Array.isArray(entities) || !entities.length) return source;
+  let output = source;
+  const sorted = [...entities].sort((a, b) => Number(b.offset || 0) - Number(a.offset || 0));
+  for (const entity of sorted) {
+    const start = Math.max(0, Number(entity.offset || 0));
+    const end = Math.max(start, start + Math.max(0, Number(entity.length || 0)));
+    output = `${output.slice(0, start)} ${output.slice(end)}`;
+  }
+  return output.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeButtonLookupText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[\u200D\uFE0F]/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function makeTemplateMatchRegex(template) {
+  const raw = String(template || '').trim();
+  if (!raw || !raw.includes('{')) return null;
+  const escaped = escapeRegExp(raw).replace(/\\\{[^}]+\\\}/g, '(.+?)');
+  try {
+    return new RegExp(`^${escaped}$`, 'u');
+  } catch {
+    return null;
+  }
+}
+
+function extractCustomEmojiPayload(msg) {
+  const originalText = getMessageTextContent(msg);
+  const entities = getCustomEmojiEntities(msg);
+  const ids = [...new Set(entities.map(entity => entity.custom_emoji_id).filter(Boolean))];
+  return {
+    originalText,
+    ids,
+    iconId: ids[0] || '',
+    cleanedText: stripCustomEmojiEntities(originalText, entities)
+  };
+}
+
+async function getEditableButtonCatalog(userId) {
+  const lang = await getUserLang(userId);
+  const keysToLoad = [
+    ...EDITABLE_BUTTON_TEXT_KEYS,
+    ...EDITABLE_BUTTON_TEXT_KEYS.map(getButtonIconSettingKey)
+  ];
+  const rows = await Setting.findAll({
+    where: {
+      lang,
+      key: { [Op.in]: keysToLoad }
+    }
+  });
+  const map = new Map(rows.map(row => [row.key, String(row.value || '')]));
+  const catalog = [];
+
+  for (const key of EDITABLE_BUTTON_TEXT_KEYS) {
+    const templateText = map.get(key) || DEFAULT_TEXTS[lang]?.[key] || DEFAULT_TEXTS.en?.[key] || key;
+    let renderedText = templateText;
+
+    if (key === 'myBalanceButton') {
+      renderedText = await getBalanceButtonLabel(userId);
+    } else if (key === 'chatgptCode') {
+      renderedText = await getChatGptMenuLabel(userId);
+    }
+
+    catalog.push({
+      key,
+      templateText: String(templateText || '').trim(),
+      renderedText: String(renderedText || templateText || '').trim(),
+      iconId: String(map.get(getButtonIconSettingKey(key)) || '').trim(),
+      regex: makeTemplateMatchRegex(templateText),
+      normalizedTemplate: normalizeButtonLookupText(templateText),
+      normalizedRendered: normalizeButtonLookupText(renderedText)
+    });
+  }
+
+  return catalog;
+}
+
+function findButtonCatalogEntryByText(inputText, catalog = [], { strict = false } = {}) {
+  const raw = String(inputText || '').trim();
+  if (!raw) return null;
+
+  const exactMatches = catalog.filter(entry => raw === entry.renderedText || raw === entry.templateText);
+  if (exactMatches.length) return exactMatches[0];
+
+  const regexMatches = catalog.filter(entry => entry.regex && entry.regex.test(raw));
+  if (regexMatches.length) return regexMatches[0];
+
+  const normalized = normalizeButtonLookupText(raw);
+  if (!normalized) return null;
+  const normalizedMatches = catalog.filter(entry => normalized === entry.normalizedRendered || normalized === entry.normalizedTemplate);
+  if (!normalizedMatches.length) return null;
+  if (strict && normalizedMatches.length > 1) return null;
+  return normalizedMatches[0];
+}
+
+async function setButtonLabelConfig(key, lang, text, iconId = '') {
+  await Setting.upsert({ key, lang, value: String(text || '').trim() });
+  const iconKey = getButtonIconSettingKey(key);
+  if (iconId) {
+    await Setting.upsert({ key: iconKey, lang, value: String(iconId).trim() });
+  } else {
+    await Setting.destroy({ where: { key: iconKey, lang } });
+  }
+}
+
+async function applyCustomIconsToReplyMarkup(chatId, replyMarkup) {
+  if (!replyMarkup || !Array.isArray(replyMarkup.inline_keyboard)) return replyMarkup;
+  const numericChatId = parseInt(chatId, 10);
+  if (!Number.isInteger(numericChatId) || numericChatId <= 0) return replyMarkup;
+
+  const catalog = await getEditableButtonCatalog(numericChatId);
+  if (!catalog.length) return replyMarkup;
+
+  for (const row of replyMarkup.inline_keyboard) {
+    if (!Array.isArray(row)) continue;
+    for (const button of row) {
+      if (!button || !button.text || button.icon_custom_emoji_id) continue;
+      const entry = findButtonCatalogEntryByText(button.text, catalog, { strict: false });
+      if (entry?.iconId) {
+        button.icon_custom_emoji_id = entry.iconId;
+      }
+    }
+  }
+
+  return replyMarkup;
+}
+
+async function applyCustomIconsToOptions(chatId, options) {
+  if (!options || !options.reply_markup) return options;
+  options.reply_markup = await applyCustomIconsToReplyMarkup(chatId, options.reply_markup);
+  return options;
+}
+
+(function patchTelegramButtonSenders() {
+  const originalSendMessage = bot.sendMessage.bind(bot);
+  bot.sendMessage = async (chatId, text, options = {}) => {
+    return originalSendMessage(chatId, text, await applyCustomIconsToOptions(chatId, options));
+  };
+
+  const originalSendPhoto = bot.sendPhoto.bind(bot);
+  bot.sendPhoto = async (chatId, photo, options = {}) => {
+    return originalSendPhoto(chatId, photo, await applyCustomIconsToOptions(chatId, options));
+  };
+
+  const originalSendVideo = bot.sendVideo.bind(bot);
+  bot.sendVideo = async (chatId, video, options = {}) => {
+    return originalSendVideo(chatId, video, await applyCustomIconsToOptions(chatId, options));
+  };
+
+  const originalEditMessageText = bot.editMessageText.bind(bot);
+  bot.editMessageText = async (text, options = {}) => {
+    const chatId = options?.chat_id || options?.chatId || 0;
+    return originalEditMessageText(text, await applyCustomIconsToOptions(chatId, options));
+  };
+
+  const originalEditMessageCaption = bot.editMessageCaption.bind(bot);
+  bot.editMessageCaption = async (caption, options = {}) => {
+    const chatId = options?.chat_id || options?.chatId || 0;
+    return originalEditMessageCaption(caption, await applyCustomIconsToOptions(chatId, options));
+  };
+})();
 
 async function getGlobalSetting(key, defaultValue) {
   const setting = await Setting.findOne({ where: { key, lang: 'global' } });
@@ -1709,39 +2062,20 @@ async function deleteReferralStockDuplicateRows() {
 
 function normalizeChatGptUpCode(rawValue) {
   const cleaned = String(rawValue || '').trim();
-  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})/i);
+  const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/i);
   if (!match) return '';
   return `http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`;
 }
 
-function extractChatGptUpCodes(textValue, options = {}) {
+function extractChatGptUpCodes(textValue) {
   const text = String(textValue || '');
-  const unique = Boolean(options && options.unique);
-  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})/ig;
+  const regex = /(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/([A-Za-z0-9]{16})(?=(?:https?:\/\/)?(?:www\.)?chatgpt\.com\/up\/|[^A-Za-z0-9]|$)/ig;
   const found = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
     found.push(`http://www.chatgpt.com/up/${String(match[1]).toUpperCase()}`);
   }
-  return unique ? [...new Set(found)] : found;
-}
-
-async function readTextFromTelegramTxtDocument(document) {
-  if (!document?.file_id) return '';
-
-  const fileName = String(document.file_name || '').trim();
-  const mimeType = String(document.mime_type || '').trim().toLowerCase();
-  const isTxt = mimeType === 'text/plain' || /\.txt$/i.test(fileName);
-  if (!isTxt) return '';
-
-  try {
-    const fileUrl = await bot.getFileLink(document.file_id);
-    const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
-    return Buffer.from(response.data || '').toString('utf8').replace(/^\uFEFF/, '');
-  } catch (err) {
-    console.error('readTextFromTelegramTxtDocument error:', err.response?.data || err.message || err);
-    return '';
-  }
+  return [...new Set(found)];
 }
 
 
@@ -1984,7 +2318,7 @@ async function importReferralStockCodesFromPrivateChannel() {
 
 async function deleteReferralStockCodesByInput(inputText) {
   const merchant = await getReferralStockMerchant();
-  const codeLinks = extractChatGptUpCodes(inputText || '', { unique: true });
+  const codeLinks = extractChatGptUpCodes(inputText || '');
   let values = codeLinks;
 
   if (!values.length) {
@@ -2295,13 +2629,6 @@ async function getMerchantAvailableStock(merchantId) {
 async function getDigitalProductsForSection(sectionId) {
   return await Merchant.findAll({
     where: { category: getDigitalSectionCategory(sectionId) },
-    order: [['id', 'ASC']]
-  });
-}
-
-async function getMainScreenDigitalProducts() {
-  return await Merchant.findAll({
-    where: { showInMainMenu: true },
     order: [['id', 'ASC']]
   });
 }
@@ -2743,7 +3070,6 @@ async function showDigitalProductAdmin(userId, merchantId) {
       reply_markup: {
         inline_keyboard: [
           [{ text: await getText(userId, 'addDigitalProductStock'), callback_data: `admin_digital_add_stock_${merchant.id}` }],
-          [{ text: await getText(userId, merchant.showInMainMenu ? 'showInMainScreenOn' : 'showInMainScreenOff'), callback_data: `admin_toggle_digital_product_main_${merchant.id}` }],
           [{ text: await getText(userId, 'viewDigitalProductStock'), callback_data: `admin_view_digital_product_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'searchDeleteDigitalProductStock'), callback_data: `admin_search_delete_digital_product_stock_${merchant.id}` }],
           [{ text: await getText(userId, 'searchDigitalProductDuplicates'), callback_data: `admin_search_digital_product_duplicates_${merchant.id}` }],
@@ -2812,8 +3138,7 @@ async function showDigitalProductDetails(userId, merchantId) {
 
   const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
   const section = sectionId ? await DigitalSection.findByPk(sectionId) : null;
-  const canAccessFromMainMenu = Boolean(merchant.showInMainMenu);
-  if ((!section || !section.isActive) && !canAccessFromMainMenu) {
+  if (!section || !section.isActive) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
@@ -2840,8 +3165,7 @@ async function showDigitalProductDetails(userId, merchantId) {
   if (aiAssistantEnabled) {
     inlineKeyboard.push([{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }]);
   }
-  const backCallback = section && section.isActive ? `digital_section_${sectionId}` : 'back_to_menu';
-  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: backCallback }]);
+  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]);
 
   await bot.sendMessage(
     userId,
@@ -7418,7 +7742,6 @@ async function sendMainMenu(userId) {
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
   const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
-  const mainScreenProducts = await getMainScreenDigitalProducts();
 
   const buttonLabels = {
     buy: await getText(userId, 'buy'),
@@ -7457,19 +7780,6 @@ async function sendMainMenu(userId) {
     }
   }
 
-  for (const product of mainScreenProducts) {
-    const name = await getMerchantDisplayName(product, userId);
-    const stock = await getMerchantAvailableStock(product.id);
-    buttons.push([{
-      text: `🧩 ${await getText(userId, 'digitalProductListButton', {
-        name,
-        price: formatUsdPrice(product.price),
-        stock
-      })}`,
-      callback_data: `digital_product_${product.id}`
-    }]);
-  }
-
   await bot.sendMessage(userId, `${await getText(userId, 'menu')}
 
 ${currentBalanceLine}`, {
@@ -7484,6 +7794,7 @@ async function showAdminPanel(userId) {
     inline_keyboard: [
       [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
+      [{ text: await getText(userId, 'changeButtonNames'), callback_data: 'admin_change_button_names' }],
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
       [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
@@ -10012,22 +10323,6 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    const toggleDigitalProductMainMatch = data.match(/^admin_toggle_digital_product_main_(\d+)$/);
-    if (toggleDigitalProductMainMatch && isAdmin(userId)) {
-      const merchantId = parseInt(toggleDigitalProductMainMatch[1], 10);
-      const merchant = await Merchant.findByPk(merchantId);
-      if (merchant) {
-        merchant.showInMainMenu = !merchant.showInMainMenu;
-        await merchant.save();
-        await bot.sendMessage(userId, await getText(userId, merchant.showInMainMenu ? 'showInMainScreenEnabled' : 'showInMainScreenDisabled'));
-        await showDigitalProductAdmin(userId, merchantId);
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'error'));
-      }
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
     const viewDigitalProductStockMatch = data.match(/^admin_view_digital_product_stock_(\d+)$/);
     if (viewDigitalProductStockMatch && isAdmin(userId)) {
       const merchantId = parseInt(viewDigitalProductStockMatch[1], 10);
@@ -10180,7 +10475,6 @@ bot.on('message', async msg => {
   const text = msg.text;
   const photo = msg.photo;
   const video = msg.video;
-  const document = msg.document;
 
   try {
     const user = await User.findByPk(userId);
@@ -10353,7 +10647,7 @@ bot.on('message', async msg => {
         if (forwardedPayload) {
           const cached = await cacheReferralCodesChannelPostMessage(forwardedPayload);
           if (cached) {
-            const extractedNow = extractChatGptUpCodes((forwardedPayload.text || forwardedPayload.caption || ''), { unique: true });
+            const extractedNow = extractChatGptUpCodes((forwardedPayload.text || forwardedPayload.caption || ''));
             importedHint = `
 
 ✅ تم أيضًا حفظ المنشور الذي قمت بإعادة توجيهه للقناة، وعدد الأكواد التي تم التقاطها منه: ${extractedNow.length}`;
@@ -10423,6 +10717,75 @@ bot.on('message', async msg => {
         await bot.sendMessage(userId, await getText(userId, 'channelMessageSet'));
         await clearUserState(userId);
         await showChannelConfigAdmin(userId);
+        return;
+      }
+
+
+      if (state.action === 'change_button_name_pick') {
+        const payload = extractCustomEmojiPayload(msg);
+        const inputLabel = payload.cleanedText || payload.originalText;
+        const catalog = await getEditableButtonCatalog(userId);
+        const matched = findButtonCatalogEntryByText(inputLabel, catalog, { strict: false });
+
+        if (!matched) {
+          await bot.sendMessage(userId, await getText(userId, 'buttonNameNotFound'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
+          return;
+        }
+
+        await setUserState(userId, {
+          action: 'change_button_name_set_ar',
+          targetKey: matched.key
+        });
+        await bot.sendMessage(userId, `${await getText(userId, 'buttonNameDetected', { name: matched.renderedText || matched.templateText })}
+
+${await getText(userId, 'chooseNewArabicButtonName')}`, {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+        });
+        return;
+      }
+
+      if (state.action === 'change_button_name_set_ar') {
+        const payload = extractCustomEmojiPayload(msg);
+        const nextText = String(payload.cleanedText || '').trim();
+        if (!nextText) {
+          await bot.sendMessage(userId, await getText(userId, 'chooseNewArabicButtonName'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
+          return;
+        }
+
+        await setUserState(userId, {
+          action: 'change_button_name_set_en',
+          targetKey: state.targetKey,
+          arText: nextText,
+          arIconId: payload.iconId || ''
+        });
+        await bot.sendMessage(userId, await getText(userId, 'chooseNewEnglishButtonName'), {
+          reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+        });
+        return;
+      }
+
+      if (state.action === 'change_button_name_set_en') {
+        const payload = extractCustomEmojiPayload(msg);
+        const nextText = String(payload.cleanedText || '').trim();
+        if (!nextText) {
+          await bot.sendMessage(userId, await getText(userId, 'chooseNewEnglishButtonName'), {
+            reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin')
+          });
+          return;
+        }
+
+        await setButtonLabelConfig(state.targetKey, 'ar', state.arText, state.arIconId || '');
+        await setButtonLabelConfig(state.targetKey, 'en', nextText, payload.iconId || '');
+        await clearUserState(userId);
+        await bot.sendMessage(userId, await getText(userId, 'buttonNameUpdated', {
+          ar: state.arText,
+          en: nextText
+        }));
+        await showAdminPanel(userId);
         return;
       }
     }
@@ -11151,10 +11514,7 @@ bot.on('message', async msg => {
 
       if (state.action === 'add_referral_stock_codes') {
         const merchant = await getReferralStockMerchant();
-        const txtDocumentContent = document ? await readTextFromTelegramTxtDocument(document) : '';
-        const rawInput = [String(text || ''), String(msg.caption || ''), String(txtDocumentContent || '')]
-          .filter(Boolean)
-          .join('\n');
+        const rawInput = String(text || msg.caption || '');
         let values = extractChatGptUpCodes(rawInput);
 
         if (!values.length) {
@@ -11208,7 +11568,7 @@ bot.on('message', async msg => {
         const merchant = await getReferralStockMerchant();
         const rawInput = String(text || msg.caption || '');
 
-        let values = extractChatGptUpCodes(rawInput, { unique: true });
+        let values = extractChatGptUpCodes(rawInput);
         if (!values.length) {
           values = String(rawInput || '')
             .split(/\r?\n|\s+/)
@@ -12410,6 +12770,19 @@ bot.on('message', async msg => {
 
     if ((!state?.action || state?.action !== 'binance_transfer_pending') && looksLikeBinanceTransferOrderId(String(text || '').trim())) {
       return;
+    }
+
+
+    const customEmojiPayload = extractCustomEmojiPayload(msg);
+    if (!state?.action && msg.chat?.type === 'private' && customEmojiPayload.ids.length > 0) {
+      const withoutEmoji = normalizeButtonLookupText(customEmojiPayload.cleanedText);
+      if (!withoutEmoji) {
+        const idsText = customEmojiPayload.ids
+          .map((emojiId, index) => `${index + 1}. <code>${escapeHtml(emojiId)}</code>`)
+          .join('\n');
+        await bot.sendMessage(userId, await getText(userId, 'customEmojiIdsExtracted', { ids: idsText }), { parse_mode: 'HTML' });
+        return;
+      }
     }
 
     if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text) && (await getAiAssistantEnabled())) {
