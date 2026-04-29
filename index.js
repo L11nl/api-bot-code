@@ -625,7 +625,7 @@ const DEFAULT_TEXTS = {
     digitalStockInputPrompt: 'Send the stock/accounts now.\n\nFor account items, send the email on one line and the password on the next line for each account.',
     digitalSectionEmpty: 'No subscriptions are available in this section yet.',
     digitalSectionChooseProduct: 'Choose the subscription you want:',
-    digitalProductListButton: '{name}\n💵 {price} USD | 📦 {stock}',
+    digitalProductListButton: '{name} - 💵 {price}$ | 📦 {stock}',
     digitalProductDetailsText: '🧩 {name}\n\nRemaining stock: {stock}\nPrice: {price} USD\n\nDetails:\n{details}',
     attachedDetailsNote: 'See the attached media for the full details.',
     productQuantityPrompt: 'How many subscriptions would you like to buy? Send the number only.',
@@ -973,7 +973,7 @@ const DEFAULT_TEXTS = {
     digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nإذا كان المنتج حسابات، فأرسل الإيميل في سطر والباسورد في السطر الذي بعده لكل حساب.',
     digitalSectionEmpty: 'لا توجد اشتراكات متاحة داخل هذه الخانة حالياً.',
     digitalSectionChooseProduct: '🧩 اختر الاشتراك المطلوب من القائمة التالية:',
-    digitalProductListButton: '{name}\n💵 {price} دولار | 📦 {stock}',
+    digitalProductListButton: '{name} - 💵 {price}$ | 📦 {stock}',
     digitalProductDetailsText: '🧩 {name}\n\nالمخزون المتبقي: {stock}\nالسعر: {price} دولار\n\nالتفاصيل:\n{details}',
     attachedDetailsNote: 'شاهد الوسائط المرفقة لمعرفة التفاصيل كاملة.',
     productQuantityPrompt: 'كم عدد الاشتراكات التي تريد شراءها؟ أرسل الرقم فقط.',
@@ -1090,7 +1090,7 @@ Object.assign(DEFAULT_TEXTS.en, {
   supportUserMessageForwarded: '📨 Your message was delivered to support.',
   supportThreadAdminNotice: '📩 Live support message\n\nUsername: {username}\nName: {name}\nUser ID: {userId}\n\nMessage: {message}',
   digitalStockInputPrompt: 'Send the stock/accounts now.\n\nQuick formats supported:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|extra note\n\nYou can also use the button below to add one account step by step.',
-  digitalProductListButton: '{name}\n💵 {price} USD | 📦 Available {stock}'
+  digitalProductListButton: '{name} - 💵 {price}$ | 📦 {stock}'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
@@ -1190,7 +1190,7 @@ Object.assign(DEFAULT_TEXTS.ar, {
   supportUserMessageForwarded: '📨 تم إيصال رسالتك إلى الدعم.',
   supportThreadAdminNotice: '📩 رسالة دعم مباشرة\n\nالمعرف: {username}\nالاسم: {name}\nايدي المستخدم: {userId}\n\nالرسالة: {message}',
   digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nالصيغ السريعة المدعومة:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|ملاحظة إضافية\n\nويمكنك أيضاً استخدام زر «إضافة إيميل وباسورد» لإضافة حساب واحد خطوة بخطوة.',
-  digitalProductListButton: '{name}\n💵 {price} دولار | 📦 يوجد {stock}'
+  digitalProductListButton: '{name} - 💵 {price}$ | 📦 {stock}'
 });
 
 Object.assign(DEFAULT_TEXTS.en, {
@@ -2078,9 +2078,13 @@ function makeInlineButtonTextFullyVisible(text) {
   return getInlineButtonVisibleTextRows(text).join('\n');
 }
 
-function shouldSplitInlineButtonIntoRows(button) {
+function isDigitalProductInlineButton(button) {
   const callbackData = String(button?.callback_data || '').trim();
   return /^(?:admin_)?digital_product_\d+$/.test(callbackData) || /^digital_buy_\d+$/.test(callbackData);
+}
+
+function shouldSplitInlineButtonIntoRows(button) {
+  return false;
 }
 
 function applyFullVisibleButtonTextToReplyMarkup(replyMarkup) {
@@ -2105,6 +2109,7 @@ function applyFullVisibleButtonTextToReplyMarkup(replyMarkup) {
 
       for (const button of row) {
         if (!button || typeof button !== 'object' || !button.text) continue;
+        if (isDigitalProductInlineButton(button)) continue;
         button.text = makeInlineButtonTextFullyVisible(button.text);
       }
       expandedKeyboard.push(row);
