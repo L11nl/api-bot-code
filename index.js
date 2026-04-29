@@ -1896,8 +1896,8 @@ async function getFeaturedDigitalProductsForMenu() {
     where: { id: { [Op.in]: ids } },
     order: [['id', 'ASC']]
   });
-  const sections = await getDigitalSections();
-  const activeSectionIds = new Set(sections.map(section => section.id));
+  const sections = await getAllDigitalSections();
+  const sectionIds = new Set(sections.map(section => section.id));
   const hiddenProductIds = new Set(await getHiddenDigitalProductIds());
   const productById = new Map(products.map(product => [product.id, product]));
   const ordered = [];
@@ -1907,7 +1907,7 @@ async function getFeaturedDigitalProductsForMenu() {
     if (!product || !isDigitalSectionCategory(product.category)) continue;
     if (hiddenProductIds.has(product.id)) continue;
     const sectionId = parseDigitalSectionIdFromCategory(product.category);
-    if (!activeSectionIds.has(sectionId)) continue;
+    if (!sectionIds.has(sectionId)) continue;
     ordered.push(product);
   }
 
@@ -3333,7 +3333,7 @@ async function showDigitalProductDetails(userId, merchantId) {
 
   const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
   const section = sectionId ? await DigitalSection.findByPk(sectionId) : null;
-  if (!section || !section.isActive || await isDigitalProductHidden(merchant.id)) {
+  if (!section || await isDigitalProductHidden(merchant.id)) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
@@ -3360,7 +3360,10 @@ async function showDigitalProductDetails(userId, merchantId) {
   if (aiAssistantEnabled) {
     inlineKeyboard.push([{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }]);
   }
-  inlineKeyboard.push([{ text: await getText(userId, 'back'), callback_data: `digital_section_${sectionId}` }]);
+  inlineKeyboard.push([{
+    text: await getText(userId, 'back'),
+    callback_data: section?.isActive ? `digital_section_${sectionId}` : 'back_to_menu'
+  }]);
 
   await bot.sendMessage(
     userId,
