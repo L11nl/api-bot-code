@@ -1798,14 +1798,20 @@ function getButtonStyleLookupKeys(button) {
 }
 
 async function getAutomaticButtonStyle(button) {
-  const productId = getProductIdFromButtonCallback(button?.callback_data);
+  const callbackData = String(button?.callback_data || '').trim();
+
+  if (callbackData === 'deposit') {
+    return 'primary';
+  }
+
+  const productId = getProductIdFromButtonCallback(callbackData);
   if (!Number.isInteger(productId)) return '';
 
   const merchant = await Merchant.findByPk(productId);
   if (!merchant || !isDigitalSectionCategory(merchant.category)) return '';
 
   const stock = await getMerchantAvailableStock(productId);
-  return stock <= 0 ? 'danger' : '';
+  return stock <= 0 ? 'danger' : 'success';
 }
 
 async function applyButtonStylesToReplyMarkup(chatId, replyMarkup) {
@@ -1892,18 +1898,69 @@ async function getFeaturedDigitalProductsForMenu() {
   });
   const sections = await getDigitalSections();
   const activeSectionIds = new Set(sections.map(section => section.id));
+  const hiddenProductIds = new Set(await getHiddenDigitalProductIds());
   const productById = new Map(products.map(product => [product.id, product]));
   const ordered = [];
 
   for (const id of ids) {
     const product = productById.get(id);
     if (!product || !isDigitalSectionCategory(product.category)) continue;
+    if (hiddenProductIds.has(product.id)) continue;
     const sectionId = parseDigitalSectionIdFromCategory(product.category);
     if (!activeSectionIds.has(sectionId)) continue;
     ordered.push(product);
   }
 
   return ordered;
+}
+
+
+async function getHiddenDigitalProductIds() {
+  const rawValue = await getGlobalSetting('hidden_digital_products', '[]');
+  try {
+    const parsed = JSON.parse(String(rawValue || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.map(id => parseInt(id, 10)).filter(Number.isInteger))];
+  } catch {
+    return [];
+  }
+}
+
+async function saveHiddenDigitalProductIds(ids) {
+  const normalized = [...new Set((Array.isArray(ids) ? ids : []).map(id => parseInt(id, 10)).filter(Number.isInteger))];
+  await Setting.upsert({
+    key: 'hidden_digital_products',
+    lang: 'global',
+    value: JSON.stringify(normalized)
+  });
+}
+
+async function isDigitalProductHidden(merchantId) {
+  const ids = await getHiddenDigitalProductIds();
+  return ids.includes(parseInt(merchantId, 10));
+}
+
+async function setDigitalProductVisibility(merchantId, visible) {
+  const normalizedId = parseInt(merchantId, 10);
+  if (!Number.isInteger(normalizedId)) return false;
+
+  const merchant = await Merchant.findByPk(normalizedId);
+  if (!merchant || !isDigitalSectionCategory(merchant.category)) return false;
+
+  const ids = await getHiddenDigitalProductIds();
+  const exists = ids.includes(normalizedId);
+  const nextIds = visible
+    ? ids.filter(id => id !== normalizedId)
+    : (exists ? ids : [...ids, normalizedId]);
+
+  await saveHiddenDigitalProductIds(nextIds);
+  return true;
+}
+
+async function getVisibleDigitalProductsForSection(sectionId) {
+  const products = await getDigitalProductsForSection(sectionId);
+  const hiddenProductIds = new Set(await getHiddenDigitalProductIds());
+  return products.filter(product => !hiddenProductIds.has(product.id));
 }
 
 async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
@@ -3230,7 +3287,7 @@ async function showDigitalSectionForUser(userId, sectionId) {
     return;
   }
 
-  const products = await getDigitalProductsForSection(section.id);
+  const products = await getVisibleDigitalProductsForSection(section.id);
   const sectionName = await getDigitalSectionDisplayName(section, userId);
   if (!products.length) {
     await bot.sendMessage(userId, `🧩 <b>${escapeHtml(sectionName)}</b>
@@ -3276,7 +3333,7 @@ async function showDigitalProductDetails(userId, merchantId) {
 
   const sectionId = parseDigitalSectionIdFromCategory(merchant.category);
   const section = sectionId ? await DigitalSection.findByPk(sectionId) : null;
-  if (!section || !section.isActive) {
+  if (!section || !section.isActive || await isDigitalProductHidden(merchant.id)) {
     await bot.sendMessage(userId, await getText(userId, 'error'));
     return;
   }
@@ -5476,6 +5533,8 @@ async function showMenuButtonsAdmin(userId) {
   const visibility = await getMenuButtonsVisibility();
   const items = await getMenuButtonItems(userId);
   const digitalSections = await getAllDigitalSections();
+  const hiddenProductIds = new Set(await getHiddenDigitalProductIds());
+  const digitalProductItemsBySectionId = new Map();
   const itemsMap = new Map(items.map(item => [item.id, { ...item, type: 'static' }]));
 
   for (const section of digitalSections) {
@@ -5486,6 +5545,12 @@ async function showMenuButtonsAdmin(userId) {
       name: `🧩 ${section.nameEn} / ${section.nameAr}`,
       enabled: section.isActive
     });
+
+    const products = await getDigitalProductsForSection(section.id);
+    digitalProductItemsBySectionId.set(section.id, products.map(product => ({
+      productId: product.id,
+      name: `${product.nameEn} / ${product.nameAr}`
+    })));
   }
 
   const order = await getMenuButtonsOrder();
@@ -5521,6 +5586,18 @@ async function showMenuButtonsAdmin(userId) {
             : `move_button_${item.id}_down`)
       }
     ]);
+
+    if (item.type === 'digital') {
+      const productItems = digitalProductItemsBySectionId.get(item.sectionId) || [];
+      for (const productItem of productItems) {
+        const productEnabled = !hiddenProductIds.has(productItem.productId);
+        const productAction = productEnabled ? 'hide' : 'show';
+        keyboard.push([{
+          text: `${productEnabled ? '✅' : '❌'} └ 🧾 ${productItem.name}`,
+          callback_data: `toggle_digital_product_menu_button_${productItem.productId}_${productAction}`
+        }]);
+      }
+    }
   }
 
   keyboard.push([{ text: await getText(userId, 'colorButtons'), callback_data: 'admin_color_buttons' }]);
@@ -5599,7 +5676,7 @@ async function showButtonColorAdmin(userId) {
   for (const item of items) {
     const currentStyle = normalizeTelegramButtonStyle(styleMap[item.styleKey]);
     const styleLabel = await getButtonStyleLabel(userId, currentStyle);
-    const stockWarning = item.type === 'product' && Number(item.stock || 0) <= 0 ? ' 🔴' : '';
+    const stockWarning = item.type === 'product' ? (Number(item.stock || 0) <= 0 ? ' 🔴' : ' 🟢') : '';
     keyboard.push([{
       text: `${styleLabel}${stockWarning} ${item.name}`,
       callback_data: `admin_button_color_item_${item.type}_${item.id}`
@@ -9281,6 +9358,16 @@ bot.on('callback_query', async query => {
       const buttonId = parts.slice(2).join('_');
       await moveMenuButton(buttonId, direction);
       await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonOrderUpdated') });
+      await showMenuButtonsAdmin(userId);
+      return;
+    }
+
+    const digitalProductToggleMatch = data.match(/^toggle_digital_product_menu_button_(\d+)_(show|hide)$/);
+    if (digitalProductToggleMatch && isAdmin(userId)) {
+      const productId = parseInt(digitalProductToggleMatch[1], 10);
+      const action = digitalProductToggleMatch[2];
+      await setDigitalProductVisibility(productId, action === 'show');
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonVisibilityUpdated') });
       await showMenuButtonsAdmin(userId);
       return;
     }
