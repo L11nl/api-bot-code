@@ -2012,20 +2012,22 @@ async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
 
 
 const INLINE_BUTTON_TEXT_WRAP_LIMIT = 34;
+const INLINE_PRODUCT_BUTTON_ROW_WRAP_LIMIT = 24;
 const INLINE_BUTTON_TEXT_WRAP_MAX_LINES = 6;
 
-function splitLongInlineButtonLine(line) {
+function splitLongInlineButtonLine(line, limit = INLINE_BUTTON_TEXT_WRAP_LIMIT) {
   const value = String(line || '').trim();
-  if (!value || Array.from(value).length <= INLINE_BUTTON_TEXT_WRAP_LIMIT) return [value];
+  const safeLimit = Math.max(10, parseInt(limit, 10) || INLINE_BUTTON_TEXT_WRAP_LIMIT);
+  if (!value || Array.from(value).length <= safeLimit) return [value];
 
   const rows = [];
   let remaining = value;
   const separators = [' | ', ' - ', ' / ', ' — ', ' – ', '، ', ': ', ' '];
 
-  while (Array.from(remaining).length > INLINE_BUTTON_TEXT_WRAP_LIMIT && rows.length < INLINE_BUTTON_TEXT_WRAP_MAX_LINES - 1) {
+  while (Array.from(remaining).length > safeLimit && rows.length < INLINE_BUTTON_TEXT_WRAP_MAX_LINES - 1) {
     const remainingLength = remaining.length;
-    const preferredMax = Math.min(remainingLength - 1, INLINE_BUTTON_TEXT_WRAP_LIMIT + 8);
-    const preferredMin = Math.max(8, INLINE_BUTTON_TEXT_WRAP_LIMIT - 14);
+    const preferredMax = Math.min(remainingLength - 1, safeLimit + 6);
+    const preferredMin = Math.max(6, safeLimit - 10);
     let best = null;
 
     for (const sep of separators) {
@@ -2036,7 +2038,7 @@ function splitLongInlineButtonLine(line) {
       }
 
       idx = remaining.indexOf(sep, preferredMin);
-      if (idx > 0 && idx <= preferredMax + 12) {
+      if (idx > 0 && idx <= preferredMax + 10) {
         best = { index: idx, sepLength: sep.length };
         break;
       }
@@ -2044,8 +2046,8 @@ function splitLongInlineButtonLine(line) {
 
     if (!best) {
       const chars = Array.from(remaining);
-      const head = chars.slice(0, INLINE_BUTTON_TEXT_WRAP_LIMIT).join('').trim();
-      const tail = chars.slice(INLINE_BUTTON_TEXT_WRAP_LIMIT).join('').trim();
+      const head = chars.slice(0, safeLimit).join('').trim();
+      const tail = chars.slice(safeLimit).join('').trim();
       if (!head || !tail) break;
       rows.push(head);
       remaining = tail;
@@ -2063,15 +2065,22 @@ function splitLongInlineButtonLine(line) {
   return rows.filter(Boolean);
 }
 
-function makeInlineButtonTextFullyVisible(text) {
+function getInlineButtonVisibleTextRows(text, limit = INLINE_BUTTON_TEXT_WRAP_LIMIT) {
   const value = String(text || '');
-  if (!value) return value;
-
-  const lines = value
+  if (!value) return [];
+  return value
     .split('\n')
-    .flatMap(line => splitLongInlineButtonLine(line));
+    .flatMap(line => splitLongInlineButtonLine(line, limit))
+    .filter(Boolean);
+}
 
-  return lines.join('\n');
+function makeInlineButtonTextFullyVisible(text) {
+  return getInlineButtonVisibleTextRows(text).join('\n');
+}
+
+function shouldSplitInlineButtonIntoRows(button) {
+  const callbackData = String(button?.callback_data || '').trim();
+  return /^(?:admin_)?digital_product_\d+$/.test(callbackData) || /^digital_buy_\d+$/.test(callbackData);
 }
 
 function applyFullVisibleButtonTextToReplyMarkup(replyMarkup) {
@@ -2079,20 +2088,36 @@ function applyFullVisibleButtonTextToReplyMarkup(replyMarkup) {
     if (!replyMarkup || !Array.isArray(replyMarkup.inline_keyboard)) return replyMarkup;
 
     const cloned = JSON.parse(JSON.stringify(replyMarkup));
+    const expandedKeyboard = [];
+
     for (const row of cloned.inline_keyboard) {
       if (!Array.isArray(row)) continue;
+
+      if (row.length === 1 && row[0] && typeof row[0] === 'object' && row[0].text && shouldSplitInlineButtonIntoRows(row[0])) {
+        const visibleRows = getInlineButtonVisibleTextRows(row[0].text, INLINE_PRODUCT_BUTTON_ROW_WRAP_LIMIT);
+        if (visibleRows.length > 1) {
+          for (const text of visibleRows) {
+            expandedKeyboard.push([{ ...row[0], text }]);
+          }
+          continue;
+        }
+      }
+
       for (const button of row) {
         if (!button || typeof button !== 'object' || !button.text) continue;
         button.text = makeInlineButtonTextFullyVisible(button.text);
       }
+      expandedKeyboard.push(row);
     }
 
+    cloned.inline_keyboard = expandedKeyboard;
     return cloned;
   } catch (err) {
     console.error('applyFullVisibleButtonTextToReplyMarkup error:', err);
     return replyMarkup;
   }
 }
+
 
 async function decorateSendOptions(chatId, options = {}) {
   if (!options || !options.reply_markup) return options;
