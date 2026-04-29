@@ -625,7 +625,7 @@ const DEFAULT_TEXTS = {
     digitalStockInputPrompt: 'Send the stock/accounts now.\n\nFor account items, send the email on one line and the password on the next line for each account.',
     digitalSectionEmpty: 'No subscriptions are available in this section yet.',
     digitalSectionChooseProduct: 'Choose the subscription you want:',
-    digitalProductListButton: '{name} - {price} USD ({stock})',
+    digitalProductListButton: '{name}\n💵 {price} USD | 📦 {stock}',
     digitalProductDetailsText: '🧩 {name}\n\nRemaining stock: {stock}\nPrice: {price} USD\n\nDetails:\n{details}',
     attachedDetailsNote: 'See the attached media for the full details.',
     productQuantityPrompt: 'How many subscriptions would you like to buy? Send the number only.',
@@ -973,7 +973,7 @@ const DEFAULT_TEXTS = {
     digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nإذا كان المنتج حسابات، فأرسل الإيميل في سطر والباسورد في السطر الذي بعده لكل حساب.',
     digitalSectionEmpty: 'لا توجد اشتراكات متاحة داخل هذه الخانة حالياً.',
     digitalSectionChooseProduct: '🧩 اختر الاشتراك المطلوب من القائمة التالية:',
-    digitalProductListButton: '{name} - {price} دولار ({stock})',
+    digitalProductListButton: '{name}\n💵 {price} دولار | 📦 {stock}',
     digitalProductDetailsText: '🧩 {name}\n\nالمخزون المتبقي: {stock}\nالسعر: {price} دولار\n\nالتفاصيل:\n{details}',
     attachedDetailsNote: 'شاهد الوسائط المرفقة لمعرفة التفاصيل كاملة.',
     productQuantityPrompt: 'كم عدد الاشتراكات التي تريد شراءها؟ أرسل الرقم فقط.',
@@ -1090,7 +1090,7 @@ Object.assign(DEFAULT_TEXTS.en, {
   supportUserMessageForwarded: '📨 Your message was delivered to support.',
   supportThreadAdminNotice: '📩 Live support message\n\nUsername: {username}\nName: {name}\nUser ID: {userId}\n\nMessage: {message}',
   digitalStockInputPrompt: 'Send the stock/accounts now.\n\nQuick formats supported:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|extra note\n\nYou can also use the button below to add one account step by step.',
-  digitalProductListButton: '{name} - {price} USD | Available {stock}'
+  digitalProductListButton: '{name}\n💵 {price} USD | 📦 Available {stock}'
 });
 
 Object.assign(DEFAULT_TEXTS.ar, {
@@ -1190,7 +1190,7 @@ Object.assign(DEFAULT_TEXTS.ar, {
   supportUserMessageForwarded: '📨 تم إيصال رسالتك إلى الدعم.',
   supportThreadAdminNotice: '📩 رسالة دعم مباشرة\n\nالمعرف: {username}\nالاسم: {name}\nايدي المستخدم: {userId}\n\nالرسالة: {message}',
   digitalStockInputPrompt: 'أرسل الآن المخزون/الحسابات.\n\nالصيغ السريعة المدعومة:\nemail|password\nemail | password\nemail|password|verification\nemail|password|verification|ملاحظة إضافية\n\nويمكنك أيضاً استخدام زر «إضافة إيميل وباسورد» لإضافة حساب واحد خطوة بخطوة.',
-  digitalProductListButton: '{name} - {price} دولار | يوجد {stock}'
+  digitalProductListButton: '{name}\n💵 {price} دولار | 📦 يوجد {stock}'
 });
 
 Object.assign(DEFAULT_TEXTS.en, {
@@ -2010,13 +2010,98 @@ async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
   }
 }
 
+
+const INLINE_BUTTON_TEXT_WRAP_LIMIT = 34;
+const INLINE_BUTTON_TEXT_WRAP_MAX_LINES = 6;
+
+function splitLongInlineButtonLine(line) {
+  const value = String(line || '').trim();
+  if (!value || Array.from(value).length <= INLINE_BUTTON_TEXT_WRAP_LIMIT) return [value];
+
+  const rows = [];
+  let remaining = value;
+  const separators = [' | ', ' - ', ' / ', ' — ', ' – ', '، ', ': ', ' '];
+
+  while (Array.from(remaining).length > INLINE_BUTTON_TEXT_WRAP_LIMIT && rows.length < INLINE_BUTTON_TEXT_WRAP_MAX_LINES - 1) {
+    const remainingLength = remaining.length;
+    const preferredMax = Math.min(remainingLength - 1, INLINE_BUTTON_TEXT_WRAP_LIMIT + 8);
+    const preferredMin = Math.max(8, INLINE_BUTTON_TEXT_WRAP_LIMIT - 14);
+    let best = null;
+
+    for (const sep of separators) {
+      let idx = remaining.lastIndexOf(sep, preferredMax);
+      if (idx >= preferredMin) {
+        best = { index: idx, sepLength: sep.length };
+        break;
+      }
+
+      idx = remaining.indexOf(sep, preferredMin);
+      if (idx > 0 && idx <= preferredMax + 12) {
+        best = { index: idx, sepLength: sep.length };
+        break;
+      }
+    }
+
+    if (!best) {
+      const chars = Array.from(remaining);
+      const head = chars.slice(0, INLINE_BUTTON_TEXT_WRAP_LIMIT).join('').trim();
+      const tail = chars.slice(INLINE_BUTTON_TEXT_WRAP_LIMIT).join('').trim();
+      if (!head || !tail) break;
+      rows.push(head);
+      remaining = tail;
+      continue;
+    }
+
+    const head = remaining.slice(0, best.index).trim();
+    const tail = remaining.slice(best.index + best.sepLength).trim();
+    if (!head || !tail) break;
+    rows.push(head);
+    remaining = tail;
+  }
+
+  if (remaining) rows.push(remaining.trim());
+  return rows.filter(Boolean);
+}
+
+function makeInlineButtonTextFullyVisible(text) {
+  const value = String(text || '');
+  if (!value) return value;
+
+  const lines = value
+    .split('\n')
+    .flatMap(line => splitLongInlineButtonLine(line));
+
+  return lines.join('\n');
+}
+
+function applyFullVisibleButtonTextToReplyMarkup(replyMarkup) {
+  try {
+    if (!replyMarkup || !Array.isArray(replyMarkup.inline_keyboard)) return replyMarkup;
+
+    const cloned = JSON.parse(JSON.stringify(replyMarkup));
+    for (const row of cloned.inline_keyboard) {
+      if (!Array.isArray(row)) continue;
+      for (const button of row) {
+        if (!button || typeof button !== 'object' || !button.text) continue;
+        button.text = makeInlineButtonTextFullyVisible(button.text);
+      }
+    }
+
+    return cloned;
+  } catch (err) {
+    console.error('applyFullVisibleButtonTextToReplyMarkup error:', err);
+    return replyMarkup;
+  }
+}
+
 async function decorateSendOptions(chatId, options = {}) {
   if (!options || !options.reply_markup) return options;
   const withIcons = await applyCustomEmojiIconsToReplyMarkup(chatId, options.reply_markup);
   const withStyles = await applyButtonStylesToReplyMarkup(chatId, withIcons);
+  const withReadableButtons = applyFullVisibleButtonTextToReplyMarkup(withStyles);
   return {
     ...options,
-    reply_markup: withStyles
+    reply_markup: withReadableButtons
   };
 }
 
@@ -5565,13 +5650,14 @@ async function showMenuButtonsAdmin(userId) {
     const enabled = item.type === 'digital' ? item.enabled : visibility[item.id] !== false;
     const action = enabled ? 'hide' : 'show';
 
+    keyboard.push([{
+      text: `${enabled ? '✅' : '❌'} ${item.name}`,
+      callback_data: item.type === 'digital'
+        ? `toggle_digital_menu_button_${item.sectionId}_${action}`
+        : `toggle_button_${item.id}_${action}`
+    }]);
+
     keyboard.push([
-      {
-        text: `${enabled ? '✅' : '❌'} ${item.name}`,
-        callback_data: item.type === 'digital'
-          ? `toggle_digital_menu_button_${item.sectionId}_${action}`
-          : `toggle_button_${item.id}_${action}`
-      },
       {
         text: '⬆️',
         callback_data: i === 0
