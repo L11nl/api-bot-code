@@ -1346,6 +1346,35 @@ Object.assign(DEFAULT_TEXTS.ar, {
   customEmojiNoMatch: '❌ لم أجد ايموجي مخصص في رسالتك.'
 });
 
+
+Object.assign(DEFAULT_TEXTS.en, {
+  colorButtons: '🎨 Color Buttons',
+  buttonColorChooseButton: '🎨 Choose the button you want to color:\n\nSupported Telegram styles: blue, green, red. If a digital product stock is empty, its button becomes red automatically.',
+  buttonColorChooseStyle: '🎨 Choose a color for:\n{name}',
+  buttonStyleDefault: '⚪ Default',
+  buttonStylePrimary: '🔵 Blue',
+  buttonStyleSuccess: '🟢 Green',
+  buttonStyleDanger: '🔴 Red',
+  buttonColorUpdated: '✅ Button color updated!',
+  showDigitalProductInFront: '📌 Show in front',
+  hideDigitalProductFromFront: '📌 Hide from front',
+  frontDigitalProductUpdated: '✅ Front display updated!'
+});
+
+Object.assign(DEFAULT_TEXTS.ar, {
+  colorButtons: '🎨 تلوين الأزرار',
+  buttonColorChooseButton: '🎨 اختر الزر الذي تريد تلوينه:\n\nالألوان المدعومة من تيليجرام: أزرق، أخضر، أحمر. إذا نفد مخزون اشتراك رقمي يصبح زره أحمر تلقائيًا.',
+  buttonColorChooseStyle: '🎨 اختر لون الزر:\n{name}',
+  buttonStyleDefault: '⚪ افتراضي',
+  buttonStylePrimary: '🔵 أزرق',
+  buttonStyleSuccess: '🟢 أخضر',
+  buttonStyleDanger: '🔴 أحمر',
+  buttonColorUpdated: '✅ تم تحديث لون الزر!',
+  showDigitalProductInFront: '📌 إظهار في المقدمة',
+  hideDigitalProductFromFront: '📌 إخفاء من المقدمة',
+  frontDigitalProductUpdated: '✅ تم تحديث الظهور في المقدمة!'
+});
+
 function isAdmin(userId) {
   return Number(userId) === ADMIN_ID;
 }
@@ -1682,6 +1711,201 @@ async function setButtonCustomEmojiId(key, lang, emojiId) {
   await saveButtonCustomEmojiMap(map);
 }
 
+
+const TELEGRAM_BUTTON_STYLE_OPTIONS = ['primary', 'success', 'danger'];
+
+function normalizeTelegramButtonStyle(style) {
+  const normalized = String(style || '').trim().toLowerCase();
+  return TELEGRAM_BUTTON_STYLE_OPTIONS.includes(normalized) ? normalized : '';
+}
+
+async function getButtonStyleMap() {
+  const rawValue = await getGlobalSetting('button_style_map', '{}');
+  try {
+    const parsed = JSON.parse(String(rawValue || '{}'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveButtonStyleMap(map) {
+  await Setting.upsert({
+    key: 'button_style_map',
+    lang: 'global',
+    value: JSON.stringify(map || {})
+  });
+}
+
+async function setButtonStyle(styleKey, style) {
+  const normalizedStyle = normalizeTelegramButtonStyle(style);
+  const map = await getButtonStyleMap();
+  const key = String(styleKey || '').trim();
+  if (!key) return;
+
+  if (normalizedStyle) {
+    map[key] = normalizedStyle;
+  } else {
+    delete map[key];
+  }
+
+  await saveButtonStyleMap(map);
+}
+
+function getStyleKey(type, id) {
+  return `${type}:${id}`;
+}
+
+function parseStyleKey(styleKey) {
+  const match = String(styleKey || '').match(/^(static|section|product):(.+)$/);
+  if (!match) return null;
+  return { type: match[1], id: match[2] };
+}
+
+function getStaticStyleKeyFromCallback(callbackData) {
+  const callbackKey = callbackData === 'admin' ? 'admin_panel' : String(callbackData || '').trim();
+  if (Object.prototype.hasOwnProperty.call(DEFAULT_BUTTONS, callbackKey)) {
+    return getStyleKey('static', callbackKey);
+  }
+  return '';
+}
+
+function getSectionIdFromButtonCallback(callbackData) {
+  const match = String(callbackData || '').match(/^(?:admin_)?digital_section_(\d+)$/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function getProductIdFromButtonCallback(callbackData) {
+  const match = String(callbackData || '').match(/^(?:admin_)?digital_product_(\d+)$|^digital_buy_(\d+)$/);
+  if (!match) return null;
+  return parseInt(match[1] || match[2], 10);
+}
+
+function getButtonStyleLookupKeys(button) {
+  const callbackData = String(button?.callback_data || '').trim();
+  const keys = [];
+
+  const staticKey = getStaticStyleKeyFromCallback(callbackData);
+  if (staticKey) keys.push(staticKey);
+
+  const sectionId = getSectionIdFromButtonCallback(callbackData);
+  if (Number.isInteger(sectionId)) keys.push(getStyleKey('section', sectionId));
+
+  const productId = getProductIdFromButtonCallback(callbackData);
+  if (Number.isInteger(productId)) keys.push(getStyleKey('product', productId));
+
+  return keys;
+}
+
+async function getAutomaticButtonStyle(button) {
+  const productId = getProductIdFromButtonCallback(button?.callback_data);
+  if (!Number.isInteger(productId)) return '';
+
+  const merchant = await Merchant.findByPk(productId);
+  if (!merchant || !isDigitalSectionCategory(merchant.category)) return '';
+
+  const stock = await getMerchantAvailableStock(productId);
+  return stock <= 0 ? 'danger' : '';
+}
+
+async function applyButtonStylesToReplyMarkup(chatId, replyMarkup) {
+  try {
+    if (!replyMarkup || (!Array.isArray(replyMarkup.inline_keyboard) && !Array.isArray(replyMarkup.keyboard))) {
+      return replyMarkup;
+    }
+
+    const styleMap = await getButtonStyleMap();
+    const cloned = JSON.parse(JSON.stringify(replyMarkup));
+    const keyboards = [];
+    if (Array.isArray(cloned.inline_keyboard)) keyboards.push(cloned.inline_keyboard);
+    if (Array.isArray(cloned.keyboard)) keyboards.push(cloned.keyboard);
+
+    for (const keyboard of keyboards) {
+      for (const row of keyboard) {
+        if (!Array.isArray(row)) continue;
+        for (const button of row) {
+          if (!button || typeof button !== 'object') continue;
+
+          const automaticStyle = await getAutomaticButtonStyle(button);
+          const configuredStyle = getButtonStyleLookupKeys(button)
+            .map(key => normalizeTelegramButtonStyle(styleMap[key]))
+            .find(Boolean) || '';
+          const style = automaticStyle || configuredStyle;
+
+          if (style) {
+            button.style = style;
+          }
+        }
+      }
+    }
+
+    return cloned;
+  } catch (err) {
+    console.error('applyButtonStylesToReplyMarkup error:', err);
+    return replyMarkup;
+  }
+}
+
+async function getFeaturedDigitalProductIds() {
+  const rawValue = await getGlobalSetting('featured_digital_products', '[]');
+  try {
+    const parsed = JSON.parse(String(rawValue || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.map(id => parseInt(id, 10)).filter(Number.isInteger))];
+  } catch {
+    return [];
+  }
+}
+
+async function saveFeaturedDigitalProductIds(ids) {
+  const normalized = [...new Set((Array.isArray(ids) ? ids : []).map(id => parseInt(id, 10)).filter(Number.isInteger))];
+  await Setting.upsert({
+    key: 'featured_digital_products',
+    lang: 'global',
+    value: JSON.stringify(normalized)
+  });
+}
+
+async function isFeaturedDigitalProduct(merchantId) {
+  const ids = await getFeaturedDigitalProductIds();
+  return ids.includes(parseInt(merchantId, 10));
+}
+
+async function toggleFeaturedDigitalProduct(merchantId) {
+  const normalizedId = parseInt(merchantId, 10);
+  if (!Number.isInteger(normalizedId)) return false;
+
+  const ids = await getFeaturedDigitalProductIds();
+  const exists = ids.includes(normalizedId);
+  const nextIds = exists ? ids.filter(id => id !== normalizedId) : [...ids, normalizedId];
+  await saveFeaturedDigitalProductIds(nextIds);
+  return !exists;
+}
+
+async function getFeaturedDigitalProductsForMenu() {
+  const ids = await getFeaturedDigitalProductIds();
+  if (!ids.length) return [];
+
+  const products = await Merchant.findAll({
+    where: { id: { [Op.in]: ids } },
+    order: [['id', 'ASC']]
+  });
+  const sections = await getDigitalSections();
+  const activeSectionIds = new Set(sections.map(section => section.id));
+  const productById = new Map(products.map(product => [product.id, product]));
+  const ordered = [];
+
+  for (const id of ids) {
+    const product = productById.get(id);
+    if (!product || !isDigitalSectionCategory(product.category)) continue;
+    const sectionId = parseDigitalSectionIdFromCategory(product.category);
+    if (!activeSectionIds.has(sectionId)) continue;
+    ordered.push(product);
+  }
+
+  return ordered;
+}
+
 async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
   try {
     if (!replyMarkup || (!Array.isArray(replyMarkup.inline_keyboard) && !Array.isArray(replyMarkup.keyboard))) {
@@ -1731,9 +1955,11 @@ async function applyCustomEmojiIconsToReplyMarkup(chatId, replyMarkup) {
 
 async function decorateSendOptions(chatId, options = {}) {
   if (!options || !options.reply_markup) return options;
+  const withIcons = await applyCustomEmojiIconsToReplyMarkup(chatId, options.reply_markup);
+  const withStyles = await applyButtonStylesToReplyMarkup(chatId, withIcons);
   return {
     ...options,
-    reply_markup: await applyCustomEmojiIconsToReplyMarkup(chatId, options.reply_markup)
+    reply_markup: withStyles
   };
 }
 
@@ -2965,6 +3191,8 @@ async function showDigitalProductAdmin(userId, merchantId) {
     : await getText(userId, 'typeSingle');
   const description = await getMerchantAdminDescriptionSummary(userId, merchant);
 
+  const featured = await isFeaturedDigitalProduct(merchant.id);
+
   await bot.sendMessage(
     userId,
     await getText(userId, 'digitalProductManageText', {
@@ -2986,6 +3214,7 @@ async function showDigitalProductAdmin(userId, merchantId) {
           [{ text: await getText(userId, 'editDigitalProductName'), callback_data: `admin_edit_digital_product_name_${merchant.id}` }],
           [{ text: await getText(userId, 'editDigitalProductPrice'), callback_data: `admin_edit_digital_product_price_${merchant.id}` }],
           [{ text: await getText(userId, 'editDigitalProductDescription'), callback_data: `admin_edit_digital_product_description_${merchant.id}` }],
+          [{ text: await getText(userId, featured ? 'hideDigitalProductFromFront' : 'showDigitalProductInFront'), callback_data: `admin_toggle_front_digital_product_${merchant.id}` }],
           [{ text: await getText(userId, 'deleteDigitalProduct'), callback_data: `admin_delete_digital_product_${merchant.id}` }],
           [{ text: await getText(userId, 'back'), callback_data: sectionId ? `admin_digital_section_${sectionId}` : 'admin_digital_subscriptions' }]
         ]
@@ -5294,9 +5523,124 @@ async function showMenuButtonsAdmin(userId) {
     ]);
   }
 
+  keyboard.push([{ text: await getText(userId, 'colorButtons'), callback_data: 'admin_color_buttons' }]);
   keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
 
   await bot.sendMessage(userId, await getText(userId, 'manageMenuButtons'), {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+
+async function getButtonStyleLabel(userId, style) {
+  const normalized = normalizeTelegramButtonStyle(style);
+  if (!normalized) return await getText(userId, 'buttonStyleDefault');
+  if (normalized === 'primary') return await getText(userId, 'buttonStylePrimary');
+  if (normalized === 'success') return await getText(userId, 'buttonStyleSuccess');
+  if (normalized === 'danger') return await getText(userId, 'buttonStyleDanger');
+  return await getText(userId, 'buttonStyleDefault');
+}
+
+async function getColorableButtonItems(userId) {
+  const items = [];
+  const staticItems = await getMenuButtonItems(userId);
+
+  for (const item of staticItems) {
+    items.push({
+      type: 'static',
+      id: item.id,
+      styleKey: getStyleKey('static', item.id),
+      name: item.name
+    });
+  }
+
+  const sections = await getAllDigitalSections();
+  for (const section of sections) {
+    items.push({
+      type: 'section',
+      id: section.id,
+      styleKey: getStyleKey('section', section.id),
+      name: `🧩 ${section.nameEn} / ${section.nameAr}`
+    });
+  }
+
+  const sectionCategories = sections.map(section => getDigitalSectionCategory(section.id));
+  if (sectionCategories.length) {
+    const products = await Merchant.findAll({
+      where: { category: { [Op.in]: sectionCategories } },
+      order: [['id', 'ASC']]
+    });
+
+    for (const product of products) {
+      const stock = await getMerchantAvailableStock(product.id);
+      items.push({
+        type: 'product',
+        id: product.id,
+        styleKey: getStyleKey('product', product.id),
+        name: `🧾 ${product.nameEn} / ${product.nameAr} (${stock})`,
+        stock
+      });
+    }
+  }
+
+  return items;
+}
+
+async function findColorableButtonItem(userId, type, id) {
+  const items = await getColorableButtonItems(userId);
+  return items.find(item => item.type === type && String(item.id) === String(id)) || null;
+}
+
+async function showButtonColorAdmin(userId) {
+  const items = await getColorableButtonItems(userId);
+  const styleMap = await getButtonStyleMap();
+  const keyboard = [];
+
+  for (const item of items) {
+    const currentStyle = normalizeTelegramButtonStyle(styleMap[item.styleKey]);
+    const styleLabel = await getButtonStyleLabel(userId, currentStyle);
+    const stockWarning = item.type === 'product' && Number(item.stock || 0) <= 0 ? ' 🔴' : '';
+    keyboard.push([{
+      text: `${styleLabel}${stockWarning} ${item.name}`,
+      callback_data: `admin_button_color_item_${item.type}_${item.id}`
+    }]);
+  }
+
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
+
+  await bot.sendMessage(userId, await getText(userId, 'buttonColorChooseButton'), {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function showButtonColorChoices(userId, type, id) {
+  const item = await findColorableButtonItem(userId, type, id);
+  if (!item) {
+    await bot.sendMessage(userId, await getText(userId, 'buttonNameNotFound'), {
+      reply_markup: await getBackAndCancelReplyMarkup(userId, 'admin_color_buttons')
+    });
+    return;
+  }
+
+  const styleMap = await getButtonStyleMap();
+  const currentStyle = normalizeTelegramButtonStyle(styleMap[item.styleKey]);
+  const colorRows = [
+    { style: 'primary', textKey: 'buttonStylePrimary' },
+    { style: 'success', textKey: 'buttonStyleSuccess' },
+    { style: 'danger', textKey: 'buttonStyleDanger' },
+    { style: 'default', textKey: 'buttonStyleDefault' }
+  ];
+
+  const keyboard = [];
+  for (const row of colorRows) {
+    keyboard.push([{
+      text: `${currentStyle === row.style || (!currentStyle && row.style === 'default') ? '✅ ' : ''}${await getText(userId, row.textKey)}`,
+      callback_data: `admin_button_color_set_${type}_${id}_${row.style}`
+    }]);
+  }
+  keyboard.push([{ text: await getText(userId, 'back'), callback_data: 'admin_color_buttons' }]);
+
+  await bot.sendMessage(userId, await getText(userId, 'buttonColorChooseStyle', { name: item.name }), {
     reply_markup: { inline_keyboard: keyboard }
   });
 }
@@ -7651,6 +7995,7 @@ async function sendMainMenu(userId) {
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
   const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
+  const featuredProducts = await getFeaturedDigitalProductsForMenu();
 
   const buttonLabels = {
     buy: await getText(userId, 'buy'),
@@ -7669,6 +8014,19 @@ async function sendMainMenu(userId) {
   };
 
   const buttons = [];
+
+  for (const product of featuredProducts) {
+    const stock = await getMerchantAvailableStock(product.id);
+    const name = await getMerchantDisplayName(product, userId);
+    buttons.push([{
+      text: await getText(userId, 'digitalProductListButton', {
+        name,
+        price: formatUsdPrice(product.price),
+        stock
+      }),
+      callback_data: `digital_product_${product.id}`
+    }]);
+  }
 
   for (const id of order) {
     const digitalSection = digitalSectionMap.get(id);
@@ -7703,6 +8061,7 @@ async function showAdminPanel(userId) {
     inline_keyboard: [
       [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
       [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
+      [{ text: await getText(userId, 'colorButtons'), callback_data: 'admin_color_buttons' }],
       [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
       [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
       [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
@@ -8879,6 +9238,30 @@ bot.on('callback_query', async query => {
     if (data === 'admin_manage_menu_buttons' && isAdmin(userId)) {
       await showMenuButtonsAdmin(userId);
       await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    if (data === 'admin_color_buttons' && isAdmin(userId)) {
+      await showButtonColorAdmin(userId);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const buttonColorItemMatch = data.match(/^admin_button_color_item_(static|section|product)_(.+)$/);
+    if (buttonColorItemMatch && isAdmin(userId)) {
+      await showButtonColorChoices(userId, buttonColorItemMatch[1], buttonColorItemMatch[2]);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const buttonColorSetMatch = data.match(/^admin_button_color_set_(static|section|product)_(.+)_(primary|success|danger|default)$/);
+    if (buttonColorSetMatch && isAdmin(userId)) {
+      const type = buttonColorSetMatch[1];
+      const id = buttonColorSetMatch[2];
+      const style = buttonColorSetMatch[3] === 'default' ? '' : buttonColorSetMatch[3];
+      await setButtonStyle(getStyleKey(type, id), style);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'buttonColorUpdated') });
+      await showButtonColorChoices(userId, type, id);
       return;
     }
 
@@ -10098,6 +10481,15 @@ bot.on('callback_query', async query => {
       }
       await showDigitalProductAdmin(userId, merchantId);
       await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    const toggleFrontDigitalProductMatch = data.match(/^admin_toggle_front_digital_product_(\d+)$/);
+    if (toggleFrontDigitalProductMatch && isAdmin(userId)) {
+      const merchantId = parseInt(toggleFrontDigitalProductMatch[1], 10);
+      await toggleFeaturedDigitalProduct(merchantId);
+      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'frontDigitalProductUpdated') });
+      await showDigitalProductAdmin(userId, merchantId);
       return;
     }
 
