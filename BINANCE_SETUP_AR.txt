@@ -1,0 +1,21 @@
+إعداد Binance المنقول من البوت الأول
+===================================
+
+استخدم هذه المتغيرات داخل Railway بنفس الأسماء:
+
+BINANCE_API_KEY
+BINANCE_API_SECRET
+BINANCE_PAY_ID
+
+المتغيرات الاختيارية المطابقة للبوت الأول:
+
+BINANCE_API_BASE_URL=https://api.binance.com
+BINANCE_MIN_AMOUNT=1
+BINANCE_MAX_AMOUNT=100000
+BINANCE_VERIFY_WINDOW_HOURS=6
+
+مهم:
+- استخدم مفتاح Binance API عادي بصلاحية القراءة.
+- لا تستخدم مفاتيح Binance Pay Merchant مكان المفتاح العادي.
+- احذف أي متغير قديم خاص ببروكسي Render إن كان موجوداً.
+- ارفع ملفات المشروع بحيث يكون package.json وindex.js في جذر المستودع.

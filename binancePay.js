@@ -1,69 +1,62 @@
-'use strict';
-
 const crypto = require('crypto');
 const axios = require('axios');
 
+// This module is a compatibility port of the working Binance ID verifier
+// from the first bot. It uses the same environment-variable names,
+// endpoint, signature, time synchronization, and matching rules.
+
 let serverTimeOffsetMs = 0;
 
-function cleanValue(value) {
-  const text = String(value ?? '').trim();
-  if (text.length >= 2) {
-    const first = text[0];
-    const last = text[text.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return text.slice(1, -1).trim();
-    }
+function cleanEnv(value) {
+  const text = String(value || '').trim();
+  if (text.length >= 2 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) {
+    return text.slice(1, -1).trim();
   }
   return text;
 }
 
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
-}
+function getConfig(params = {}) {
+  const apiKey = cleanEnv(
+    process.env.BINANCE_API_KEY ||
+    process.env.BINANCE_PAY_API_KEY ||
+    params.apiKey ||
+    ''
+  );
 
-function getBaseUrls() {
-  const configured = cleanValue(process.env.BINANCE_API_BASE_URL || '').replace(/\/$/, '');
-  return unique([
-    configured,
-    'https://api.binance.com',
-    'https://api-gcp.binance.com',
-    'https://api1.binance.com',
-    'https://api2.binance.com'
-  ]);
-}
+  const secretKey = cleanEnv(
+    process.env.BINANCE_API_SECRET ||
+    process.env.BINANCE_SECRET_KEY ||
+    process.env.BINANCE_PAY_SECRET_KEY ||
+    params.apiSecret ||
+    ''
+  );
 
-function getCredentials(params = {}) {
+  const payId = cleanEnv(
+    process.env.BINANCE_PAY_ID ||
+    process.env.BINANCE_ID ||
+    params.payId ||
+    ''
+  );
+
   return {
-    apiKey: cleanValue(
-      params.apiKey
-      || process.env.BINANCE_API_KEY
-      || process.env.BINANCE_PAY_API_KEY
-      || ''
-    ),
-    apiSecret: cleanValue(
-      params.apiSecret
-      || process.env.BINANCE_API_SECRET
-      || process.env.BINANCE_SECRET_KEY
-      || process.env.BINANCE_PAY_SECRET_KEY
-      || ''
-    ),
-    payId: cleanValue(
-      params.payId
-      || process.env.BINANCE_PAY_ID
-      || process.env.BINANCE_ID
-      || ''
-    )
+    apiKey,
+    secretKey,
+    payId,
+    baseUrl: cleanEnv(process.env.BINANCE_API_BASE_URL || 'https://api.binance.com').replace(/\/$/, ''),
+    verificationWindowHours: Math.min(24, Math.max(1, Number(process.env.BINANCE_VERIFY_WINDOW_HOURS || 6)))
   };
 }
 
-function generateDepositNote(prefix = 'TOOLS-') {
-  const safePrefix = String(prefix || 'TOOLS-');
+function configured(params = {}) {
+  const config = getConfig(params);
+  return Boolean(config.apiKey && config.secretKey && config.payId);
+}
+
+function generateDepositNote() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let suffix = '';
-  for (let i = 0; i < 6; i += 1) {
-    suffix += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return `${safePrefix}${suffix}`;
+  for (let i = 0; i < 6; i += 1) suffix += chars[Math.floor(Math.random() * chars.length)];
+  return `CD-${suffix}`;
 }
 
 function normalizeOrderId(value) {
@@ -75,7 +68,7 @@ function normalizeNote(value) {
 }
 
 function looksLikeOrderId(value) {
-  return /^[A-Za-z0-9_-]{6,128}$/.test(normalizeOrderId(value));
+  return /^[A-Za-z0-9_-]{6,128}$/.test(String(value || '').trim());
 }
 
 function normalizeAmount(value) {
@@ -83,21 +76,27 @@ function normalizeAmount(value) {
 }
 
 function normalizeIdentifier(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, '')
-    .toLowerCase();
+  return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
 }
 
 function normalizeDigits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
-function normalizeNoteCode(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9]/g, '')
-    .toUpperCase();
+function getTransactionAmount(item) {
+  const currency = String(item?.currency || '').toUpperCase();
+  const direct = Math.abs(Number(item?.amount || 0));
+  if (currency === 'USDT' && Number.isFinite(direct) && direct > 0) return direct;
+
+  const funds = Array.isArray(item?.fundsDetail) ? item.fundsDetail : [];
+  const usdt = funds.find(row => String(row?.currency || '').toUpperCase() === 'USDT');
+  const nested = Math.abs(Number(usdt?.amount || 0));
+  return Number.isFinite(nested) ? nested : 0;
+}
+
+function getTransactionTime(item) {
+  const value = Number(item?.transactionTime || item?.transactTime || item?.createTime || item?.updateTime || 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function identifierCandidates(item) {
@@ -111,65 +110,33 @@ function identifierCandidates(item) {
     item?.trxId,
     item?.transactionNo,
     item?.tradeNo,
-    item?.merchantOrderNo,
-    item?.merchantTransId,
-    item?.sourceId,
-    item?.requestId,
-    item?.payRequestId,
     item?.id
   ].filter(value => value !== undefined && value !== null && String(value).trim() !== '');
 }
 
 function getTransactionOrderId(item) {
   const first = identifierCandidates(item)[0];
-  return first === undefined ? '' : String(first);
+  return first ? String(first) : '';
 }
 
 function getTransactionNote(item) {
-  const noteFields = [
+  const fields = [
     item?.note,
     item?.remark,
     item?.message,
     item?.transferNote,
     item?.paymentInfo?.note,
     item?.extendInfo?.note
-  ];
-  const first = noteFields.find(value => value !== undefined && value !== null && String(value).trim() !== '');
-  return first === undefined ? '' : String(first);
-}
-
-function getTransactionAmount(item) {
-  const currency = String(item?.currency || '').toUpperCase();
-  const direct = Math.abs(Number(item?.amount || 0));
-  if (currency === 'USDT' && Number.isFinite(direct) && direct > 0) {
-    return direct;
-  }
-
-  const funds = Array.isArray(item?.fundsDetail) ? item.fundsDetail : [];
-  const usdt = funds.find(row => String(row?.currency || '').toUpperCase() === 'USDT');
-  const nested = Math.abs(Number(usdt?.amount || 0));
-  return Number.isFinite(nested) ? nested : 0;
-}
-
-function getTransactionTime(item) {
-  const value = Number(
-    item?.transactionTime
-    || item?.transactTime
-    || item?.createTime
-    || item?.updateTime
-    || 0
-  );
-  return Number.isFinite(value) ? value : 0;
+  ].filter(value => value !== undefined && value !== null && String(value).trim() !== '');
+  return fields.length ? String(fields[0]) : '';
 }
 
 function flattenValues(value, output = [], seen = new Set()) {
   if (value === null || value === undefined) return output;
-
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     output.push(String(value));
     return output;
   }
-
   if (typeof value !== 'object' || seen.has(value)) return output;
   seen.add(value);
 
@@ -181,37 +148,28 @@ function flattenValues(value, output = [], seen = new Set()) {
       flattenValues(item, output, seen);
     }
   }
-
   return output;
 }
 
 function itemMatchesSubmittedId(item, submittedId) {
   const wanted = normalizeIdentifier(submittedId);
   const wantedDigits = normalizeDigits(submittedId);
-  if (!wanted && !wantedDigits) return false;
-
   const directMatch = identifierCandidates(item).some(candidate => {
     const normalized = normalizeIdentifier(candidate);
     const digits = normalizeDigits(candidate);
-    return (wanted && normalized === wanted)
-      || (wantedDigits && digits === wantedDigits);
+    return (wanted && normalized === wanted) || (wantedDigits && digits === wantedDigits);
   });
-
   if (directMatch) return true;
 
   return flattenValues(item).some(candidate => {
     const normalized = normalizeIdentifier(candidate);
     const digits = normalizeDigits(candidate);
-    return (wanted && normalized === wanted)
-      || (wantedDigits && digits === wantedDigits);
+    return (wanted && normalized === wanted) || (wantedDigits && digits === wantedDigits);
   });
 }
 
-function itemMatchesNote(item, expectedNote) {
-  const wanted = normalizeNoteCode(expectedNote);
-  if (!wanted) return false;
-
-  const explicitFields = [
+function noteMatchState(item, verificationCode) {
+  const noteFields = [
     item?.note,
     item?.remark,
     item?.message,
@@ -220,11 +178,9 @@ function itemMatchesNote(item, expectedNote) {
     item?.extendInfo?.note
   ].filter(value => value !== undefined && value !== null && String(value).trim() !== '');
 
-  if (explicitFields.some(value => normalizeNoteCode(value).includes(wanted))) {
-    return true;
-  }
-
-  return flattenValues(item).some(value => normalizeNoteCode(value).includes(wanted));
+  if (!noteFields.length) return 'UNAVAILABLE';
+  const wanted = normalizeIdentifier(verificationCode);
+  return noteFields.some(value => normalizeIdentifier(value).includes(wanted)) ? 'MATCH' : 'MISMATCH';
 }
 
 function uniqueTransactionId(item) {
@@ -245,64 +201,45 @@ function isIncoming(item) {
   if (Number.isFinite(directAmount) && directAmount < 0) return false;
 
   const orderType = String(item?.orderType || '').toUpperCase();
-  if ([
-    'PAY_REFUND',
-    'C2C_HOLDING_RF',
-    'CRYPTO_BOX_RF',
-    'REFUND',
-    'FULL_REFUNDED'
-  ].includes(orderType)) {
-    return false;
-  }
-
+  if (['PAY_REFUND', 'C2C_HOLDING_RF', 'CRYPTO_BOX_RF', 'REFUND', 'FULL_REFUNDED'].includes(orderType)) return false;
   return getTransactionAmount(item) > 0;
 }
 
-function signedQuery(params, apiSecret) {
+function signedQuery(params, secretKey) {
   const query = new URLSearchParams(params).toString();
-  const signature = crypto.createHmac('sha256', apiSecret).update(query).digest('hex');
+  const signature = crypto.createHmac('sha256', secretKey).update(query).digest('hex');
   return `${query}&signature=${signature}`;
 }
 
-function safeErrorDetail(error, baseUrl = null) {
-  const data = error?.response?.data;
-  return {
-    baseUrl,
-    status: Number(error?.response?.status || 0) || null,
-    code: data?.code ?? null,
-    networkCode: error?.code || error?.cause?.code || null,
-    message: data?.msg || data?.message || error?.message || String(error)
-  };
+async function syncServerTime(config) {
+  const response = await axios.get(`${config.baseUrl}/api/v3/time`, { timeout: 10000 });
+  const serverTime = Number(response.data?.serverTime || 0);
+  if (serverTime > 0) serverTimeOffsetMs = serverTime - Date.now();
 }
 
 function isTimestampError(error) {
   const text = JSON.stringify(error?.response?.data || error?.message || error).toLowerCase();
-  return text.includes('-1021')
-    || text.includes('outside of the recvwindow')
-    || text.includes('outside of the time window')
-    || text.includes('invalid_timestamp');
+  return text.includes('-1021') || text.includes('outside of the recvwindow') || text.includes('outside of the time window');
 }
 
-function shouldTryAnotherHost(error) {
-  if (!error?.response) return true;
-  const status = Number(error.response.status || 0);
-  return status === 403
-    || status === 408
-    || status === 418
-    || status === 429
-    || status === 451
-    || status >= 500;
-}
-
-async function syncServerTime(baseUrl) {
-  const response = await axios.get(`${baseUrl}/api/v3/time`, { timeout: 10000 });
-  const serverTime = Number(response.data?.serverTime || 0);
-  if (serverTime > 0) {
-    serverTimeOffsetMs = serverTime - Date.now();
+function friendlyError(error) {
+  const data = error?.response?.data;
+  const message = data?.msg || data?.message || error?.message || String(error);
+  if (String(message).includes('-2015') || /Invalid API-key, IP, or permissions/i.test(message)) {
+    return 'BINANCE_API_PERMISSION';
   }
+  return message;
 }
 
-async function fetchTransactionsFromHost(baseUrl, credentials, startTime, endTime) {
+function diagnosticCode(error) {
+  return [
+    error?.response?.data?.code,
+    error?.code,
+    error?.response?.status
+  ].filter(value => value !== undefined && value !== null && String(value) !== '').join('/');
+}
+
+async function fetchTransactions(config, startTime, endTime) {
   const perform = async () => {
     const params = {
       limit: '100',
@@ -313,10 +250,10 @@ async function fetchTransactionsFromHost(baseUrl, credentials, startTime, endTim
     };
 
     const response = await axios.get(
-      `${baseUrl}/sapi/v1/pay/transactions?${signedQuery(params, credentials.apiSecret)}`,
+      `${config.baseUrl}/sapi/v1/pay/transactions?${signedQuery(params, config.secretKey)}`,
       {
         timeout: 20000,
-        headers: { 'X-MBX-APIKEY': credentials.apiKey }
+        headers: { 'X-MBX-APIKEY': config.apiKey }
       }
     );
 
@@ -327,159 +264,103 @@ async function fetchTransactionsFromHost(baseUrl, credentials, startTime, endTim
     return await perform();
   } catch (error) {
     if (isTimestampError(error)) {
-      await syncServerTime(baseUrl);
+      await syncServerTime(config);
       return perform();
     }
     throw error;
   }
 }
 
-async function fetchTransactions(credentials, startTime, endTime) {
-  const errors = [];
-  const baseUrls = getBaseUrls();
-
-  for (let index = 0; index < baseUrls.length; index += 1) {
-    const baseUrl = baseUrls[index];
-    try {
-      const rows = await fetchTransactionsFromHost(baseUrl, credentials, startTime, endTime);
-      return { rows, baseUrl };
-    } catch (error) {
-      const detail = safeErrorDetail(error, baseUrl);
-      errors.push(detail);
-      console.error('[Binance] API request failed:', detail);
-
-      const hasAnotherHost = index < baseUrls.length - 1;
-      if (!hasAnotherHost || !shouldTryAnotherHost(error)) {
-        const wrapped = new Error(detail.message || 'Binance API error');
-        wrapped.binanceDetail = detail;
-        wrapped.binanceAttempts = errors;
-        wrapped.response = error?.response;
-        wrapped.code = error?.code;
-        throw wrapped;
-      }
-    }
-  }
-
-  const last = errors[errors.length - 1] || { message: 'Binance API error' };
-  const wrapped = new Error(last.message || 'Binance API error');
-  wrapped.binanceDetail = last;
-  wrapped.binanceAttempts = errors;
-  throw wrapped;
-}
-
 async function verifyBinanceTransfer(params = {}) {
-  const credentials = getCredentials(params);
-  const expectedAmount = normalizeAmount(params.expectedAmount);
-  const expectedNote = normalizeNote(params.expectedNote);
-  const submittedOrderId = normalizeOrderId(params.orderIdToCheck);
-
-  if (!credentials.apiKey || !credentials.apiSecret) {
+  const config = getConfig(params);
+  if (!configured(params)) {
     return { success: false, reason: 'binance_not_configured' };
   }
 
-  if (!Number.isFinite(expectedAmount) || expectedAmount <= 0 || (!expectedNote && !submittedOrderId)) {
+  const expectedAmount = Number(params.expectedAmount || 0);
+  const verificationCode = String(params.expectedNote || '').trim();
+  const submittedOrderId = String(params.orderIdToCheck || '').trim();
+
+  if (!Number.isFinite(expectedAmount) || expectedAmount <= 0 || !verificationCode) {
     return { success: false, reason: 'invalid_payload' };
   }
 
-  const sessionCreatedAt = Number(params.sessionCreatedAt || 0);
-  const requestedWindowMs = Number(params.recentWindowMs || 0);
-  const verificationWindowMs = submittedOrderId
-    ? Math.max(60 * 60 * 1000, requestedWindowMs)
-    : 6 * 60 * 60 * 1000;
+  if (!looksLikeOrderId(submittedOrderId)) {
+    return { success: false, reason: 'no_match' };
+  }
 
-  const now = Date.now() + serverTimeOffsetMs;
-  const oldestAllowed = now - verificationWindowMs;
-  const sessionAnchor = Number.isFinite(sessionCreatedAt) && sessionCreatedAt > 0
-    ? sessionCreatedAt - (30 * 60 * 1000)
-    : oldestAllowed;
-  const startTime = Math.max(0, oldestAllowed, sessionAnchor);
-  const endTime = now + (60 * 1000);
+  const createdMs = Number(params.sessionCreatedAt || Date.now());
+  const oldestAllowed = Date.now() - config.verificationWindowHours * 60 * 60 * 1000;
+  const startTime = Math.max(0, oldestAllowed, createdMs - 30 * 60 * 1000);
+  const endTime = Date.now() + 60 * 1000;
 
-  let result;
+  let rows;
   try {
-    result = await fetchTransactions(credentials, startTime, endTime);
+    rows = await fetchTransactions(config, startTime, endTime);
   } catch (error) {
-    const detail = error?.binanceDetail || safeErrorDetail(error);
+    const detail = friendlyError(error);
+    const diagnostic = diagnosticCode(error);
+    console.error('[Binance ID] API verification failed:', {
+      baseUrl: config.baseUrl,
+      status: error?.response?.status || null,
+      code: error?.response?.data?.code || error?.code || null,
+      message: detail
+    });
     return {
       success: false,
       reason: 'api_error',
-      error: detail,
-      attempts: error?.binanceAttempts || [detail]
+      detail,
+      diagnostic: diagnostic || null
     };
   }
 
-  const rows = result.rows;
-  const amountCandidates = rows.filter(item => {
-    const amount = getTransactionAmount(item);
-    const time = getTransactionTime(item);
-    return isIncoming(item)
+  const candidates = rows.filter(row => itemMatchesSubmittedId(row, submittedOrderId));
+  if (!candidates.length) {
+    return { success: false, reason: 'no_match', searchedRows: rows.length };
+  }
+
+  const matched = candidates.find(row => {
+    const amount = getTransactionAmount(row);
+    const time = getTransactionTime(row);
+    const noteState = noteMatchState(row, verificationCode);
+    return isIncoming(row)
       && Math.abs(amount - expectedAmount) <= 0.0001
-      && (!time || time >= startTime);
+      && (!time || time >= startTime)
+      && noteState !== 'MISMATCH';
   });
 
-  const matchedRows = amountCandidates.filter(item => {
-    if (submittedOrderId) {
-      if (!itemMatchesSubmittedId(item, submittedOrderId)) return false;
-
-      const noteIsAvailable = Boolean(getTransactionNote(item));
-      return !noteIsAvailable || !expectedNote || itemMatchesNote(item, expectedNote);
-    }
-
-    return itemMatchesNote(item, expectedNote);
-  });
-
-  if (!matchedRows.length) {
+  if (!matched) {
     return {
       success: false,
       reason: 'no_match',
       searchedRows: rows.length,
-      matchedRows: 0,
-      amountMatchedRows: amountCandidates.length,
-      payIdMatchedRows: amountCandidates.length,
-      payId: credentials.payId || null,
-      apiBaseUrl: result.baseUrl
+      matchedRows: candidates.length
     };
   }
 
-  if (matchedRows.length > 1) {
-    return {
-      success: false,
-      reason: 'ambiguous_match',
-      searchedRows: rows.length,
-      matchedRows: matchedRows.length,
-      amountMatchedRows: amountCandidates.length,
-      payIdMatchedRows: amountCandidates.length,
-      payId: credentials.payId || null,
-      apiBaseUrl: result.baseUrl
-    };
-  }
-
-  const matchedItem = matchedRows[0];
-  const transactionId = uniqueTransactionId(matchedItem);
-  const matchedOrderId = getTransactionOrderId(matchedItem) || transactionId;
-
+  const transactionId = uniqueTransactionId(matched);
   return {
     success: true,
-    method: submittedOrderId ? 'exact_order_id' : 'note_code',
-    orderId: matchedOrderId,
-    rawOrderId: submittedOrderId || '',
+    method: 'exact_order_id',
+    amount: getTransactionAmount(matched),
     txId: transactionId,
-    amount: getTransactionAmount(matchedItem),
+    orderId: transactionId,
+    rawOrderId: submittedOrderId,
     currency: 'USDT',
-    transactionTime: getTransactionTime(matchedItem) || now,
-    orderType: matchedItem?.orderType || null,
-    payId: credentials.payId || null,
-    matchedItem,
+    transactionTime: getTransactionTime(matched) || Date.now(),
+    orderType: matched?.orderType || null,
+    payId: config.payId,
+    matchedItem: matched,
     searchedRows: rows.length,
-    matchedRows: 1,
-    amountMatchedRows: amountCandidates.length,
-    payIdMatchedRows: amountCandidates.length,
-    matchScore: 100,
-    apiBaseUrl: result.baseUrl
+    matchedRows: candidates.length,
+    amountMatchedRows: 1,
+    payIdMatchedRows: 1,
+    matchScore: 100
   };
 }
 
 module.exports = {
+  configured,
   generateDepositNote,
   normalizeOrderId,
   normalizeNote,

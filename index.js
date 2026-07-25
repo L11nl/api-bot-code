@@ -13,38 +13,25 @@ const {
   verifyBinanceTransfer
 } = require('./binancePay');
 
-function cleanEnvValue(value) {
-  const text = String(value ?? '').trim();
-  if (text.length >= 2) {
-    const first = text[0];
-    const last = text[text.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return text.slice(1, -1).trim();
-    }
-  }
-  return text;
-}
+const TOKEN = process.env.BOT_TOKEN;
+const ADMIN_ID = parseInt(String(process.env.ADMIN_IDS || process.env.ADMIN_ID || '').split(',')[0].trim(), 10);
+const DATABASE_URL = process.env.DATABASE_URL;
 
-const TOKEN = cleanEnvValue(process.env.BOT_TOKEN);
-const ADMIN_ID = parseInt(cleanEnvValue(process.env.ADMIN_ID || process.env.ADMIN_IDS).split(',')[0], 10);
-const DATABASE_URL = cleanEnvValue(process.env.DATABASE_URL);
-const BINANCE_API_KEY = cleanEnvValue(process.env.BINANCE_API_KEY || process.env.BINANCE_PAY_API_KEY || '');
-const BINANCE_API_SECRET = cleanEnvValue(
-  process.env.BINANCE_API_SECRET
-  || process.env.BINANCE_SECRET_KEY
-  || process.env.BINANCE_PAY_SECRET_KEY
-  || ''
-);
-const BINANCE_PAY_ID = cleanEnvValue(process.env.BINANCE_PAY_ID || process.env.BINANCE_ID || '842505320');
-const BINANCE_PAY_API_KEY = cleanEnvValue(process.env.BINANCE_PAY_API_KEY || process.env.BINANCE_API_KEY || '');
-const BINANCE_PAY_SECRET_KEY = cleanEnvValue(
-  process.env.BINANCE_PAY_SECRET_KEY
-  || process.env.BINANCE_API_SECRET
-  || process.env.BINANCE_SECRET_KEY
-  || ''
-);
-const BINANCE_PAY_BASE_URL = cleanEnvValue(process.env.BINANCE_PAY_BASE_URL || 'https://bpay.binanceapi.com').replace(/\/$/, '');
-const PUBLIC_WEBHOOK_URL = cleanEnvValue(process.env.PUBLIC_WEBHOOK_URL || process.env.PUBLIC_URL || '').replace(/\/$/, '');
+// Same Binance variable names and precedence used by the first working bot.
+const BINANCE_API_KEY = String(process.env.BINANCE_API_KEY || process.env.BINANCE_PAY_API_KEY || '').trim();
+const BINANCE_API_SECRET = String(
+  process.env.BINANCE_API_SECRET ||
+  process.env.BINANCE_SECRET_KEY ||
+  process.env.BINANCE_PAY_SECRET_KEY ||
+  ''
+).trim();
+const BINANCE_PAY_ID = String(process.env.BINANCE_PAY_ID || process.env.BINANCE_ID || '').trim();
+const BINANCE_API_BASE_URL = String(process.env.BINANCE_API_BASE_URL || 'https://api.binance.com').replace(/\/$/, '');
+const BINANCE_VERIFY_WINDOW_HOURS = Math.min(24, Math.max(1, Number(process.env.BINANCE_VERIFY_WINDOW_HOURS || 6)));
+const BINANCE_PAY_API_KEY = process.env.BINANCE_PAY_API_KEY || '';
+const BINANCE_PAY_SECRET_KEY = process.env.BINANCE_PAY_SECRET_KEY || '';
+const BINANCE_PAY_BASE_URL = String(process.env.BINANCE_PAY_BASE_URL || 'https://bpay.binanceapi.com').replace(/\/$/, '');
+const PUBLIC_WEBHOOK_URL = String(process.env.PUBLIC_WEBHOOK_URL || '').replace(/\/$/, '');
 const BINANCE_PAY_WEBHOOK_PATH = String(process.env.BINANCE_PAY_WEBHOOK_PATH || '/webhooks/binance-pay').trim() || '/webhooks/binance-pay';
 const BINANCE_PAY_RETURN_URL = String(process.env.BINANCE_PAY_RETURN_URL || '').trim();
 const BINANCE_PAY_CANCEL_URL = String(process.env.BINANCE_PAY_CANCEL_URL || '').trim();
@@ -7283,80 +7270,15 @@ function pickFirstNonEmpty(source, keys = []) {
 }
 
 async function getBinanceCredentials() {
-  if (BINANCE_API_KEY && BINANCE_API_SECRET) {
-    return {
-      apiKey: BINANCE_API_KEY,
-      apiSecret: BINANCE_API_SECRET,
-      payId: BINANCE_PAY_ID || null,
-      source: 'env'
-    };
-  }
-
-  const globalSettings = await Setting.findAll({
-    where: {
-      lang: 'global',
-      key: {
-        [Op.in]: [
-          'binance_api_key',
-          'binance_api_secret',
-          'binance_pay_id',
-          'binance_apiKey',
-          'binance_apiSecret'
-        ]
-      }
-    }
-  }).catch(() => []);
-
-  const settingsMap = Object.fromEntries((globalSettings || []).map(item => [item.key, item.value]));
-  const globalApiKey = settingsMap.binance_api_key || settingsMap.binance_apiKey || null;
-  const globalApiSecret = settingsMap.binance_api_secret || settingsMap.binance_apiSecret || null;
-  const globalPayId = settingsMap.binance_pay_id || BINANCE_PAY_ID || null;
-
-  if (globalApiKey && globalApiSecret) {
-    return {
-      apiKey: String(globalApiKey).trim(),
-      apiSecret: String(globalApiSecret).trim(),
-      payId: globalPayId ? String(globalPayId).trim() : null,
-      source: 'settings'
-    };
-  }
-
-  const methods = await PaymentMethod.findAll({
-    where: { isActive: true },
-    order: [['id', 'DESC']]
-  }).catch(() => []);
-
-  for (const method of methods) {
-    const haystack = [method?.nameEn, method?.nameAr, method?.type, method?.details]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-
-    if (!haystack.includes('binance') && !haystack.includes('بايننس')) continue;
-
-    const configs = [
-      tryParseJson(method?.config),
-      tryParseJson(method?.details),
-      parseLooseConfigText(method?.details)
-    ].filter(Boolean);
-
-    for (const cfg of configs) {
-      const apiKey = pickFirstNonEmpty(cfg, ['apiKey', 'api_key', 'binanceApiKey', 'binance_api_key', 'key']);
-      const apiSecret = pickFirstNonEmpty(cfg, ['apiSecret', 'api_secret', 'binanceApiSecret', 'binance_api_secret', 'secret']);
-      const payId = pickFirstNonEmpty(cfg, ['payId', 'pay_id', 'binancePayId', 'binance_pay_id', 'merchantId', 'merchant_id', 'accountId', 'account_id']);
-
-      if (apiKey && apiSecret) {
-        return {
-          apiKey,
-          apiSecret,
-          payId: payId || BINANCE_PAY_ID || null,
-          source: `payment_method:${method.id}`
-        };
-      }
-    }
-  }
-
-  return null;
+  if (!BINANCE_API_KEY || !BINANCE_API_SECRET || !BINANCE_PAY_ID) return null;
+  return {
+    apiKey: BINANCE_API_KEY,
+    apiSecret: BINANCE_API_SECRET,
+    payId: BINANCE_PAY_ID,
+    baseUrl: BINANCE_API_BASE_URL,
+    verificationWindowHours: BINANCE_VERIFY_WINDOW_HOURS,
+    source: 'env'
+  };
 }
 
 function flattenBinanceItemStrings(value, seen = new Set()) {
@@ -7779,23 +7701,15 @@ async function fetchCandidateBinanceTransactionsFast(credentials, sessionCreated
   return { ok: false, error: result.error || 'API error', rows: [] };
 }
 
-function getBinanceVerificationFailureReason(reason, lang, detail = null) {
+function getBinanceVerificationFailureReason(reason, lang) {
   const ar = lang === 'ar';
   switch (reason) {
     case 'binance_not_configured':
       return ar ? '⚠️ إعدادات Binance API غير مكتملة على السيرفر.' : '⚠️ Binance API credentials are not configured on the server.';
     case 'invalid_payload':
       return ar ? '⚠️ بيانات التحقق غير صالحة.' : '⚠️ Invalid verification payload.';
-    case 'api_error': { 
-      const base = ar
-        ? '⚠️ تعذر الاتصال بـ Binance API حاليًا، حاول مرة أخرى بعد قليل.'
-        : '⚠️ Binance API is currently unavailable. Please try again shortly.';
-      const reference = [detail?.code, detail?.networkCode, detail?.status]
-        .filter(value => value !== undefined && value !== null && String(value).trim() !== '')
-        .map(String)
-        .join('/');
-      return reference ? `${base}\n\n${ar ? 'رمز التشخيص' : 'Diagnostic code'}: ${reference}` : base;
-    }
+    case 'api_error':
+      return ar ? '⚠️ تعذر الاتصال بـ Binance API حاليًا، حاول مرة أخرى بعد قليل.' : '⚠️ Binance API is currently unavailable. Please try again shortly.';
     case 'duplicate_tx':
       return ar ? '❌ هذه العملية مستخدمة مسبقًا.' : '❌ This transaction has already been used.';
     case 'ambiguous_match':
@@ -8101,7 +8015,10 @@ async function processBinanceAutoVerification(userId, state, options = {}) {
       return { handled: true, success: false, reason: checkResult.reason || 'not_found' };
     }
     if (checkResult.reason === 'api_error') {
-      await bot.sendMessage(userId, getBinanceVerificationFailureReason('api_error', lang, checkResult.error));
+      const diagnosticSuffix = checkResult.diagnostic
+        ? `\n\nرمز التشخيص: ${checkResult.diagnostic}`
+        : '';
+      await bot.sendMessage(userId, `${getBinanceVerificationFailureReason('api_error', lang)}${diagnosticSuffix}`);
     } else if (checkResult.reason === 'expired_order_id') {
       await bot.sendMessage(userId, await getText(userId, 'binanceTransferOrderIdExpired'), {
         reply_markup: await getBinanceTransferReplyMarkup(userId)
