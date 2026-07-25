@@ -1,40 +1,69 @@
+'use strict';
+
 const crypto = require('crypto');
-const https = require('https');
 const axios = require('axios');
 
-// This file intentionally uses the same Binance account-history endpoint and
-// signature method as the working bot. No Render middleware/proxy is used.
-const BINANCE_API_BASE_URL = String(
-  process.env.BINANCE_API_BASE_URL || 'https://api.binance.com'
-).replace(/\/$/, '');
-
-// Force a direct IPv4 HTTPS connection. `proxy: false` also prevents Axios
-// from using HTTP_PROXY / HTTPS_PROXY variables left from an older deployment.
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  family: 4,
-  maxSockets: 10
-});
-
-const http = axios.create({
-  timeout: 20000,
-  httpsAgent,
-  proxy: false,
-  headers: {
-    Accept: 'application/json'
-  }
-});
-
 let serverTimeOffsetMs = 0;
-let serverTimeWasSynced = false;
+
+function cleanValue(value) {
+  const text = String(value ?? '').trim();
+  if (text.length >= 2) {
+    const first = text[0];
+    const last = text[text.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return text.slice(1, -1).trim();
+    }
+  }
+  return text;
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function getBaseUrls() {
+  const configured = cleanValue(process.env.BINANCE_API_BASE_URL || '').replace(/\/$/, '');
+  return unique([
+    configured,
+    'https://api.binance.com',
+    'https://api-gcp.binance.com',
+    'https://api1.binance.com',
+    'https://api2.binance.com'
+  ]);
+}
+
+function getCredentials(params = {}) {
+  return {
+    apiKey: cleanValue(
+      params.apiKey
+      || process.env.BINANCE_API_KEY
+      || process.env.BINANCE_PAY_API_KEY
+      || ''
+    ),
+    apiSecret: cleanValue(
+      params.apiSecret
+      || process.env.BINANCE_API_SECRET
+      || process.env.BINANCE_SECRET_KEY
+      || process.env.BINANCE_PAY_SECRET_KEY
+      || ''
+    ),
+    payId: cleanValue(
+      params.payId
+      || process.env.BINANCE_PAY_ID
+      || process.env.BINANCE_ID
+      || ''
+    )
+  };
+}
 
 function generateDepositNote(prefix = 'TOOLS-') {
+  const safePrefix = String(prefix || 'TOOLS-');
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let suffix = '';
   for (let i = 0; i < 6; i += 1) {
     suffix += chars[Math.floor(Math.random() * chars.length)];
   }
-  return `${prefix}${suffix}`;
+  return `${safePrefix}${suffix}`;
 }
 
 function normalizeOrderId(value) {
@@ -45,9 +74,8 @@ function normalizeNote(value) {
   return String(value || '').trim();
 }
 
-// Binance identifiers are not guaranteed to be digits only.
 function looksLikeOrderId(value) {
-  return /^[A-Za-z0-9_-]{6,128}$/.test(String(value || '').trim());
+  return /^[A-Za-z0-9_-]{6,128}$/.test(normalizeOrderId(value));
 }
 
 function normalizeAmount(value) {
@@ -98,7 +126,7 @@ function getTransactionOrderId(item) {
 }
 
 function getTransactionNote(item) {
-  const fields = [
+  const noteFields = [
     item?.note,
     item?.remark,
     item?.message,
@@ -106,7 +134,7 @@ function getTransactionNote(item) {
     item?.paymentInfo?.note,
     item?.extendInfo?.note
   ];
-  const first = fields.find(value => value !== undefined && value !== null && String(value).trim() !== '');
+  const first = noteFields.find(value => value !== undefined && value !== null && String(value).trim() !== '');
   return first === undefined ? '' : String(first);
 }
 
@@ -196,7 +224,6 @@ function itemMatchesNote(item, expectedNote) {
     return true;
   }
 
-  // Some Binance responses put the note inside a nested object.
   return flattenValues(item).some(value => normalizeNoteCode(value).includes(wanted));
 }
 
@@ -231,36 +258,21 @@ function isIncoming(item) {
   return getTransactionAmount(item) > 0;
 }
 
-function resolveCredentials(params = {}) {
-  const apiKey = String(
-    params.apiKey
-    || process.env.BINANCE_API_KEY
-    || process.env.BINANCE_PAY_API_KEY
-    || ''
-  ).trim();
-
-  const apiSecret = String(
-    params.apiSecret
-    || process.env.BINANCE_API_SECRET
-    || process.env.BINANCE_SECRET_KEY
-    || process.env.BINANCE_PAY_SECRET_KEY
-    || ''
-  ).trim();
-
-  const payId = String(
-    params.payId
-    || process.env.BINANCE_PAY_ID
-    || process.env.BINANCE_ID
-    || ''
-  ).trim();
-
-  return { apiKey, apiSecret, payId };
-}
-
 function signedQuery(params, apiSecret) {
   const query = new URLSearchParams(params).toString();
   const signature = crypto.createHmac('sha256', apiSecret).update(query).digest('hex');
   return `${query}&signature=${signature}`;
+}
+
+function safeErrorDetail(error, baseUrl = null) {
+  const data = error?.response?.data;
+  return {
+    baseUrl,
+    status: Number(error?.response?.status || 0) || null,
+    code: data?.code ?? null,
+    networkCode: error?.code || error?.cause?.code || null,
+    message: data?.msg || data?.message || error?.message || String(error)
+  };
 }
 
 function isTimestampError(error) {
@@ -271,48 +283,27 @@ function isTimestampError(error) {
     || text.includes('invalid_timestamp');
 }
 
-function isRetryableNetworkError(error) {
-  if (!error) return false;
-  if (!error.response) return true;
+function shouldTryAnotherHost(error) {
+  if (!error?.response) return true;
   const status = Number(error.response.status || 0);
-  return status === 408 || status === 418 || status === 429 || status >= 500;
+  return status === 403
+    || status === 408
+    || status === 418
+    || status === 429
+    || status === 451
+    || status >= 500;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function syncServerTime() {
-  const response = await http.get(`${BINANCE_API_BASE_URL}/api/v3/time`, {
-    timeout: 10000
-  });
-
+async function syncServerTime(baseUrl) {
+  const response = await axios.get(`${baseUrl}/api/v3/time`, { timeout: 10000 });
   const serverTime = Number(response.data?.serverTime || 0);
-  if (!Number.isFinite(serverTime) || serverTime <= 0) {
-    throw new Error('Invalid Binance server time response');
+  if (serverTime > 0) {
+    serverTimeOffsetMs = serverTime - Date.now();
   }
-
-  serverTimeOffsetMs = serverTime - Date.now();
-  serverTimeWasSynced = true;
-  return serverTime;
 }
 
-async function fetchTransactions(credentials, startTime, endTime) {
-  // Sync before the first signed request. This avoids a failed first attempt on
-  // Railway instances whose clock differs from Binance.
-  if (!serverTimeWasSynced) {
-    try {
-      await syncServerTime();
-    } catch (error) {
-      // The signed request can still succeed, so do not fail only because the
-      // public time endpoint was temporarily unavailable.
-      console.error('[Binance] Initial time sync failed:', error?.message || error);
-    }
-  }
-
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+async function fetchTransactionsFromHost(baseUrl, credentials, startTime, endTime) {
+  const perform = async () => {
     const params = {
       limit: '100',
       recvWindow: '60000',
@@ -321,50 +312,63 @@ async function fetchTransactions(credentials, startTime, endTime) {
       endTime: String(endTime)
     };
 
+    const response = await axios.get(
+      `${baseUrl}/sapi/v1/pay/transactions?${signedQuery(params, credentials.apiSecret)}`,
+      {
+        timeout: 20000,
+        headers: { 'X-MBX-APIKEY': credentials.apiKey }
+      }
+    );
+
+    return Array.isArray(response.data?.data) ? response.data.data : [];
+  };
+
+  try {
+    return await perform();
+  } catch (error) {
+    if (isTimestampError(error)) {
+      await syncServerTime(baseUrl);
+      return perform();
+    }
+    throw error;
+  }
+}
+
+async function fetchTransactions(credentials, startTime, endTime) {
+  const errors = [];
+  const baseUrls = getBaseUrls();
+
+  for (let index = 0; index < baseUrls.length; index += 1) {
+    const baseUrl = baseUrls[index];
     try {
-      const response = await http.get(
-        `${BINANCE_API_BASE_URL}/sapi/v1/pay/transactions?${signedQuery(params, credentials.apiSecret)}`,
-        {
-          headers: { 'X-MBX-APIKEY': credentials.apiKey }
-        }
-      );
-
-      return Array.isArray(response.data?.data) ? response.data.data : [];
+      const rows = await fetchTransactionsFromHost(baseUrl, credentials, startTime, endTime);
+      return { rows, baseUrl };
     } catch (error) {
-      lastError = error;
+      const detail = safeErrorDetail(error, baseUrl);
+      errors.push(detail);
+      console.error('[Binance] API request failed:', detail);
 
-      if (isTimestampError(error)) {
-        try {
-          await syncServerTime();
-          continue;
-        } catch (syncError) {
-          lastError = syncError;
-        }
+      const hasAnotherHost = index < baseUrls.length - 1;
+      if (!hasAnotherHost || !shouldTryAnotherHost(error)) {
+        const wrapped = new Error(detail.message || 'Binance API error');
+        wrapped.binanceDetail = detail;
+        wrapped.binanceAttempts = errors;
+        wrapped.response = error?.response;
+        wrapped.code = error?.code;
+        throw wrapped;
       }
-
-      if (attempt < 3 && isRetryableNetworkError(error)) {
-        await sleep(attempt * 1200);
-        continue;
-      }
-
-      break;
     }
   }
 
-  throw lastError || new Error('Binance API request failed');
-}
-
-function safeErrorDetail(error) {
-  const data = error?.response?.data;
-  return {
-    status: Number(error?.response?.status || 0) || null,
-    code: data?.code ?? null,
-    message: data?.msg || data?.message || error?.message || String(error)
-  };
+  const last = errors[errors.length - 1] || { message: 'Binance API error' };
+  const wrapped = new Error(last.message || 'Binance API error');
+  wrapped.binanceDetail = last;
+  wrapped.binanceAttempts = errors;
+  throw wrapped;
 }
 
 async function verifyBinanceTransfer(params = {}) {
-  const credentials = resolveCredentials(params);
+  const credentials = getCredentials(params);
   const expectedAmount = normalizeAmount(params.expectedAmount);
   const expectedNote = normalizeNote(params.expectedNote);
   const submittedOrderId = normalizeOrderId(params.orderIdToCheck);
@@ -377,21 +381,11 @@ async function verifyBinanceTransfer(params = {}) {
     return { success: false, reason: 'invalid_payload' };
   }
 
-  // Same verification window idea used by the working bot: do not inspect old
-  // history unrelated to the current payment session.
   const sessionCreatedAt = Number(params.sessionCreatedAt || 0);
+  const requestedWindowMs = Number(params.recentWindowMs || 0);
   const verificationWindowMs = submittedOrderId
-    ? Math.max(60 * 60 * 1000, Number(params.recentWindowMs || 0))
+    ? Math.max(60 * 60 * 1000, requestedWindowMs)
     : 6 * 60 * 60 * 1000;
-
-  // Use the Binance-adjusted clock when available.
-  if (!serverTimeWasSynced) {
-    try {
-      await syncServerTime();
-    } catch (_) {
-      // fetchTransactions will retry and log the exact failure.
-    }
-  }
 
   const now = Date.now() + serverTimeOffsetMs;
   const oldestAllowed = now - verificationWindowMs;
@@ -401,19 +395,20 @@ async function verifyBinanceTransfer(params = {}) {
   const startTime = Math.max(0, oldestAllowed, sessionAnchor);
   const endTime = now + (60 * 1000);
 
-  let rows;
+  let result;
   try {
-    rows = await fetchTransactions(credentials, startTime, endTime);
+    result = await fetchTransactions(credentials, startTime, endTime);
   } catch (error) {
-    const detail = safeErrorDetail(error);
-    console.error('[Binance] Direct API verification failed:', detail);
+    const detail = error?.binanceDetail || safeErrorDetail(error);
     return {
       success: false,
       reason: 'api_error',
-      error: detail
+      error: detail,
+      attempts: error?.binanceAttempts || [detail]
     };
   }
 
+  const rows = result.rows;
   const amountCandidates = rows.filter(item => {
     const amount = getTransactionAmount(item);
     const time = getTransactionTime(item);
@@ -426,10 +421,8 @@ async function verifyBinanceTransfer(params = {}) {
     if (submittedOrderId) {
       if (!itemMatchesSubmittedId(item, submittedOrderId)) return false;
 
-      // Match the working bot: when Binance exposes a note, reject a wrong note;
-      // when the note is absent from the API payload, allow the exact order ID.
-      const noteFieldsAvailable = Boolean(getTransactionNote(item));
-      return !noteFieldsAvailable || !expectedNote || itemMatchesNote(item, expectedNote);
+      const noteIsAvailable = Boolean(getTransactionNote(item));
+      return !noteIsAvailable || !expectedNote || itemMatchesNote(item, expectedNote);
     }
 
     return itemMatchesNote(item, expectedNote);
@@ -443,7 +436,8 @@ async function verifyBinanceTransfer(params = {}) {
       matchedRows: 0,
       amountMatchedRows: amountCandidates.length,
       payIdMatchedRows: amountCandidates.length,
-      payId: credentials.payId || null
+      payId: credentials.payId || null,
+      apiBaseUrl: result.baseUrl
     };
   }
 
@@ -455,7 +449,8 @@ async function verifyBinanceTransfer(params = {}) {
       matchedRows: matchedRows.length,
       amountMatchedRows: amountCandidates.length,
       payIdMatchedRows: amountCandidates.length,
-      payId: credentials.payId || null
+      payId: credentials.payId || null,
+      apiBaseUrl: result.baseUrl
     };
   }
 
@@ -479,7 +474,8 @@ async function verifyBinanceTransfer(params = {}) {
     matchedRows: 1,
     amountMatchedRows: amountCandidates.length,
     payIdMatchedRows: amountCandidates.length,
-    matchScore: 100
+    matchScore: 100,
+    apiBaseUrl: result.baseUrl
   };
 }
 
