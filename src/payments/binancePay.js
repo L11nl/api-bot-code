@@ -232,10 +232,7 @@ function instructions(transfer, lang = 'ar') {
       '🆔 To Binance ID:',
       `<code>${config.binance.payId}</code>`,
       '',
-      '⚠️ Put this code in the payment note:',
-      `<code>${transfer.verificationCode}</code>`,
-      '',
-      'After sending, press Verify and paste the Binance Order ID.'
+      'After sending, send the Binance Order ID here:'
     ].join('\n');
   }
   return [
@@ -245,10 +242,7 @@ function instructions(transfer, lang = 'ar') {
     '🆔 إلى Binance ID:',
     `<code>${config.binance.payId}</code>`,
     '',
-    '⚠️ اكتب هذا الرمز في ملاحظة التحويل:',
-    `<code>${transfer.verificationCode}</code>`,
-    '',
-    'بعد التحويل اضغط «تحقق» والصق رقم طلب Binance.'
+    'بعد التحويل ارسل معرف الطلب هنا:'
   ].join('\n');
 }
 
@@ -510,11 +504,9 @@ async function verify(transferId, submittedOrderId) {
   const matched = candidates.find(row => {
     const amount = amountUsdt(row);
     const time = transactionTime(row);
-    const noteState = noteMatchState(row, transfer.verificationCode);
     return isIncoming(row)
       && Math.abs(amount - expected) <= 0.0001
-      && (!time || time >= startTime)
-      && noteState !== 'MISMATCH';
+      && (!time || time >= startTime);
   });
   if (!matched) return { success: false, reason: 'AMOUNT_OR_RECEIVER_MISMATCH' };
 
