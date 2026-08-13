@@ -252,13 +252,204 @@ function instructions(transfer, lang = 'ar') {
   ].join('\n');
 }
 
+function isRestrictedLocationError(error) {
+  const data = error?.response?.data;
+  const message = data?.msg || data?.message || error?.message || String(error);
+  return /restricted location/i.test(String(message))
+    || /service unavailable.*restricted/i.test(String(message))
+    || /eligibility/i.test(String(message)) && /location/i.test(String(message));
+}
+
 function friendlyError(error) {
   const data = error?.response?.data;
   const message = data?.msg || data?.message || error?.message || String(error);
+  if (isRestrictedLocationError(error)) return 'REGION_RESTRICTED';
   if (String(message).includes('-2015') || /Invalid API-key, IP, or permissions/i.test(message)) {
     return 'BINANCE_API_PERMISSION';
   }
   return message;
+}
+
+function validSubmittedOrderId(value) {
+  return /^[A-Za-z0-9_-]{6,128}$/.test(String(value || '').trim());
+}
+
+async function queueManualReview(transferId, submittedOrderId) {
+  const transfer = await BinanceTransfer.findByPk(transferId);
+  if (!transfer) return { success: false, reason: 'NOT_FOUND' };
+  if (transfer.status === 'VERIFIED' || transfer.status === 'PAYMENT_CONFIRMED') {
+    return { success: true, alreadyProcessed: true, transfer };
+  }
+  if (!['WAITING', 'MANUAL_REVIEW'].includes(transfer.status)) {
+    return { success: false, reason: 'NOT_WAITING' };
+  }
+
+  const submitted = String(submittedOrderId || '').trim();
+  if (!validSubmittedOrderId(submitted)) return { success: false, reason: 'INVALID_ORDER_ID' };
+
+  const duplicate = await BinanceTransfer.findOne({
+    where: {
+      id: { [Op.ne]: transfer.id },
+      status: { [Op.in]: ['VERIFIED', 'PAYMENT_CONFIRMED', 'MANUAL_REVIEW'] },
+      [Op.or]: [
+        { submittedOrderId: submitted },
+        { transactionId: submitted }
+      ]
+    }
+  });
+  if (duplicate) return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+
+  await transfer.update({
+    status: 'MANUAL_REVIEW',
+    submittedOrderId: submitted,
+    rawPayload: {
+      manualReview: true,
+      reason: 'REGION_RESTRICTED',
+      queuedAt: new Date().toISOString()
+    }
+  });
+  return { success: true, transfer };
+}
+
+async function approveManualReview(transferId, adminId) {
+  const transfer = await BinanceTransfer.findByPk(transferId);
+  if (!transfer) return { success: false, reason: 'NOT_FOUND' };
+  if (transfer.status === 'VERIFIED') return { success: true, alreadyProcessed: true, transfer };
+  if (transfer.status === 'PAYMENT_CONFIRMED' && transfer.orderId) {
+    try {
+      const fulfillment = await fulfillOrder(transfer.orderId, { paymentRef: `binance:${transfer.transactionId}` });
+      await transfer.update({ status: 'VERIFIED' });
+      return { success: true, topup: false, transfer, fulfillment, transactionId: transfer.transactionId };
+    } catch (error) {
+      return { success: false, reason: error.message, paymentConfirmed: true };
+    }
+  }
+  if (transfer.status !== 'MANUAL_REVIEW') return { success: false, reason: 'NOT_WAITING' };
+
+  const submitted = String(transfer.submittedOrderId || '').trim();
+  if (!validSubmittedOrderId(submitted)) return { success: false, reason: 'INVALID_ORDER_ID' };
+
+  const duplicate = await BinanceTransfer.findOne({
+    where: {
+      id: { [Op.ne]: transfer.id },
+      status: { [Op.in]: ['VERIFIED', 'PAYMENT_CONFIRMED'] },
+      [Op.or]: [
+        { submittedOrderId: submitted },
+        { transactionId: submitted }
+      ]
+    }
+  });
+  if (duplicate) return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+
+  if (transfer.orderId) {
+    try {
+      await transfer.update({
+        status: 'PAYMENT_CONFIRMED',
+        transactionId: submitted,
+        verifiedAt: new Date(),
+        rawPayload: {
+          manualReview: true,
+          approvedBy: String(adminId),
+          approvedAt: new Date().toISOString(),
+          submittedOrderId: submitted
+        }
+      });
+    } catch (error) {
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+      }
+      throw error;
+    }
+
+    try {
+      const fulfillment = await fulfillOrder(transfer.orderId, { paymentRef: `binance:${submitted}` });
+      await transfer.update({ status: 'VERIFIED' });
+      return { success: true, topup: false, transfer, fulfillment, transactionId: submitted, manual: true };
+    } catch (error) {
+      return { success: false, reason: error.message, paymentConfirmed: true };
+    }
+  }
+
+  const transaction = await sequelize.transaction();
+  try {
+    const lockedTransfer = await BinanceTransfer.findByPk(transfer.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (lockedTransfer.status === 'VERIFIED') {
+      await transaction.commit();
+      return { success: true, alreadyProcessed: true, transfer: lockedTransfer };
+    }
+    if (lockedTransfer.status !== 'MANUAL_REVIEW') throw new Error('NOT_WAITING');
+
+    const duplicateLocked = await BinanceTransfer.findOne({
+      where: {
+        id: { [Op.ne]: lockedTransfer.id },
+        status: { [Op.in]: ['VERIFIED', 'PAYMENT_CONFIRMED'] },
+        [Op.or]: [
+          { submittedOrderId: submitted },
+          { transactionId: submitted }
+        ]
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (duplicateLocked) throw new Error('DUPLICATE_TRANSACTION');
+
+    const ledger = await BalanceTransaction.findByPk(lockedTransfer.balanceTransactionId, { transaction, lock: transaction.LOCK.UPDATE });
+    const user = await User.findByPk(lockedTransfer.userId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!ledger || !user) throw new Error('TOPUP_RECORD_NOT_FOUND');
+
+    user.balance = Number(user.balance || 0) + Number(lockedTransfer.expectedAmount);
+    await user.save({ transaction });
+    ledger.status = 'completed';
+    ledger.txid = submitted;
+    ledger.caption = `Binance ID manual verification by admin ${adminId} | ${submitted}`;
+    await ledger.save({ transaction });
+    lockedTransfer.status = 'VERIFIED';
+    lockedTransfer.transactionId = submitted;
+    lockedTransfer.verifiedAt = new Date();
+    lockedTransfer.rawPayload = {
+      manualReview: true,
+      approvedBy: String(adminId),
+      approvedAt: new Date().toISOString(),
+      submittedOrderId: submitted
+    };
+    await lockedTransfer.save({ transaction });
+    await transaction.commit();
+    return {
+      success: true,
+      topup: true,
+      transfer: lockedTransfer,
+      userId: user.id,
+      amount: Number(lockedTransfer.expectedAmount),
+      newBalance: Number(user.balance),
+      transactionId: submitted,
+      manual: true
+    };
+  } catch (error) {
+    await transaction.rollback();
+    if (error.name === 'SequelizeUniqueConstraintError' || error.message === 'DUPLICATE_TRANSACTION') {
+      return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+    }
+    if (error.message === 'NOT_WAITING') return { success: false, reason: 'NOT_WAITING' };
+    throw error;
+  }
+}
+
+async function rejectManualReview(transferId, adminId) {
+  const transfer = await BinanceTransfer.findByPk(transferId);
+  if (!transfer) return { success: false, reason: 'NOT_FOUND' };
+  if (transfer.status !== 'MANUAL_REVIEW') return { success: false, reason: 'NOT_WAITING' };
+  const previousOrderId = transfer.submittedOrderId;
+  await transfer.update({
+    status: 'WAITING',
+    submittedOrderId: null,
+    rawPayload: {
+      manualReview: true,
+      rejectedBy: String(adminId),
+      rejectedAt: new Date().toISOString(),
+      rejectedOrderId: previousOrderId
+    }
+  });
+  return { success: true, transfer, previousOrderId };
 }
 
 async function verify(transferId, submittedOrderId) {
@@ -283,7 +474,7 @@ async function verify(transferId, submittedOrderId) {
 
   if (transfer.status !== 'WAITING') return { success: false, reason: 'NOT_WAITING' };
   const submitted = String(submittedOrderId || '').trim();
-  if (!/^[A-Za-z0-9_-]{6,128}$/.test(submitted)) return { success: false, reason: 'INVALID_ORDER_ID' };
+  if (!validSubmittedOrderId(submitted)) return { success: false, reason: 'INVALID_ORDER_ID' };
 
   const duplicate = await BinanceTransfer.findOne({
     where: {
@@ -305,7 +496,11 @@ async function verify(transferId, submittedOrderId) {
   try {
     rows = await fetchTransactions(startTime, endTime);
   } catch (error) {
-    return { success: false, reason: 'API_ERROR', detail: friendlyError(error) };
+    const detail = friendlyError(error);
+    if (detail === 'REGION_RESTRICTED') {
+      return { success: false, reason: 'REGION_RESTRICTED', detail };
+    }
+    return { success: false, reason: 'API_ERROR', detail };
   }
 
   const candidates = rows.filter(row => itemMatchesSubmittedId(row, submitted));
@@ -407,5 +602,8 @@ module.exports = {
   createForTopup,
   createForOrder,
   instructions,
-  verify
+  verify,
+  queueManualReview,
+  approveManualReview,
+  rejectManualReview
 };
