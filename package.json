@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
-  "description": "Easy Telegram digital store with colored stock buttons, automatic Arabic-English translation, Premium custom emoji support, SuperQi, Binance ID, and simplified admin product flow",
+  "description": "Easy Telegram digital store v6 with admin-controlled notifications, direct Binance Order ID verification, sub-$1 topups, colored stock buttons, translation, and Premium custom emoji ID support",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
