@@ -1608,11 +1608,8 @@ const MENU_BUTTON_TEXT_KEY_MAP = {
   my_balance: 'myBalanceButton',
   deposit: 'deposit',
   my_purchases: 'myPurchases',
-  redeem: 'redeem',
   referral: 'referral',
-  discount: 'discountButton',
   support: 'support',
-  ai_assistant: 'aiAssistant',
   change_language: 'changeLanguage',
   free_code: 'freeCodeMenu',
   admin_panel: 'adminPanel',
@@ -2281,19 +2278,6 @@ async function getActiveFreeCodeRenewalVersion() {
 async function getBotEnabled() {
   const rawValue = await getGlobalSetting('bot_enabled', 'true');
   return String(rawValue).toLowerCase() !== 'false';
-}
-
-async function getAiAssistantEnabled() {
-  const rawValue = await getGlobalSetting('ai_assistant_enabled', 'true');
-  return String(rawValue).toLowerCase() !== 'false';
-}
-
-async function setAiAssistantEnabled(enabled) {
-  await Setting.upsert({
-    key: 'ai_assistant_enabled',
-    lang: 'global',
-    value: enabled ? 'true' : 'false'
-  });
 }
 
 async function getAllowedUserIds() {
@@ -3477,13 +3461,9 @@ async function showDigitalProductDetails(userId, merchantId) {
     await bot.sendVideo(userId, merchant.description.fileId);
   }
 
-  const aiAssistantEnabled = await getAiAssistantEnabled();
   const inlineKeyboard = [
     [{ text: await getText(userId, 'buyNow'), callback_data: `digital_buy_${merchant.id}` }]
   ];
-  if (aiAssistantEnabled) {
-    inlineKeyboard.push([{ text: await getText(userId, 'askAiAboutThisProduct'), callback_data: `ai_about_product_${merchant.id}` }]);
-  }
   inlineKeyboard.push([{
     text: await getText(userId, 'back'),
     callback_data: section?.isActive ? `digital_section_${sectionId}` : 'back_to_menu'
@@ -3911,854 +3891,6 @@ async function closeSupportConversationForUser(userId, closedBy = 'user', adminI
       await bot.sendMessage(adminId, await getText(adminId, noticeKey));
     } catch {}
   }
-}
-
-function isSupportIntentText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return false;
-  return /(support|agent|human|admin|help me|contact support|تواصل مع الدعم|الدعم|دعم|مشكلة|شكوى|اكلم الادمن|اكلم الدعم|مراسلة الدعم)/i.test(normalized);
-}
-
-function isAffirmativeText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return /^(yes|y|ok|okay|sure|please|نعم|اي|أجل|ايوه|اريد|أريد|تمام|موافق)/i.test(normalized);
-}
-
-function isNegativeText(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return /^(no|n|cancel|later|لا|مو|ليس الآن|لاحقاً|الغاء|إلغاء)/i.test(normalized);
-}
-
-async function buildAssistantCatalogContext(userId, state = {}) {
-  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
-  const digitalSections = await getDigitalSections();
-  const sectionPayload = [];
-
-  for (const section of digitalSections) {
-    const products = await getDigitalProductsForSection(section.id);
-    const productPayload = [];
-    for (const product of products) {
-      productPayload.push({
-        id: product.id,
-        nameEn: product.nameEn,
-        nameAr: product.nameAr,
-        priceUSD: Number(product.price || 0),
-        stock: await getMerchantAvailableStock(product.id),
-        type: product.type,
-        details: truncateText(getMerchantPlainDescription(product), 220)
-      });
-    }
-
-    sectionPayload.push({
-      id: section.id,
-      nameEn: section.nameEn,
-      nameAr: section.nameAr,
-      products: productPayload
-    });
-  }
-
-  const generalMerchants = (await Merchant.findAll({ order: [['category', 'ASC'], ['id', 'ASC']] }))
-    .filter(merchant => !isDigitalSectionCategory(merchant.category))
-    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Code');
-
-  const generalCatalog = [];
-  for (const merchant of generalMerchants) {
-    generalCatalog.push({
-      id: merchant.id,
-      nameEn: merchant.nameEn,
-      nameAr: merchant.nameAr,
-      category: merchant.category,
-      priceUSD: Number(merchant.price || 0),
-      stock: await getMerchantAvailableStock(merchant.id),
-      type: merchant.type,
-      details: truncateText(getMerchantPlainDescription(merchant), 160)
-    });
-  }
-
-  const referralMerchant = await getReferralStockMerchant();
-  const chatgptFallbackStock = await Code.count({ where: { merchantId: referralMerchant.id, isUsed: false } });
-  const usdConfig = await getDepositConfig('USD');
-  const iqdConfig = await getDepositConfig('IQD');
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  const focusProduct = focusMerchantId ? await Merchant.findByPk(focusMerchantId) : null;
-
-  return {
-    currentUser: {
-      id: userId,
-      language: user?.lang || 'en',
-      ownBalanceUSD: Number(user?.balance || 0).toFixed(2)
-    },
-    chatgptCode: {
-      priceUSD: Number(await getChatGptPriceValue()).toFixed(2),
-      fallbackStock: chatgptFallbackStock
-    },
-    depositOptions: [
-      { currency: 'USD', nameEn: usdConfig.displayNameEn || 'Binance', nameAr: usdConfig.displayNameAr || 'بايننس' },
-      { currency: 'IQD', nameEn: iqdConfig.displayNameEn || 'Iraqi Dinar', nameAr: iqdConfig.displayNameAr || 'دينار عراقي' }
-    ],
-    digitalSections: sectionPayload,
-    generalCatalog,
-    focusProduct: focusProduct ? {
-      id: focusProduct.id,
-      nameEn: focusProduct.nameEn,
-      nameAr: focusProduct.nameAr,
-      priceUSD: Number(focusProduct.price || 0),
-      stock: await getMerchantAvailableStock(focusProduct.id),
-      type: focusProduct.type,
-      details: truncateText(getMerchantPlainDescription(focusProduct), 250)
-    } : null
-  };
-}
-
-async function buildFallbackAssistantReply(userId, userMessage, state = {}) {
-  const user = await User.findByPk(userId, { attributes: ['lang', 'balance'] });
-  const isArabic = (user?.lang || 'en') === 'ar';
-  const lines = [];
-  lines.push(await getText(userId, 'balanceInfoText', { balance: Number(user?.balance || 0).toFixed(2) }));
-
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  if (focusMerchantId) {
-    const merchant = await Merchant.findByPk(focusMerchantId);
-    if (merchant) {
-      lines.unshift(await getMerchantDisplayName(merchant, userId));
-      lines.push(await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant.price) }));
-      lines.push(await getText(userId, 'remainingStockLine', { stock: await getMerchantAvailableStock(merchant.id) }));
-      const details = await getMerchantDescriptionForUser(userId, merchant);
-      if (details) lines.push(`${await getText(userId, 'productDescriptionLine', { description: details })}`);
-      return lines.join('\n');
-    }
-  }
-
-  const detectedMerchant = await resolveAssistantMerchantFromText(userId, userMessage, state);
-  if (detectedMerchant) {
-    return await buildAssistantMerchantInfoText(userId, detectedMerchant, extractAssistantQuantity(userMessage, 1));
-  }
-
-  const sections = await getDigitalSections();
-  const previewLines = [];
-  for (const section of sections.slice(0, 4)) {
-    const products = await getDigitalProductsForSection(section.id);
-    for (const product of products.slice(0, 3)) {
-      previewLines.push(`• ${await getMerchantDisplayName(product, userId)} - ${formatUsdPrice(product.price)} USD - ${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })}`);
-    }
-  }
-
-  if (previewLines.length) {
-    lines.push(isArabic ? 'الاشتراكات المتوفرة حالياً:' : 'Currently available subscriptions:');
-    lines.push(previewLines.join('\n'));
-  } else {
-    lines.push(await getText(userId, 'aiAssistantUnavailable'));
-  }
-
-  return lines.join('\n\n');
-}
-
-
-function normalizeAssistantDigits(value) {
-  return String(value || '')
-    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
-}
-
-function normalizeAssistantText(value) {
-  return normalizeAssistantDigits(value)
-    .toLowerCase()
-    .replace(/[\u0640]/g, '')
-    .replace(/[أإآٱ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/[^A-Za-z0-9\u0600-\u06FF]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function isSlashCommandText(value) {
-  return /^\/[A-Za-z_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(String(value || '').trim());
-}
-
-function extractAssistantQuantity(value, fallback = 1) {
-  const normalized = normalizeAssistantDigits(value);
-  const match = normalized.match(/\b(\d{1,3})\b/);
-  const qty = parseInt(match?.[1] || '', 10);
-  if (Number.isInteger(qty) && qty > 0) return qty;
-  return fallback;
-}
-
-function isPurchaseIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(buy|purchase|order|get|اشتري|شراء|اريد شراء|أريد شراء|ابغي اشتري|اريد حساب|أريد حساب|اريد اشتراك|أريد اشتراك|خذ لي|جيب لي)/i.test(normalized);
-}
-
-function isPriceIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(price|prices|cost|how much|pricing|سعر|اسعار|الاسعار|الأسعار|بكم|كم السعر|تكلفه)/i.test(normalized);
-}
-
-function isNeedMoreInfoText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(more info|more details|details|tell me more|about|what is|تفاصيل|مزيد|اعرف اكثر|اعرف المزيد|شنو هذا|ما هو|اشرح|وصف)/i.test(normalized);
-}
-
-function isAdminOpenIntentText(value) {
-  const normalized = normalizeAssistantText(value);
-  return /(open|show|go to|take me to|افتح|وريني|اعرض|روح|خذني|دخلني|افتح لي)/i.test(normalized);
-}
-
-function isAssistantCancelIntentText(value) {
-  return isNegativeText(value) || /cancel purchase|الغ الشراء|الغي الشراء|إلغاء الشراء/i.test(String(value || ''));
-}
-
-function getAssistantTrainingSettingKey() {
-  return 'assistant_training_examples';
-}
-
-async function getAssistantTrainingExamples() {
-  const raw = await getGlobalSetting(getAssistantTrainingSettingKey(), '[]');
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(item => item && typeof item === 'object')
-      .map(item => ({
-        question: String(item.question || '').trim(),
-        answer: String(item.answer || '').trim(),
-        createdAt: String(item.createdAt || ''),
-        createdBy: item.createdBy || null
-      }))
-      .filter(item => item.question && item.answer)
-      .slice(-80);
-  } catch {
-    return [];
-  }
-}
-
-async function saveAssistantTrainingExample(question, answer, adminId) {
-  const items = await getAssistantTrainingExamples();
-  const normalizedQuestion = normalizeAssistantText(question);
-  const remaining = items.filter(item => normalizeAssistantText(item.question) !== normalizedQuestion);
-  remaining.push({
-    question: String(question || '').trim(),
-    answer: String(answer || '').trim(),
-    createdAt: new Date().toISOString(),
-    createdBy: adminId
-  });
-
-  await Setting.upsert({
-    key: getAssistantTrainingSettingKey(),
-    lang: 'global',
-    value: JSON.stringify(remaining.slice(-80))
-  });
-}
-
-function parseAssistantTrainingCommand(value) {
-  const textValue = String(value || '').trim();
-  if (!textValue) return null;
-
-  const colonMatch = textValue.match(/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)\s*:\s*([\s\S]+)$/i);
-  if (colonMatch?.[1]) {
-    const body = colonMatch[1].trim();
-    const arrowSplit = body.split(/\s*=>\s*/);
-    if (arrowSplit.length >= 2) {
-      return {
-        question: arrowSplit.shift().trim(),
-        answer: arrowSplit.join(' => ').trim()
-      };
-    }
-  }
-
-  const qaMatch = textValue.match(/question\s*:\s*([\s\S]+?)\n+answer\s*:\s*([\s\S]+)/i)
-    || textValue.match(/السؤال\s*:\s*([\s\S]+?)\n+الجواب\s*:\s*([\s\S]+)/i);
-  if (qaMatch) {
-    return { question: qaMatch[1].trim(), answer: qaMatch[2].trim() };
-  }
-
-  return null;
-}
-
-async function findAssistantTrainingAnswer(userMessage) {
-  const normalizedMessage = normalizeAssistantText(userMessage);
-  if (!normalizedMessage) return '';
-  const items = await getAssistantTrainingExamples();
-
-  for (const item of items.slice().reverse()) {
-    const normalizedQuestion = normalizeAssistantText(item.question);
-    if (!normalizedQuestion) continue;
-    if (normalizedMessage === normalizedQuestion || normalizedMessage.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedMessage)) {
-      return item.answer;
-    }
-  }
-
-  return '';
-}
-
-async function getAssistantCandidateMerchants() {
-  const merchants = await Merchant.findAll({ order: [['id', 'ASC']] });
-  return merchants.filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock');
-}
-
-function getAssistantMerchantSearchBlob(merchant) {
-  return normalizeAssistantText([
-    merchant?.nameEn || '',
-    merchant?.nameAr || '',
-    merchant?.category || '',
-    getMerchantPlainDescription(merchant) || ''
-  ].join(' '));
-}
-
-function scoreAssistantMerchantMatch(queryText, merchant) {
-  const normalizedQuery = normalizeAssistantText(queryText);
-  if (!normalizedQuery) return 0;
-  const haystack = getAssistantMerchantSearchBlob(merchant);
-  if (!haystack) return 0;
-
-  let score = 0;
-  const compactQuery = normalizedQuery.replace(/\s+/g, '');
-  const compactHaystack = haystack.replace(/\s+/g, '');
-
-  if (compactQuery && compactHaystack.includes(compactQuery)) score += 100;
-
-  const tokens = normalizedQuery.split(' ').filter(token => token.length >= 2);
-  for (const token of tokens) {
-    if (haystack.includes(token)) score += token.length >= 4 ? 18 : 8;
-  }
-
-  const nameEn = normalizeAssistantText(merchant?.nameEn || '');
-  const nameAr = normalizeAssistantText(merchant?.nameAr || '');
-  if (nameEn && normalizedQuery.includes(nameEn)) score += 60;
-  if (nameAr && normalizedQuery.includes(nameAr)) score += 60;
-
-  return score;
-}
-
-async function resolveAssistantMerchantFromText(userId, userMessage, state = {}) {
-  const focusMerchantId = Number.isInteger(parseInt(state.focusMerchantId, 10)) ? parseInt(state.focusMerchantId, 10) : null;
-  if (focusMerchantId) {
-    const focused = await Merchant.findByPk(focusMerchantId);
-    if (focused) return focused;
-  }
-
-  const merchants = await getAssistantCandidateMerchants();
-  let bestMerchant = null;
-  let bestScore = 0;
-  for (const merchant of merchants) {
-    const score = scoreAssistantMerchantMatch(userMessage, merchant);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMerchant = merchant;
-    }
-  }
-
-  if (bestMerchant && bestScore >= 30) return bestMerchant;
-
-  if (!OPENAI_API_KEY || !merchants.length) return null;
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'Choose the single best matching merchant for the user query. Return JSON with merchant_id only when there is a strong match; otherwise return merchant_id as null.'
-    },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        query: String(userMessage || ''),
-        merchants: merchants.slice(0, 150).map(merchant => ({
-          id: merchant.id,
-          nameEn: merchant.nameEn,
-          nameAr: merchant.nameAr,
-          category: merchant.category,
-          details: truncateText(getMerchantPlainDescription(merchant), 120)
-        }))
-      })
-    }
-  ], { temperature: 0, maxTokens: 220 });
-
-  const merchantId = parseInt(payload?.merchant_id, 10);
-  if (Number.isInteger(merchantId)) {
-    return await Merchant.findByPk(merchantId);
-  }
-
-  return null;
-}
-
-async function buildAssistantMerchantInfoText(userId, merchant, quantity = 1) {
-  const name = await getMerchantDisplayName(merchant, userId);
-  const stock = await getMerchantAvailableStock(merchant.id);
-  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
-  const total = unitPrice * Math.max(1, quantity);
-  const details = await getMerchantDescriptionForUser(userId, merchant);
-  const lines = [
-    `🧩 ${name}`,
-    await getText(userId, 'itemPriceLine', { price: formatUsdPrice(unitPrice) }),
-    await getText(userId, 'remainingStockLine', { stock }),
-    await getText(userId, 'currentBalanceLine', { balance: await getUserBalanceFormatted(userId) })
-  ];
-
-  if (quantity > 1) {
-    lines.push(await getText(userId, 'quantityPurchasedLine', { qty: quantity }));
-    lines.push(await getText(userId, 'totalPaidLine', { total: formatUsdPrice(total) }));
-  }
-
-  if (details) {
-    lines.push(await getText(userId, 'productDescriptionLine', { description: details }));
-  }
-
-  return lines.join('\n');
-}
-
-async function buildAssistantPricesCatalogReply(userId) {
-  const sections = await getDigitalSections();
-  const lines = [await getText(userId, 'aiAssistantPricesHeader')];
-
-  for (const section of sections.slice(0, 6)) {
-    const sectionName = await getDigitalSectionDisplayName(section, userId);
-    lines.push(`\n• ${sectionName}`);
-    const products = await getDigitalProductsForSection(section.id);
-    for (const product of products.slice(0, 6)) {
-      lines.push(`  - ${await getMerchantDisplayName(product, userId)}: ${formatUsdPrice(product.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(product.id) })})`);
-    }
-  }
-
-  const generalMerchants = (await Merchant.findAll({ order: [['id', 'ASC']] }))
-    .filter(merchant => !isDigitalSectionCategory(merchant.category))
-    .filter(merchant => String(merchant.nameEn || '') !== 'ChatGPT Referral Stock')
-    .slice(0, 10);
-
-  if (generalMerchants.length) {
-    lines.push('');
-    for (const merchant of generalMerchants) {
-      lines.push(`- ${await getMerchantDisplayName(merchant, userId)}: ${formatUsdPrice(merchant.price)} USD (${await getText(userId, 'stockAvailableInline', { stock: await getMerchantAvailableStock(merchant.id) })})`);
-    }
-  }
-
-  lines.push('');
-  lines.push(await getCurrentBalanceLineText(userId));
-  return lines.join('\n');
-}
-
-async function buildAssistantPurchaseConfirmationText(userId, merchant, quantity = 1) {
-  const stock = await getMerchantAvailableStock(merchant.id);
-  const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
-  const total = unitPrice * Math.max(1, quantity);
-  return await getText(userId, 'aiAssistantPurchaseConfirm', {
-    name: await getMerchantDisplayName(merchant, userId),
-    qty: quantity,
-    price: formatUsdPrice(unitPrice),
-    total: formatUsdPrice(total),
-    stock,
-    balance: await getUserBalanceFormatted(userId)
-  });
-}
-
-async function getAssistantPurchaseReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
-  return {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'aiAssistantPurchaseMoreButton'), callback_data: `ai_buy_info_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'aiAssistantPurchaseCancelButton'), callback_data: 'ai_buy_no' }],
-      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
-    ]
-  };
-}
-
-async function getAssistantProductInfoReplyMarkup(userId, merchantId, quantity = 1, backCallback = 'back_to_menu') {
-  return {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'aiAssistantPurchaseConfirmButton'), callback_data: `ai_buy_yes_${merchantId}_${quantity}` }],
-      [{ text: await getText(userId, 'support'), callback_data: 'support' }],
-      [{ text: await getText(userId, 'back'), callback_data: backCallback }]
-    ]
-  };
-}
-
-async function awardReferralRewardForMerchantPurchase(userId, totalCost) {
-  const userObj = await User.findByPk(userId);
-  if (!userObj?.referredBy) return;
-
-  const referralPercent = parseFloat(process.env.REFERRAL_PERCENT || '10');
-  const rewardAmount = Number(totalCost || 0) * referralPercent / 100;
-  if (!(rewardAmount > 0)) return;
-
-  const referrer = await User.findByPk(userObj.referredBy);
-  if (!referrer) return;
-
-  await BalanceTransaction.create({ userId: referrer.id, amount: rewardAmount, type: 'referral', status: 'completed' });
-  await User.update({ balance: parseFloat(referrer.balance) + rewardAmount }, { where: { id: referrer.id } });
-  await bot.sendMessage(referrer.id, `🎉 Referral reward added: ${rewardAmount.toFixed(2)} USD`);
-}
-
-async function completeAssistantMerchantPurchase(userId, merchantId, quantity = 1, state = {}) {
-  const merchant = await Merchant.findByPk(merchantId);
-  if (!merchant) {
-    await bot.sendMessage(userId, await getText(userId, 'error'));
-    return { success: false, reason: 'merchant_not_found' };
-  }
-
-  const available = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-  if (available < quantity) {
-    await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseUnavailable', { stock: available }), {
-      reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    });
-    return { success: false, reason: 'not_enough_stock' };
-  }
-
-  const result = await processPurchase(userId, merchant.id, quantity, state.discountCode || null);
-  if (result.success) {
-    let msgText = await getText(userId, 'success');
-    if (result.discountApplied) {
-      msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
-    }
-    const deliveryHtml = await formatMerchantDeliveryHtml(userId, merchant, result.rawEntries || []);
-    msgText += `\n\n${deliveryHtml}`;
-    const deliveryPrefix = await getCodeDeliveryPrefixHtml(userId);
-    await clearUserState(userId);
-    await sendPurchaseDeliveryMessage(userId, `${deliveryPrefix}${msgText}`, {
-      merchant,
-      totalCost: result.totalCost,
-      newBalance: result.newBalance,
-      quantity
-    });
-
-    const remainingMerchantStock = await Code.count({ where: { merchantId: merchant.id, isUsed: false } });
-    await sendAdminCodeActionNotice(userId, {
-      sourceKey: 'balance',
-      serviceType: `${merchant.nameAr || merchant.nameEn}`,
-      codesCount: quantity,
-      remainingStockText: String(remainingMerchantStock)
-    });
-    await awardReferralRewardForMerchantPurchase(userId, result.totalCost || (merchant.price * quantity));
-    return { success: true };
-  }
-
-  if (result.reason === 'Insufficient balance') {
-    await clearUserState(userId);
-    await bot.sendMessage(
-      userId,
-      await getText(userId, 'insufficientBalance', {
-        balance: Number(result.balance || 0).toFixed(2),
-        price: Number(result.price || merchant.price || 0).toFixed(2),
-        needed: Number(result.totalCost || 0).toFixed(2)
-      }),
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: await getText(userId, 'depositNow'), callback_data: 'deposit' }]]
-        }
-      }
-    );
-    return { success: false, reason: 'insufficient_balance' };
-  }
-
-  await bot.sendMessage(userId, `${await getText(userId, 'error')}: ${result.reason || 'unknown error'}`);
-  return { success: false, reason: result.reason || 'unknown_error' };
-}
-
-async function showAdminAddCodesMenu(userId) {
-  const merchants = await Merchant.findAll();
-  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `add_codes_merchant_${m.id}` }]));
-  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-  await bot.sendMessage(userId, await getText(userId, 'addCodes'), { reply_markup: { inline_keyboard: buttons } });
-}
-
-async function showAdminSetPriceMenu(userId) {
-  const merchants = await Merchant.findAll();
-  const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `set_price_merchant_${m.id}` }]));
-  buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-  await bot.sendMessage(userId, await getText(userId, 'setPrice'), { reply_markup: { inline_keyboard: buttons } });
-}
-
-async function showAdminMerchantsListMenu(userId) {
-  const merchants = await Merchant.findAll();
-  let msg = await getText(userId, 'merchantList');
-  for (const m of merchants) {
-    msg += `ID: ${m.id} | ${m.nameEn} / ${m.nameAr} | Price: ${m.price} USD | Category: ${m.category} | Type: ${m.type}\n`;
-  }
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '✏️ Edit', callback_data: 'admin_edit_merchant' }],
-      [{ text: '🗑️ Delete', callback_data: 'admin_delete_merchant' }],
-      [{ text: '📂 Edit Category', callback_data: 'admin_edit_category' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-    ]
-  };
-  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
-}
-
-async function showAdminStatsSummary(userId) {
-  const totalCodes = await Code.count();
-  const totalSales = await BalanceTransaction.sum('amount', { where: { type: 'purchase', status: 'completed' } });
-  const pendingDeposits = await BalanceTransaction.count({ where: { type: 'deposit', status: 'pending' } });
-  await bot.sendMessage(userId,
-    `${await getText(userId, 'totalCodes', { count: totalCodes })}\n` +
-    `${await getText(userId, 'totalSales', { amount: Math.abs(totalSales || 0) })}\n` +
-    `${await getText(userId, 'pendingDeposits', { count: pendingDeposits })}`
-  );
-}
-
-async function executeAdminAssistantShortcut(userId, userMessage) {
-  if (!isAdmin(userId)) return { handled: false };
-  const normalized = normalizeAssistantText(userMessage);
-  if (!isAdminOpenIntentText(normalized)) return { handled: false };
-
-  const items = [
-    { targetTextKey: 'aiAssistantOpenStocks', patterns: [/مخزون|مخزونات|inventory|stock/i], handler: showAdminAddCodesMenu },
-    { targetTextKey: 'aiAssistantOpenSubscriptions', patterns: [/اشتراك|اشتراكات|subscriptions|digital/i], handler: showDigitalSubscriptionsAdmin },
-    { targetTextKey: 'aiAssistantOpenPrices', patterns: [/سعر|اسعار|الاسعار|الأسعار|prices|pricing/i], handler: showAdminSetPriceMenu },
-    { targetTextKey: 'aiAssistantOpenMerchants', patterns: [/تاجر|تجار|merchant/i], handler: showAdminMerchantsListMenu },
-    { targetTextKey: 'aiAssistantOpenBalances', patterns: [/رصيد|ارصده|أرصدة|balance/i], handler: showBalanceManagementAdmin },
-    { targetTextKey: 'aiAssistantOpenButtons', patterns: [/زر|ازرار|أزرار|buttons|menu/i], handler: showMenuButtonsAdmin },
-    { targetTextKey: 'aiAssistantOpenAdminPanel', patterns: [/لوحه التحكم|لوحة التحكم|admin panel|panel/i], handler: showAdminPanel },
-    { targetTextKey: 'aiAssistantOpenStats', patterns: [/احصائيات|إحصائيات|stats|statistics/i], handler: showAdminStatsSummary },
-    { targetTextKey: 'aiAssistantOpenReferrals', patterns: [/احاله|إحالة|احالات|إحالات|referral/i], handler: showReferralSettingsAdmin },
-    { targetTextKey: 'aiAssistantOpenBots', patterns: [/بوتات|bots|manage bots/i], handler: showBotsList }
-  ];
-
-  for (const item of items) {
-    if (item.patterns.some(pattern => pattern.test(normalized))) {
-      await item.handler(userId);
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantAdminOpened', { target: await getText(userId, item.targetTextKey) })
-      };
-    }
-  }
-
-  return { handled: true, reply: await getText(userId, 'aiAssistantAdminNoMatch') };
-}
-
-async function handleDeterministicAssistantRequest(userId, cleanMessage, state = {}) {
-  if (!cleanMessage) return { handled: false };
-
-  if (isAdmin(userId)) {
-    const training = parseAssistantTrainingCommand(cleanMessage);
-    if (training?.question && training?.answer) {
-      await saveAssistantTrainingExample(training.question, training.answer, userId);
-      return {
-        handled: true,
-        reply: `${await getText(userId, 'aiAssistantTrainingSaved')}\n\nQ: ${training.question}\nA: ${training.answer}`,
-        replyMarkup: await getBackAndCancelReplyMarkup(userId)
-      };
-    }
-
-    if (/^(?:train assistant|assistant training|درب المساعد|تدريب المساعد|عل[مّ] المساعد)/i.test(String(cleanMessage || '').trim())) {
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantTrainingHelp'),
-        replyMarkup: await getBackAndCancelReplyMarkup(userId)
-      };
-    }
-
-    const adminShortcut = await executeAdminAssistantShortcut(userId, cleanMessage);
-    if (adminShortcut.handled) {
-      return {
-        handled: true,
-        reply: adminShortcut.reply,
-        replyMarkup: await getBackAndCancelReplyMarkup(userId, 'admin')
-      };
-    }
-  }
-
-  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
-  if (trainedAnswer) {
-    return {
-      handled: true,
-      reply: trainedAnswer,
-      replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    };
-  }
-
-  const merchant = await resolveAssistantMerchantFromText(userId, cleanMessage, state);
-  if (merchant && isPurchaseIntentText(cleanMessage)) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
-    const stock = await getMerchantAvailableStock(merchant.id);
-    if (stock < quantity || stock <= 0) {
-      return {
-        handled: true,
-        reply: await getText(userId, 'aiAssistantPurchaseUnavailable', { stock }),
-        replyMarkup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-      };
-    }
-
-    return {
-      handled: true,
-      reply: `${await buildAssistantPurchaseConfirmationText(userId, merchant, quantity)}\n\n${await getText(userId, 'aiAssistantPurchaseNeedMore', { name: await getMerchantDisplayName(merchant, userId) })}`,
-      replyMarkup: await getAssistantPurchaseReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: true,
-        pendingMerchantId: merchant.id,
-        pendingQuantity: quantity
-      }
-    };
-  }
-
-  if (merchant && (isPriceIntentText(cleanMessage) || isNeedMoreInfoText(cleanMessage))) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
-    return {
-      handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      }
-    };
-  }
-
-  if (!merchant && isPriceIntentText(cleanMessage)) {
-    return {
-      handled: true,
-      reply: await buildAssistantPricesCatalogReply(userId),
-      replyMarkup: await getBackAndCancelReplyMarkup(userId)
-    };
-  }
-
-  if (!merchant && isPurchaseIntentText(cleanMessage)) {
-    return {
-      handled: true,
-      reply: await getText(userId, 'aiAssistantNoProductMatch'),
-      replyMarkup: await getBackAndCancelReplyMarkup(userId)
-    };
-  }
-
-  if (merchant) {
-    const quantity = extractAssistantQuantity(cleanMessage, 1);
-    return {
-      handled: true,
-      reply: await buildAssistantMerchantInfoText(userId, merchant, quantity),
-      replyMarkup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, quantity, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu'),
-      nextState: {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: merchant.id,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      }
-    };
-  }
-
-  return { handled: false };
-}
-
-async function askBotAssistant(userId, userMessage, state = {}) {
-  const cleanMessage = String(userMessage || '').trim();
-  if (!cleanMessage) {
-    return { reply: await getText(userId, 'aiAssistantScopeLimit'), offerSupport: false, history: Array.isArray(state.history) ? state.history : [] };
-  }
-
-  if (isSupportIntentText(cleanMessage)) {
-    return {
-      reply: await getText(userId, 'aiAssistantContactSupportAsk'),
-      offerSupport: true,
-      history: Array.isArray(state.history) ? state.history : []
-    };
-  }
-
-  const trainedAnswer = await findAssistantTrainingAnswer(cleanMessage);
-  if (trainedAnswer) {
-    const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
-    return {
-      reply: trainedAnswer,
-      offerSupport: false,
-      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: trainedAnswer }].slice(-8)
-    };
-  }
-
-  const previousHistory = Array.isArray(state.history) ? state.history.slice(-8) : [];
-  if (!OPENAI_API_KEY) {
-    const fallbackReply = await buildFallbackAssistantReply(userId, cleanMessage, state);
-    return {
-      reply: `${await getText(userId, 'aiAssistantUnavailable')}
-
-${fallbackReply}`,
-      offerSupport: false,
-      history: [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: fallbackReply }].slice(-8)
-    };
-  }
-
-  const context = await buildAssistantCatalogContext(userId, state);
-  const trainingExamples = await getAssistantTrainingExamples();
-  const trainingText = trainingExamples.length
-    ? trainingExamples.slice(-20).map((item, index) => `Example ${index + 1}
-Q: ${item.question}
-A: ${item.answer}`).join('\n\n')
-    : 'No custom training examples.';
-
-  const payload = await callOpenAIJson([
-    {
-      role: 'system',
-      content: 'You are the AI assistant inside a Telegram bot that sells digital subscriptions and codes. Answer ONLY about this bot, its available products, remaining stock, prices, payment flow, verification flow, and the current user own balance. You may compare products, explain what a subscription is, suggest the next step, and keep answers concise and practical. Never reveal secrets, tokens, raw database content, admin-only settings, payment wallet addresses, internal configuration, or other users balances. If the user asks about anything outside the bot services, politely say you only help with this bot. If the user wants a human or support, set offer_support to true. Return strict JSON with keys reply and offer_support.'
-    },
-    {
-      role: 'system',
-      content: `Bot context JSON:
-${JSON.stringify(context)}`
-    },
-    {
-      role: 'system',
-      content: `Admin training examples:
-${trainingText}`
-    },
-    ...previousHistory,
-    { role: 'user', content: cleanMessage }
-  ], { temperature: 0.2, maxTokens: 850 });
-
-  const reply = String(payload?.reply || '').trim() || await buildFallbackAssistantReply(userId, cleanMessage, state);
-  const offerSupport = Boolean(payload?.offer_support);
-  const nextHistory = [...previousHistory, { role: 'user', content: cleanMessage }, { role: 'assistant', content: reply }].slice(-8);
-  return { reply, offerSupport, history: nextHistory };
-}
-
-async function processAssistantMessageTurn(userId, trimmed, state = {}) {
-  const deterministic = await handleDeterministicAssistantRequest(userId, trimmed, state);
-  if (deterministic.handled) {
-    if (deterministic.nextState) {
-      await setUserState(userId, deterministic.nextState);
-    } else {
-      await setUserState(userId, {
-        action: 'ai_assistant',
-        history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-        focusMerchantId: state.focusMerchantId || null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-    }
-
-    await bot.sendMessage(userId, deterministic.reply, {
-      reply_markup: deterministic.replyMarkup || await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-    });
-    return true;
-  }
-
-  const thinkingMessage = await bot.sendMessage(userId, await getText(userId, 'aiAssistantThinking'));
-  const aiResult = await askBotAssistant(userId, trimmed, state);
-  await bot.deleteMessage(userId, thinkingMessage.message_id).catch(() => {});
-
-  await setUserState(userId, {
-    action: 'ai_assistant',
-    history: aiResult.history,
-    focusMerchantId: state.focusMerchantId || null,
-    awaitingSupportConfirm: Boolean(aiResult.offerSupport),
-    awaitingPurchaseConfirm: false
-  });
-
-  const replyMarkup = aiResult.offerSupport
-    ? {
-        inline_keyboard: [
-          [{ text: await getText(userId, 'aiAssistantSupportYes'), callback_data: 'ai_support_yes' }],
-          [{ text: await getText(userId, 'aiAssistantSupportNo'), callback_data: 'ai_support_no' }],
-          [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
-        ]
-      }
-    : await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu');
-
-  await bot.sendMessage(userId, aiResult.reply, { reply_markup: replyMarkup });
-  return true;
 }
 
 function extractChatGptUpLinks(rawText) {
@@ -5499,15 +4631,12 @@ async function handleVerificationSuccess(userId) {
 }
 
 const DEFAULT_BUTTONS = {
-  redeem: true,
   buy: true,
   my_balance: true,
   deposit: true,
   referral: true,
-  discount: true,
   my_purchases: true,
   support: true,
-  ai_assistant: true,
   change_language: true,
   chatgpt_code: true,
   digital_sections_group: true,
@@ -5522,11 +4651,8 @@ const DEFAULT_BUTTON_ORDER = [
   'my_balance',
   'deposit',
   'my_purchases',
-  'redeem',
   'referral',
-  'discount',
   'support',
-  'ai_assistant',
   'change_language',
   'free_code',
   'admin_panel'
@@ -5645,11 +4771,8 @@ async function getMenuButtonItems(userId) {
     { id: 'my_balance', name: await getText(userId, 'myBalance') },
     { id: 'deposit', name: await getText(userId, 'deposit') },
     { id: 'my_purchases', name: await getText(userId, 'myPurchases') },
-    { id: 'redeem', name: await getText(userId, 'redeem') },
     { id: 'referral', name: await getText(userId, 'referral') },
-    { id: 'discount', name: await getText(userId, 'discountButton') },
     { id: 'support', name: await getText(userId, 'support') },
-    { id: 'ai_assistant', name: await getText(userId, 'aiAssistant') },
     { id: 'change_language', name: await getText(userId, 'changeLanguage') },
     { id: 'free_code', name: await getText(userId, 'freeCodeMenu') },
     { id: 'admin_panel', name: await getText(userId, 'adminPanel') }
@@ -8134,7 +7257,6 @@ async function sendMainMenu(userId) {
   const order = await getMenuButtonsOrder();
   const redeemableReferralCodes = await getRedeemableReferralCodesCount(userId);
   const showFreeCode = await shouldShowFreeCodeButton(userId);
-  const aiAssistantEnabled = await getAiAssistantEnabled();
   const currentBalanceLine = await getCurrentBalanceLineText(userId);
   const digitalSections = await getDigitalSections();
   const digitalSectionMap = new Map(digitalSections.map(section => [getDigitalSectionCategory(section.id), section]));
@@ -8146,17 +7268,21 @@ async function sendMainMenu(userId) {
     my_balance: await getBalanceButtonLabel(userId),
     deposit: await getText(userId, 'deposit'),
     my_purchases: await getText(userId, 'myPurchases'),
-    redeem: await getText(userId, 'redeem'),
     referral: await getText(userId, 'referral'),
-    discount: await getText(userId, 'discountButton'),
     support: await getText(userId, 'support'),
-    ai_assistant: await getText(userId, 'aiAssistant'),
     change_language: await getText(userId, 'changeLanguage'),
     free_code: await getText(userId, 'freeCodeMenu'),
     admin_panel: await getText(userId, 'adminPanel')
   };
 
   const buttons = [];
+  let compactRow = [];
+  const flushCompactRow = () => {
+    if (compactRow.length) {
+      buttons.push(compactRow);
+      compactRow = [];
+    }
+  };
 
   for (const product of featuredProducts) {
     const stock = await getMerchantAvailableStock(product.id);
@@ -8174,6 +7300,7 @@ async function sendMainMenu(userId) {
   for (const id of order) {
     const digitalSection = digitalSectionMap.get(id);
     if (digitalSection) {
+      flushCompactRow();
       buttons.push([{
         text: `🧩 ${await getDigitalSectionDisplayName(digitalSection, userId)}`,
         callback_data: `digital_section_${digitalSection.id}`
@@ -8184,11 +7311,21 @@ async function sendMainMenu(userId) {
     if (id === 'admin_panel' && !isAdmin(userId)) continue;
     if (id === 'referral_prize' && redeemableReferralCodes <= 0) continue;
     if (id === 'free_code' && !showFreeCode) continue;
-    if (id === 'ai_assistant' && !aiAssistantEnabled) continue;
-    if (visibility[id] !== false && buttonLabels[id]) {
-      buttons.push([{ text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id }]);
+    if (visibility[id] === false || !buttonLabels[id]) continue;
+
+    const button = { text: buttonLabels[id], callback_data: id === 'admin_panel' ? 'admin' : id };
+
+    // Keep the admin entry obvious and full-width; pair the normal utility buttons to shorten the menu.
+    if (id === 'admin_panel') {
+      flushCompactRow();
+      buttons.push([button]);
+      continue;
     }
+
+    compactRow.push(button);
+    if (compactRow.length === 2) flushCompactRow();
   }
+  flushCompactRow();
 
   await bot.sendMessage(userId, `${await getText(userId, 'menu')}
 
@@ -8197,40 +7334,114 @@ ${currentBalanceLine}`, {
   });
 }
 
+async function getAdminPanelLanguage(userId) {
+  const user = await User.findByPk(userId, { attributes: ['lang'] });
+  return user?.lang === 'ar' ? 'ar' : 'en';
+}
+
+async function adminUiText(userId, ar, en) {
+  return (await getAdminPanelLanguage(userId)) === 'ar' ? ar : en;
+}
+
 async function showAdminPanel(userId) {
   if (!isAdmin(userId)) return;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
-      [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
-      [{ text: await getText(userId, 'colorButtons'), callback_data: 'admin_color_buttons' }],
-      [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
-      [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
-      [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
-      [{ text: await getText(userId, 'digitalSubscriptions'), callback_data: 'admin_digital_subscriptions' }],
-      [{ text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' }],
-      [{ text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }],
-      [{ text: await getText(userId, 'setPrice'), callback_data: 'admin_set_price' }],
-      [{ text: await getText(userId, 'setChatgptPrice'), callback_data: 'admin_set_chatgpt_price' }],
-      [{ text: await getText(userId, 'addCodes'), callback_data: 'admin_add_codes' }],
-      [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
-      [{ text: await getText(userId, 'stats'), callback_data: 'admin_stats' }],
-      [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
-      [{ text: await getText(userId, 'manageRedeemServices'), callback_data: 'admin_manage_redeem_services' }],
-      [{ text: await getText(userId, 'manageDiscountCodes'), callback_data: 'admin_manage_discount_codes' }],
-      [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
-      [{ text: `${await getText(userId, 'aiAssistant')} ${await getAiAssistantEnabled() ? '✅' : '⛔'}`, callback_data: 'admin_toggle_ai_assistant' }],
-      [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
-      [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
-      [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
-      [{ text: await getText(userId, 'editCodeDeliveryMessage'), callback_data: 'admin_edit_code_delivery_message' }],
-      [{ text: await getText(userId, 'changeButtonNames'), callback_data: 'admin_change_button_names' }],
+      [
+        { text: await adminUiText(userId, '🛍️ المتجر والمنتجات', '🛍️ Store & Products'), callback_data: 'admin_section_store' },
+        { text: await adminUiText(userId, '💳 الدفع والرصيد', '💳 Payments & Balance'), callback_data: 'admin_section_payments' }
+      ],
+      [
+        { text: await adminUiText(userId, '👥 الإحالات', '👥 Referrals'), callback_data: 'admin_section_referrals' },
+        { text: await adminUiText(userId, '📢 القنوات والتواصل', '📢 Channels & Messages'), callback_data: 'admin_section_channels' }
+      ],
+      [{ text: await adminUiText(userId, '⚙️ إعدادات البوت', '⚙️ Bot Settings'), callback_data: 'admin_section_system' }],
       [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
     ]
   };
 
-  await bot.sendMessage(userId, await getText(userId, 'adminPanel'), { reply_markup: keyboard });
+  const title = await adminUiText(
+    userId,
+    '⚙️ لوحة الإدارة\n\nاختر القسم الذي تريد إدارته:',
+    '⚙️ Admin Panel\n\nChoose the section you want to manage:'
+  );
+  await bot.sendMessage(userId, title, { reply_markup: keyboard });
+}
+
+async function showAdminStoreSection(userId) {
+  if (!isAdmin(userId)) return;
+  await bot.sendMessage(userId, await adminUiText(userId, '🛍️ المتجر والمنتجات', '🛍️ Store & Products'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'digitalSubscriptions'), callback_data: 'admin_digital_subscriptions' }],
+        [
+          { text: await getText(userId, 'addMerchant'), callback_data: 'admin_add_merchant' },
+          { text: await getText(userId, 'listMerchants'), callback_data: 'admin_list_merchants' }
+        ],
+        [{ text: await getText(userId, 'quantityDiscountSettings'), callback_data: 'admin_quantity_discount_settings' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminPaymentsSection(userId) {
+  if (!isAdmin(userId)) return;
+  await bot.sendMessage(userId, await adminUiText(userId, '💳 الدفع والرصيد', '💳 Payments & Balance'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'balanceManagement'), callback_data: 'admin_balance_management' }],
+        [{ text: await getText(userId, 'manageDepositSettings'), callback_data: 'admin_manage_deposit_settings' }],
+        [{ text: await getText(userId, 'paymentMethods'), callback_data: 'admin_payment_methods' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminReferralsSection(userId) {
+  if (!isAdmin(userId)) return;
+  await bot.sendMessage(userId, await adminUiText(userId, '👥 الإحالات والمكافآت', '👥 Referrals & Rewards'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'referralSettings'), callback_data: 'admin_referral_settings' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminChannelsSection(userId) {
+  if (!isAdmin(userId)) return;
+  await bot.sendMessage(userId, await adminUiText(userId, '📢 القنوات والتواصل', '📢 Channels & Messages'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'manageChannel'), callback_data: 'admin_manage_channel' }],
+        [{ text: '📦 قناة الكودات الخاصة', callback_data: 'admin_private_codes_channel' }],
+        [{ text: await getText(userId, 'sendAnnouncement'), callback_data: 'admin_send_announcement' }],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
+}
+
+async function showAdminSystemSection(userId) {
+  if (!isAdmin(userId)) return;
+  await bot.sendMessage(userId, await adminUiText(userId, '⚙️ إعدادات البوت', '⚙️ Bot Settings'), {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: await getText(userId, 'botControl'), callback_data: 'admin_bot_control' }],
+        [{ text: await getText(userId, 'manageBots'), callback_data: 'admin_manage_bots' }],
+        [{ text: await getText(userId, 'manageMenuButtons'), callback_data: 'admin_manage_menu_buttons' }],
+        [
+          { text: await getText(userId, 'colorButtons'), callback_data: 'admin_color_buttons' },
+          { text: await getText(userId, 'changeButtonNames'), callback_data: 'admin_change_button_names' }
+        ],
+        [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
+      ]
+    }
+  });
 }
 
 async function showReferralSettingsAdmin(userId) {
@@ -8421,7 +7632,6 @@ async function showBotsList(userId) {
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '➕ Grant /code', callback_data: `bot_grant_code_${b.id}` },
             { text: '👑 Grant Full', callback_data: `bot_grant_full_${b.id}` },
             { text: '❌ Remove Permissions', callback_data: `bot_remove_perms_${b.id}` }
           ],
@@ -8442,135 +7652,13 @@ async function showBotsList(userId) {
   });
 }
 
-async function showRedeemServicesAdmin(userId) {
-  const services = await RedeemService.findAll();
-  let msg = `${await getText(userId, 'listRedeemServices')}\n`;
-  for (const s of services) {
-    msg += `ID: ${s.id} | ${s.nameEn} / ${s.nameAr} | MerchantDict: ${s.merchantDictId}\n`;
-  }
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'addRedeemService'), callback_data: 'admin_add_redeem_service' }],
-      [{ text: await getText(userId, 'deleteRedeemService'), callback_data: 'admin_delete_redeem_service' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-    ]
-  };
-
-  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
-}
-
-async function showDiscountCodesAdmin(userId) {
-  const codes = await DiscountCode.findAll();
-  let msg = `${await getText(userId, 'listDiscountCodes')}\n`;
-  if (!codes.length) {
-    msg += await getText(userId, 'noDiscountCodes');
-  } else {
-    for (const c of codes) {
-      msg += `ID: ${c.id} | ${c.code} | ${c.discountPercent}% | Uses: ${c.usedCount}/${c.maxUses} | Expires: ${c.validUntil ? c.validUntil.toISOString().split('T')[0] : 'never'}\n`;
-    }
-  }
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: await getText(userId, 'addDiscountCode'), callback_data: 'admin_add_discount_code' }],
-      [{ text: await getText(userId, 'deleteDiscountCode'), callback_data: 'admin_delete_discount_code' }],
-      [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-    ]
-  };
-
-  await bot.sendMessage(userId, msg, { reply_markup: keyboard });
-}
-
-async function redeemCard(cardKey, merchantDictId, platformId = '1') {
-  try {
-    const apiKey = process.env.NODE_CARD_API_KEY;
-    const baseUrl = process.env.NODE_CARD_BASE_URL || 'https://api.node-card.com';
-    const params = new URLSearchParams();
-    params.append('card_key', cardKey);
-    params.append('merchant_dict_id', merchantDictId);
-    params.append('platform_id', platformId);
-    if (apiKey) params.append('api_key', apiKey);
-
-    const response = await axios.post(`${baseUrl}/api/open/card/redeem`, params, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 10000
-    });
-
-    if (response.data && response.data.code === 1) {
-      return { success: true, data: response.data.data };
-    }
-    return { success: false, reason: response.data?.msg || 'Unknown error' };
-  } catch (error) {
-    console.error('Redeem API error:', error.response?.data || error.message);
-    return { success: false, reason: error.response?.data?.msg || error.message || 'API connection failed' };
-  }
-}
-
-async function redeemCardSmart(cardKey) {
-  const services = await RedeemService.findAll();
-  if (!services.length) return { success: false, reason: 'No redeem services configured' };
-
-  const preferredNames = ['Amazon', 'Walmart', 'Target'];
-  const preferred = [];
-  const others = [];
-
-  for (const s of services) {
-    const en = (s.nameEn || '').toLowerCase();
-    const ar = (s.nameAr || '').toLowerCase();
-    const isPreferred = preferredNames.some(name => {
-      const n = name.toLowerCase();
-      return en.includes(n) || ar.includes(n);
-    });
-    if (isPreferred) preferred.push(s);
-    else others.push(s);
-  }
-
-  const ordered = [...preferred, ...others];
-  let lastReason = 'No compatible merchant found';
-  for (const service of ordered) {
-    const result = await redeemCard(cardKey, service.merchantDictId, service.platformId || '1');
-    if (result.success) return { success: true, data: result.data, service };
-    lastReason = result.reason || lastReason;
-  }
-
-  return { success: false, reason: lastReason };
-}
-
-function formatCardDetails(cardData) {
-  return `💳 ${cardData.card_number}\nCVV: ${cardData.cvv}\nEXP: ${cardData.exp}\n💰 ${cardData.available_amount}\n🏪 ${cardData.merchant_name}`;
-}
-
-async function applyDiscount(discountCode, totalAmount) {
-  const discount = await DiscountCode.findOne({
-    where: {
-      code: discountCode,
-      [Op.or]: [{ validUntil: null }, { validUntil: { [Op.gt]: new Date() } }]
-    }
-  });
-
-  if (!discount) return { success: false, reason: 'invalid' };
-  if (discount.usedCount >= discount.maxUses) return { success: false, reason: 'maxed' };
-
-  const newTotal = totalAmount * (1 - discount.discountPercent / 100);
-  discount.usedCount += 1;
-  await discount.save();
-  return { success: true, newTotal, discountPercent: discount.discountPercent };
-}
-
-async function processPurchase(userId, merchantId, quantity, discountCode = null) {
+async function processPurchase(userId, merchantId, quantity) {
   const merchant = await Merchant.findByPk(merchantId);
   if (!merchant) return { success: false, reason: 'Merchant not found' };
 
   const unitPrice = await getPerCodePriceForQuantity(merchant.price, quantity);
-  let totalCost = unitPrice * quantity;
-  let discountPercent = 0;
-  if (discountCode) {
-    const disc = await applyDiscount(discountCode, totalCost);
-    if (!disc.success) return { success: false, reason: 'Invalid discount code' };
-    totalCost = disc.newTotal;
-    discountPercent = disc.discountPercent;
-  }
+  const totalCost = unitPrice * quantity;
+  const discountPercent = 0;
 
   const user = await User.findByPk(userId);
   if (!user) return { success: false, reason: 'User not found' };
@@ -9052,6 +8140,34 @@ bot.on('callback_query', async query => {
   const userId = query.message.chat.id;
   const data = query.data;
 
+  const removedAdminCallbacks = new Set([
+    'admin_set_price', 'admin_set_chatgpt_price', 'admin_add_codes', 'admin_stats',
+    'admin_manage_redeem_services', 'admin_add_redeem_service', 'admin_delete_redeem_service',
+    'admin_manage_discount_codes', 'admin_add_discount_code', 'admin_delete_discount_code',
+    'admin_toggle_ai_assistant', 'admin_edit_code_delivery_message',
+    'admin_edit_code_message_ar', 'admin_edit_code_message_en'
+  ]);
+  const removedUserCallbacks = new Set(['redeem', 'discount', 'ai_assistant', 'ai_support_yes', 'ai_support_no', 'ai_buy_no']);
+  const removedPrefixCallbacks = [
+    'set_price_merchant_', 'add_codes_merchant_', 'delete_redeem_service_', 'delete_discount_code_',
+    'redeem_service_', 'ai_about_product_', 'ai_buy_yes_', 'ai_buy_info_', 'bot_grant_code_'
+  ];
+
+  if (removedAdminCallbacks.has(data) || removedUserCallbacks.has(data) || removedPrefixCallbacks.some(prefix => String(data || '').startsWith(prefix))) {
+    await bot.answerCallbackQuery(query.id, {
+      text: isAdmin(userId) && String(data || '').startsWith('admin_')
+        ? 'تمت إزالة هذه الميزة من لوحة الإدارة.'
+        : 'تمت إزالة هذه الميزة.'
+    }).catch(() => {});
+    await clearUserState(userId).catch(() => {});
+    if (isAdmin(userId) && (String(data || '').startsWith('admin_') || String(data || '').startsWith('set_price_') || String(data || '').startsWith('add_codes_') || String(data || '').startsWith('delete_'))) {
+      await showAdminPanel(userId).catch(() => {});
+    } else {
+      await sendMainMenu(userId).catch(() => {});
+    }
+    return;
+  }
+
   try {
     const cleanupPressedMessage = async () => cleanupCallbackSourceMessage(query, userId);
     await findOrCreateUser(userId);
@@ -9125,6 +8241,36 @@ bot.on('callback_query', async query => {
       return;
     }
 
+    if (data === 'admin_section_store' && isAdmin(userId)) {
+      await showAdminStoreSection(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    if (data === 'admin_section_payments' && isAdmin(userId)) {
+      await showAdminPaymentsSection(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    if (data === 'admin_section_referrals' && isAdmin(userId)) {
+      await showAdminReferralsSection(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    if (data === 'admin_section_channels' && isAdmin(userId)) {
+      await showAdminChannelsSection(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    if (data === 'admin_section_system' && isAdmin(userId)) {
+      await showAdminSystemSection(userId);
+      await cleanupPressedMessage();
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
 
     if (data === 'change_language') {
       await bot.sendMessage(userId, await getText(userId, 'start'), {
@@ -9135,115 +8281,6 @@ bot.on('callback_query', async query => {
             [{ text: await getText(userId, 'back'), callback_data: 'back_to_menu' }]
           ]
         }
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const isAiCallbackAction = data === 'ai_assistant'
-      || /^ai_about_product_/.test(data)
-      || /^ai_support_/.test(data)
-      || /^ai_buy_/.test(data);
-
-    if (isAiCallbackAction && !(await getAiAssistantEnabled())) {
-      await clearUserState(userId);
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id, { text: await getText(userId, 'aiAssistantDisabledNotice') });
-      return;
-    }
-
-    if (data === 'ai_assistant') {
-      await setUserState(userId, { action: 'ai_assistant', history: [], awaitingSupportConfirm: false });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcome'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId)
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const aiAboutProductMatch = data.match(/^ai_about_product_(\d+)$/);
-    if (aiAboutProductMatch) {
-      const merchantId = parseInt(aiAboutProductMatch[1], 10);
-      const merchant = await Merchant.findByPk(merchantId);
-      if (merchant) {
-        await setUserState(userId, { action: 'ai_assistant', history: [], focusMerchantId: merchantId, awaitingSupportConfirm: false });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantWelcomeForProduct', { name: await getMerchantDisplayName(merchant, userId) }), {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, `digital_product_${merchantId}`)
-        });
-      }
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_support_yes') {
-      await clearUserState(userId);
-      await startSupportConversation(userId, 'ai');
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_support_no') {
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await setUserState(userId, { ...currentState, action: 'ai_assistant', awaitingSupportConfirm: false });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId)
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const aiBuyYesMatch = data.match(/^ai_buy_yes_(\d+)_(\d+)$/);
-    if (aiBuyYesMatch) {
-      const merchantId = parseInt(aiBuyYesMatch[1], 10);
-      const quantity = Math.max(1, parseInt(aiBuyYesMatch[2], 10) || 1);
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      await completeAssistantMerchantPurchase(userId, merchantId, quantity, currentState);
-      return;
-    }
-
-    const aiBuyInfoMatch = data.match(/^ai_buy_info_(\d+)_(\d+)$/);
-    if (aiBuyInfoMatch) {
-      const merchantId = parseInt(aiBuyInfoMatch[1], 10);
-      const quantity = Math.max(1, parseInt(aiBuyInfoMatch[2], 10) || 1);
-      const merchant = await Merchant.findByPk(merchantId);
-      if (merchant) {
-        const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-        await setUserState(userId, {
-          action: 'ai_assistant',
-          history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
-          focusMerchantId: merchantId,
-          awaitingSupportConfirm: false,
-          awaitingPurchaseConfirm: true,
-          pendingMerchantId: merchantId,
-          pendingQuantity: quantity
-        });
-        await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, quantity), {
-          reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchantId, quantity, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
-        });
-      }
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'ai_buy_no') {
-      const currentState = safeParseState((await User.findByPk(userId)).state) || {};
-      await setUserState(userId, {
-        action: 'ai_assistant',
-        history: Array.isArray(currentState.history) ? currentState.history.slice(-8) : [],
-        focusMerchantId: currentState.focusMerchantId || null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-      await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, currentState.focusMerchantId ? `digital_product_${currentState.focusMerchantId}` : 'back_to_menu')
       });
       await cleanupPressedMessage();
       await bot.answerCallbackQuery(query.id);
@@ -9568,16 +8605,6 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'discount') {
-      await setUserState(userId, { action: 'discount' });
-      await bot.sendMessage(userId, await getText(userId, 'enterDiscountCode'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId)
-      });
-      await cleanupPressedMessage();
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
     if (data === 'my_purchases') {
       const purchases = await BalanceTransaction.findAll({
         where: { userId, type: 'purchase', status: 'completed' },
@@ -9679,16 +8706,6 @@ bot.on('callback_query', async query => {
     }
 
 
-    if (data === 'admin_toggle_ai_assistant' && isAdmin(userId)) {
-      const enabled = await getAiAssistantEnabled();
-      await setAiAssistantEnabled(!enabled);
-      await bot.answerCallbackQuery(query.id, { text: await getText(userId, !enabled ? 'aiAssistantTurnedOn' : 'aiAssistantTurnedOff') });
-      await showAdminPanel(userId);
-      return;
-    }
-
-    // -------------------------------------------------------------------
-
     if (data === 'admin_manage_bots' && isAdmin(userId)) {
       await showBotsList(userId);
       await bot.answerCallbackQuery(query.id);
@@ -9698,20 +8715,6 @@ bot.on('callback_query', async query => {
     if (data === 'admin_add_bot' && isAdmin(userId)) {
       await setUserState(userId, { action: 'add_bot', step: 'token' });
       await bot.sendMessage(userId, await getText(userId, 'enterBotToken'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('bot_grant_code_') && isAdmin(userId)) {
-      const botId = parseInt(data.split('_')[3], 10);
-      const botService = await BotService.findByPk(botId);
-      if (botService) {
-        const allowed = Array.isArray(botService.allowedActions) ? [...botService.allowedActions] : [];
-        if (!allowed.includes('code')) allowed.push('code');
-        botService.allowedActions = allowed.filter(a => a !== 'full');
-        await botService.save();
-        await bot.sendMessage(userId, `✅ Granted /code permission to ${botService.name}`);
-      }
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -9767,25 +8770,6 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'redeem') {
-      await setUserState(userId, { action: 'redeem_smart' });
-      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, 'back_to_menu')
-      });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('redeem_service_')) {
-      const serviceId = parseInt(data.split('_')[2], 10);
-      await setUserState(userId, { action: 'redeem_via_service', serviceId });
-      await bot.sendMessage(userId, await getText(userId, 'sendCodeToRedeem'), {
-        reply_markup: await getBackAndCancelReplyMarkup(userId, 'redeem')
-      });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
     if (data.startsWith('buy_merchant_')) {
       const merchantId = parseInt(data.split('_')[2], 10);
       const available = await Code.count({ where: { merchantId, isUsed: false } });
@@ -9795,10 +8779,8 @@ bot.on('callback_query', async query => {
         await bot.answerCallbackQuery(query.id);
         return;
       }
-      const currentState = safeParseState((await User.findByPk(userId)).state);
-      const discountCode = currentState?.discountCode || null;
       const merchant = await Merchant.findByPk(merchantId);
-      await setUserState(userId, { action: 'buy', merchantId, discountCode });
+      await setUserState(userId, { action: 'buy', merchantId });
       await bot.sendMessage(userId, `${await getText(userId, 'enterQty')}\n${await getText(userId, 'remainingStockLine', { stock: available })}\n${await getText(userId, 'itemPriceLine', { price: formatUsdPrice(merchant?.price || 0) })}\n${await getCurrentBalanceLineText(userId)}\n\n${await getBulkDiscountInfoText(userId)}`, {
         reply_markup: await getBackAndCancelReplyMarkup(userId, 'buy')
       });
@@ -9817,19 +8799,6 @@ bot.on('callback_query', async query => {
       } else {
         await bot.sendMessage(userId, 'No description available.');
       }
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_stats' && isAdmin(userId)) {
-      const totalCodes = await Code.count();
-      const totalSales = await BalanceTransaction.sum('amount', { where: { type: 'purchase', status: 'completed' } });
-      const pendingDeposits = await BalanceTransaction.count({ where: { type: 'deposit', status: 'pending' } });
-      await bot.sendMessage(userId,
-        `${await getText(userId, 'totalCodes', { count: totalCodes })}\n` +
-        `${await getText(userId, 'totalSales', { amount: Math.abs(totalSales || 0) })}\n` +
-        `${await getText(userId, 'pendingDeposits', { count: pendingDeposits })}`
-      );
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -9972,47 +8941,6 @@ bot.on('callback_query', async query => {
         ]
       };
       await bot.sendMessage(userId, msg, { reply_markup: keyboard });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_set_chatgpt_price' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'set_chatgpt_price' });
-      await bot.sendMessage(userId, await getText(userId, 'enterChatgptPrice'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_set_price' && isAdmin(userId)) {
-      const merchants = await Merchant.findAll();
-      const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `set_price_merchant_${m.id}` }]));
-      buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-      await bot.sendMessage(userId, await getText(userId, 'setPrice'), { reply_markup: { inline_keyboard: buttons } });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('set_price_merchant_') && isAdmin(userId)) {
-      const merchantId = parseInt(data.split('_')[3], 10);
-      await setUserState(userId, { action: 'set_price', merchantId });
-      await bot.sendMessage(userId, await getText(userId, 'enterPrice'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_add_codes' && isAdmin(userId)) {
-      const merchants = await Merchant.findAll();
-      const buttons = merchants.map(m => ([{ text: `${m.nameEn} (ID: ${m.id})`, callback_data: `add_codes_merchant_${m.id}` }]));
-      buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin' }]);
-      await bot.sendMessage(userId, await getText(userId, 'addCodes'), { reply_markup: { inline_keyboard: buttons } });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('add_codes_merchant_') && isAdmin(userId)) {
-      const merchantId = parseInt(data.split('_')[3], 10);
-      await setUserState(userId, { action: 'add_codes', merchantId });
-      await bot.sendMessage(userId, await getText(userId, 'enterCodes'));
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -10371,99 +9299,9 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data === 'admin_manage_redeem_services' && isAdmin(userId)) {
-      await showRedeemServicesAdmin(userId);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_add_redeem_service' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'add_redeem_service', step: 'nameEn' });
-      await bot.sendMessage(userId, await getText(userId, 'redeemServiceNameEn'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_delete_redeem_service' && isAdmin(userId)) {
-      const services = await RedeemService.findAll();
-      const buttons = services.map(s => ([{ text: `${s.nameEn} (ID: ${s.id})`, callback_data: `delete_redeem_service_${s.id}` }]));
-      buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin_manage_redeem_services' }]);
-      await bot.sendMessage(userId, 'Select service to delete:', { reply_markup: { inline_keyboard: buttons } });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('delete_redeem_service_') && isAdmin(userId)) {
-      const serviceId = parseInt(data.split('_')[3], 10);
-      await RedeemService.destroy({ where: { id: serviceId } });
-      await bot.sendMessage(userId, 'Service deleted.');
-      await showRedeemServicesAdmin(userId);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_manage_discount_codes' && isAdmin(userId)) {
-      await showDiscountCodesAdmin(userId);
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
     if (data === 'admin_send_announcement' && isAdmin(userId)) {
       await setUserState(userId, { action: 'broadcast_announcement' });
       await bot.sendMessage(userId, await getText(userId, 'enterAnnouncementText'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_edit_code_delivery_message' && isAdmin(userId)) {
-      await bot.sendMessage(userId, await getText(userId, 'chooseCodeMessageLanguage'), {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: await getText(userId, 'codeMessageArabic'), callback_data: 'admin_edit_code_message_ar' }],
-            [{ text: await getText(userId, 'codeMessageEnglish'), callback_data: 'admin_edit_code_message_en' }],
-            [{ text: await getText(userId, 'back'), callback_data: 'admin' }]
-          ]
-        }
-      });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_edit_code_message_ar' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_code_delivery_message', targetLang: 'ar' });
-      await bot.sendMessage(userId, await getText(userId, 'enterCodeDeliveryMessage'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_edit_code_message_en' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'edit_code_delivery_message', targetLang: 'en' });
-      await bot.sendMessage(userId, await getText(userId, 'enterCodeDeliveryMessage'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_add_discount_code' && isAdmin(userId)) {
-      await setUserState(userId, { action: 'add_discount_code', step: 'code' });
-      await bot.sendMessage(userId, await getText(userId, 'enterDiscountCodeValue'));
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data === 'admin_delete_discount_code' && isAdmin(userId)) {
-      const codes = await DiscountCode.findAll();
-      const buttons = codes.map(c => ([{ text: `${c.code} (${c.discountPercent}%)`, callback_data: `delete_discount_code_${c.id}` }]));
-      buttons.push([{ text: await getText(userId, 'back'), callback_data: 'admin_manage_discount_codes' }]);
-      await bot.sendMessage(userId, 'Select discount code to delete:', { reply_markup: { inline_keyboard: buttons } });
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    if (data.startsWith('delete_discount_code_') && isAdmin(userId)) {
-      const codeId = parseInt(data.split('_')[3], 10);
-      await DiscountCode.destroy({ where: { id: codeId } });
-      await bot.sendMessage(userId, await getText(userId, 'discountCodeDeleted'));
-      await showDiscountCodesAdmin(userId);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -10629,7 +9467,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('admin_digital_product_') && isAdmin(userId)) {
       const merchantId = parseInt(data.split('_')[3], 10);
       const currentState = safeParseState((await User.findByPk(userId)).state);
-      if (['add_codes', 'bulk_account_entry', 'delete_digital_product_stock_by_input'].includes(currentState?.action)) {
+      if (['add_digital_stock', 'bulk_account_entry', 'delete_digital_product_stock_by_input'].includes(currentState?.action)) {
         await clearUserState(userId);
       }
       await showDigitalProductAdmin(userId, merchantId);
@@ -10649,7 +9487,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('admin_digital_add_stock_') && isAdmin(userId)) {
       const merchantId = parseInt(data.split('_')[4], 10);
       const merchant = await Merchant.findByPk(merchantId);
-      await setUserState(userId, { action: 'add_codes', merchantId, returnTo: 'digital_product_admin' });
+      await setUserState(userId, { action: 'add_digital_stock', merchantId, returnTo: 'digital_product_admin' });
       await bot.sendMessage(userId, await getText(userId, 'digitalStockInputPrompt'), {
         reply_markup: await getDigitalStockInputReplyMarkup(userId, merchant)
       });
@@ -10873,9 +9711,7 @@ bot.on('callback_query', async query => {
         return;
       }
 
-      const currentState = safeParseState((await User.findByPk(userId)).state);
-      const discountCode = currentState?.discountCode || null;
-      await setUserState(userId, { action: 'buy', merchantId, discountCode });
+      await setUserState(userId, { action: 'buy', merchantId });
       await bot.sendMessage(
         userId,
         `${await getText(userId, 'productQuantityPrompt')}
@@ -11010,6 +9846,22 @@ bot.on('message', async msg => {
         await sendJoinChannelMessage(userId);
         return;
       }
+    }
+
+    const removedStateActions = new Set([
+      'set_chatgpt_price', 'set_price', 'add_codes',
+      'add_redeem_service', 'add_discount_code', 'edit_code_delivery_message',
+      'redeem_via_service', 'redeem_smart', 'discount', 'discount_ready', 'ai_assistant'
+    ]);
+    if (state?.action && removedStateActions.has(state.action)) {
+      await clearUserState(userId);
+      state = null;
+      await bot.sendMessage(userId, isAdmin(userId)
+        ? '✅ تم إلغاء الحالة القديمة لأن هذه الميزة تمت إزالتها من التصميم الجديد.'
+        : 'هذه الميزة لم تعد موجودة في البوت.');
+      if (isAdmin(userId)) await showAdminPanel(userId);
+      else await sendMainMenu(userId);
+      return;
     }
 
     if (state && isAdmin(userId)) {
@@ -11567,35 +10419,7 @@ bot.on('message', async msg => {
         }
       }
 
-      if (state.action === 'set_chatgpt_price') {
-        const price = parseFloat(text);
-        if (Number.isNaN(price) || price <= 0) {
-          await bot.sendMessage(userId, '❌ Invalid price');
-          return;
-        }
-        const merchant = await getOrCreateChatGptMerchant();
-        merchant.price = price;
-        await merchant.save();
-        await bot.sendMessage(userId, await getText(userId, 'chatgptPriceUpdated', { price }));
-        await clearUserState(userId);
-        await showAdminPanel(userId);
-        return;
-      }
-
-      if (state.action === 'set_price') {
-        const price = parseFloat(text);
-        if (Number.isNaN(price)) {
-          await bot.sendMessage(userId, '❌ Invalid price');
-          return;
-        }
-        await Merchant.update({ price }, { where: { id: state.merchantId } });
-        await bot.sendMessage(userId, await getText(userId, 'priceUpdated'));
-        await clearUserState(userId);
-        await showAdminPanel(userId);
-        return;
-      }
-
-      if (state.action === 'add_codes') {
+      if (state.action === 'add_digital_stock') {
         const merchant = await Merchant.findByPk(state.merchantId);
         if (!merchant) {
           await bot.sendMessage(userId, 'Merchant not found');
@@ -11717,7 +10541,7 @@ bot.on('message', async msg => {
             broadcastDigitalStockAdded(merchant, saveResult.added).catch(err => console.error('digital stock broadcast error:', err));
           }
 
-          await setUserState(userId, { action: 'add_codes', merchantId: merchant.id, returnTo: 'digital_product_admin' });
+          await setUserState(userId, { action: 'add_digital_stock', merchantId: merchant.id, returnTo: 'digital_product_admin' });
           await bot.sendMessage(userId, await getText(userId, saveResult.duplicate ? 'bulkAccountDuplicate' : 'bulkAccountSaved'), {
             reply_markup: {
               inline_keyboard: [
@@ -11859,16 +10683,6 @@ bot.on('message', async msg => {
 
         const stats = await broadcastAnnouncement(messageText);
         await bot.sendMessage(userId, await getText(userId, 'announcementSent', stats));
-        await clearUserState(userId);
-        await showAdminPanel(userId);
-        return;
-      }
-
-      if (state.action === 'edit_code_delivery_message') {
-        const targetLang = state.targetLang === 'ar' ? 'ar' : 'en';
-        const value = String(text || '').trim() === '/empty' ? '' : String(text || '');
-        await Setting.upsert({ key: 'code_delivery_message', lang: targetLang, value });
-        await bot.sendMessage(userId, await getText(userId, 'codeDeliveryMessageUpdated'));
         await clearUserState(userId);
         await showAdminPanel(userId);
         return;
@@ -12468,87 +11282,6 @@ bot.on('message', async msg => {
         }
       }
 
-      if (state.action === 'add_redeem_service') {
-        if (state.step === 'nameEn') {
-          await setUserState(userId, { ...state, nameEn: text, step: 'nameAr' });
-          await bot.sendMessage(userId, await getText(userId, 'redeemServiceNameAr'));
-          return;
-        }
-        if (state.step === 'nameAr') {
-          await setUserState(userId, { ...state, nameAr: text, step: 'merchantDictId' });
-          await bot.sendMessage(userId, await getText(userId, 'redeemServiceMerchantId'));
-          return;
-        }
-        if (state.step === 'merchantDictId') {
-          await setUserState(userId, { ...state, merchantDictId: text, step: 'platformId' });
-          await bot.sendMessage(userId, await getText(userId, 'redeemServicePlatformId'));
-          return;
-        }
-        if (state.step === 'platformId') {
-          await RedeemService.create({
-            nameEn: state.nameEn,
-            nameAr: state.nameAr,
-            merchantDictId: state.merchantDictId,
-            platformId: text || '1'
-          });
-          await bot.sendMessage(userId, await getText(userId, 'redeemServiceAdded'));
-          await clearUserState(userId);
-          await showRedeemServicesAdmin(userId);
-          return;
-        }
-      }
-
-      if (state.action === 'add_discount_code') {
-        if (state.step === 'code') {
-          await setUserState(userId, { ...state, code: text, step: 'percent' });
-          await bot.sendMessage(userId, await getText(userId, 'enterDiscountPercent'));
-          return;
-        }
-        if (state.step === 'percent') {
-          const percent = parseInt(text, 10);
-          if (Number.isNaN(percent) || percent < 0 || percent > 100) {
-            await bot.sendMessage(userId, 'Invalid percentage (0-100)');
-            return;
-          }
-          await setUserState(userId, { ...state, percent, step: 'validUntil' });
-          await bot.sendMessage(userId, await getText(userId, 'enterDiscountValidUntil'));
-          return;
-        }
-        if (state.step === 'validUntil') {
-          let validUntil = null;
-          if (text !== '/skip') {
-            const date = new Date(text);
-            if (Number.isNaN(date.getTime())) {
-              await bot.sendMessage(userId, 'Invalid date format. Use YYYY-MM-DD or /skip.');
-              return;
-            }
-            validUntil = date;
-          }
-          await setUserState(userId, { ...state, validUntil, step: 'maxUses' });
-          await bot.sendMessage(userId, await getText(userId, 'enterDiscountMaxUses'));
-          return;
-        }
-        if (state.step === 'maxUses') {
-          const maxUses = parseInt(text, 10);
-          if (Number.isNaN(maxUses) || maxUses < 1) {
-            await bot.sendMessage(userId, 'Invalid max uses (minimum 1)');
-            return;
-          }
-          await DiscountCode.create({
-            code: state.code,
-            discountPercent: state.percent,
-            validUntil: state.validUntil,
-            maxUses,
-            usedCount: 0,
-            createdBy: userId
-          });
-          await bot.sendMessage(userId, await getText(userId, 'discountCodeAdded'));
-          await clearUserState(userId);
-          await showDiscountCodesAdmin(userId);
-          return;
-        }
-      }
-
       if (state.action === 'set_iqd_rate') {
         const rate = parseFloat(text);
         if (Number.isNaN(rate) || rate <= 0) {
@@ -12650,81 +11383,11 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (state?.action === 'ai_assistant') {
-      if (!(await getAiAssistantEnabled())) {
-        await clearUserState(userId);
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantDisabledNotice'));
-        await sendMainMenu(userId);
-        return;
-      }
-      const trimmed = String(text || '').trim();
-      if (isSlashCommandText(trimmed)) {
-        if (/^\/start(?:\s|$)/i.test(trimmed)) {
-          await clearUserState(userId);
-        }
-        return;
-      }
-      if (state.awaitingSupportConfirm && isAffirmativeText(trimmed)) {
-        await clearUserState(userId);
-        await startSupportConversation(userId, 'ai_text_confirmation');
-        return;
-      }
-      if (state.awaitingSupportConfirm && isNegativeText(trimmed)) {
-        await setUserState(userId, { ...state, awaitingSupportConfirm: false });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantSupportDeclined'), { reply_markup: await getBackAndCancelReplyMarkup(userId) });
-        return;
-      }
-
-      if (state.awaitingPurchaseConfirm && isAffirmativeText(trimmed)) {
-        await completeAssistantMerchantPurchase(userId, parseInt(state.pendingMerchantId, 10), Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state);
-        return;
-      }
-      if (state.awaitingPurchaseConfirm && isNeedMoreInfoText(trimmed)) {
-        const merchant = await Merchant.findByPk(parseInt(state.pendingMerchantId, 10));
-        if (merchant) {
-          await bot.sendMessage(userId, await buildAssistantMerchantInfoText(userId, merchant, Math.max(1, parseInt(state.pendingQuantity, 10) || 1)), {
-            reply_markup: await getAssistantProductInfoReplyMarkup(userId, merchant.id, Math.max(1, parseInt(state.pendingQuantity, 10) || 1), state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-          });
-        }
-        return;
-      }
-      if (state.awaitingPurchaseConfirm && isAssistantCancelIntentText(trimmed)) {
-        await setUserState(userId, {
-          action: 'ai_assistant',
-          history: Array.isArray(state.history) ? state.history.slice(-8) : [],
-          focusMerchantId: state.focusMerchantId || null,
-          awaitingSupportConfirm: false,
-          awaitingPurchaseConfirm: false
-        });
-        await bot.sendMessage(userId, await getText(userId, 'aiAssistantPurchaseCancelled'), {
-          reply_markup: await getBackAndCancelReplyMarkup(userId, state.focusMerchantId ? `digital_product_${state.focusMerchantId}` : 'back_to_menu')
-        });
-        return;
-      }
-
-      await processAssistantMessageTurn(userId, trimmed, state);
-      return;
-    }
-
     if (await isSupportThreadOpen(userId)) {
       await forwardSupportMessageToAdmin(userId, msg);
       await bot.sendMessage(userId, await getText(userId, 'supportUserMessageForwarded'), {
         reply_markup: await getSupportUserCloseReplyMarkup(userId)
       });
-      return;
-    }
-
-    if (state?.action === 'discount') {
-      const discountCode = String(text || '').trim();
-      const discount = await DiscountCode.findOne({ where: { code: discountCode } });
-      if (discount && (!discount.validUntil || discount.validUntil > new Date()) && discount.usedCount < discount.maxUses) {
-        await bot.sendMessage(userId, await getText(userId, 'discountApplied', { percent: discount.discountPercent }));
-        await setUserState(userId, { action: 'discount_ready', discountCode });
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'discountInvalid'));
-        await clearUserState(userId);
-      }
-      await sendMainMenu(userId);
       return;
     }
 
@@ -12751,7 +11414,7 @@ bot.on('message', async msg => {
         });
         return;
       }
-      const result = await processPurchase(userId, merchant.id, qty, state.discountCode || null);
+      const result = await processPurchase(userId, merchant.id, qty);
       if (result.success) {
         let msgText = await getText(userId, 'success');
         if (result.discountApplied) msgText += `\n${await getText(userId, 'discountApplied', { percent: result.discountApplied })}`;
@@ -12947,44 +11610,6 @@ bot.on('message', async msg => {
       await bot.sendMessage(userId, await getText(userId, 'binancePayStatusPending'), {
         reply_markup: await getBinancePayCheckoutReplyMarkup(userId, { merchantTradeNo: state.merchantTradeNo, checkoutUrl: null, universalUrl: null })
       });
-      return;
-    }
-
-    if (state?.action === 'redeem_via_service') {
-      const service = await RedeemService.findByPk(state.serviceId);
-      if (!service) {
-        await bot.sendMessage(userId, 'Service not found');
-        await clearUserState(userId);
-        await sendMainMenu(userId);
-        return;
-      }
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await redeemCard(String(text || '').trim(), service.merchantDictId, service.platformId);
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-      if (result.success) {
-        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', { details: formatCardDetails(result.data) }));
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
-      return;
-    }
-
-    if (state?.action === 'redeem_smart') {
-      const waitingMsg = await bot.sendMessage(userId, await getText(userId, 'processing'));
-      const result = await redeemCardSmart(String(text || '').trim());
-      await bot.deleteMessage(userId, waitingMsg.message_id).catch(() => {});
-      if (result.success) {
-        const serviceName = result.service ? `${result.service.nameEn} / ${result.service.nameAr}` : 'Auto';
-        await bot.sendMessage(userId, await getText(userId, 'redeemSuccess', {
-          details: `${formatCardDetails(result.data)}\n\n🏪 Selected Service: ${serviceName}`
-        }));
-      } else {
-        await bot.sendMessage(userId, await getText(userId, 'redeemFailed', { reason: result.reason }));
-      }
-      await clearUserState(userId);
-      await sendMainMenu(userId);
       return;
     }
 
@@ -13240,16 +11865,7 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (!state?.action && msg.chat?.type === 'private' && typeof text === 'string' && String(text).trim() && !isSlashCommandText(text) && (await getAiAssistantEnabled())) {
-      await processAssistantMessageTurn(userId, String(text).trim(), {
-        action: 'ai_assistant',
-        history: [],
-        focusMerchantId: null,
-        awaitingSupportConfirm: false,
-        awaitingPurchaseConfirm: false
-      });
-      return;
-    }
+
 
   } catch (err) {
     console.error('Message handler error:', err);
@@ -13385,40 +12001,6 @@ app.get('/api/users/:userId/balance', async (req, res) => {
   }
 });
 
-app.post('/api/code', async (req, res) => {
-  try {
-    const { token, card_key, merchant_dict_id, platform_id } = req.body;
-    const botService = await BotService.findOne({ where: { token, isActive: true } });
-    if (!botService || !Array.isArray(botService.allowedActions) || !botService.allowedActions.includes('code')) {
-      return res.status(403).json({ error: 'Bot not authorized for /code' });
-    }
-    if (!card_key) {
-      return res.status(400).json({ error: 'Missing card_key' });
-    }
-
-    let result;
-    if (merchant_dict_id) result = await redeemCard(card_key, merchant_dict_id, platform_id || '1');
-    else result = await redeemCardSmart(card_key);
-
-    if (result.success) {
-      return res.json({
-        success: true,
-        data: result.data,
-        service: result.service ? {
-          id: result.service.id,
-          nameEn: result.service.nameEn,
-          nameAr: result.service.nameAr,
-          merchantDictId: result.service.merchantDictId
-        } : null
-      });
-    }
-
-    return res.status(400).json({ success: false, error: result.reason });
-  } catch (err) {
-    console.error('API error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
 setInterval(async () => {
   try {
