@@ -1,0 +1,22 @@
+{
+  "name": "my-bot-store-clean",
+  "version": "4.2.0",
+  "private": true,
+  "description": "Telegram digital store with stock notifications, admin announcements, required channel, shared accounts, in-bot support, referrals, gifts, SuperQi, and Binance ID verification",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/utils.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/payments/binancePay.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.16.0",
+    "sequelize": "^6.37.7"
+  }
+}
