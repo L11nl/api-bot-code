@@ -55,7 +55,7 @@ module.exports = {
     ).trim(),
     payId: String(process.env.BINANCE_PAY_ID || process.env.BINANCE_ID || '').trim(),
     baseUrl: String(process.env.BINANCE_API_BASE_URL || 'https://api.binance.com').replace(/\/$/, ''),
-    minAmount: Math.max(0.01, Number(process.env.BINANCE_MIN_AMOUNT || 1)),
+    minAmount: 0.01,
     maxAmount: Math.max(1, Number(process.env.BINANCE_MAX_AMOUNT || 100000)),
     verificationWindowHours: Math.min(24, Math.max(1, Number(process.env.BINANCE_VERIFY_WINDOW_HOURS || 6)))
   }

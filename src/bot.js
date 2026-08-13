@@ -67,6 +67,29 @@ function cancelInlineKeyboard() {
   return { inline_keyboard: [[{ text: '❌ إغلاق العملية', callback_data: 'flow:cancel' }]] };
 }
 
+function extractProductNameRichText(text, entities = []) {
+  const raw = String(text || '');
+  const rich = extractTelegramRichText(raw, entities);
+  const manual = raw.match(/\[(\d{5,24})\]/);
+  const manualId = manual ? manual[1] : '';
+  const cleanPlain = manual ? rich.plain.replace(manual[0], '').replace(/\s{2,}/g, ' ').trim() : rich.plain.trim();
+  const emojiId = rich.firstCustomEmojiId || manualId;
+  const emojiAlt = rich.firstCustomEmojiAlt || (manualId ? '✨' : '');
+  let html = rich.html;
+  if (manualId && !rich.firstCustomEmojiId) {
+    html = `<tg-emoji emoji-id="${escapeHtml(manualId)}">✨</tg-emoji> ${escapeHtml(cleanPlain)}`;
+  } else if (!emojiId) {
+    html = escapeHtml(cleanPlain);
+  }
+  return {
+    ...rich,
+    plain: cleanPlain,
+    html,
+    firstCustomEmojiId: emojiId,
+    firstCustomEmojiAlt: emojiAlt
+  };
+}
+
 function isMainMenuText(value) {
   const text = String(value || '').trim();
   return [
@@ -143,7 +166,12 @@ async function getMainKeyboard(lang) {
   return mainKeyboard(lang, settings.enabled, Boolean(channel));
 }
 
-function adminMenu() {
+async function automaticNotificationsEnabled() {
+  return String(await getSetting('automatic_notifications_enabled', 'true')).toLowerCase() !== 'false';
+}
+
+async function adminMenu() {
+  const notificationsEnabled = await automaticNotificationsEnabled();
   return {
     inline_keyboard: [
       [{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }],
@@ -151,6 +179,7 @@ function adminMenu() {
       [{ text: '🧾 الطلبات', callback_data: 'adm:orders' }, { text: '💳 دفعات SuperQi', callback_data: 'adm:proofs' }],
       [{ text: '👤 إدارة مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
       [{ text: '💬 الدعم', callback_data: 'adm:support' }, { text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
+      [{ text: notificationsEnabled ? '🔔 الإشعارات: تشغيل' : '🔕 الإشعارات: إيقاف', callback_data: 'adm:notifications_toggle', style: notificationsEnabled ? 'success' : 'danger' }],
       [{ text: '🎁 الإحالات والهدايا', callback_data: 'adm:referrals' }, { text: '📢 القناة', callback_data: 'adm:channel' }],
       [{ text: '⚙️ إعدادات المتجر', callback_data: 'adm:settings', style: 'primary' }, { text: '🔐 فتح/إغلاق', callback_data: 'adm:store_toggle' }]
     ]
@@ -417,6 +446,7 @@ async function broadcastCopiedMessage(sourceChatId, sourceMessageId) {
 }
 
 async function broadcastStockNotification(product, added) {
+  if (!(await automaticNotificationsEnabled())) return { sent: 0, failed: 0, disabled: true };
   if (!product?.isActive || !Number.isInteger(added) || added < 1) {
     return { sent: 0, failed: 0 };
   }
@@ -463,6 +493,51 @@ async function broadcastStockNotification(product, added) {
     else await wait(45);
   }
 
+  return { sent, failed };
+}
+
+async function broadcastNewProductNotification(product) {
+  if (!(await automaticNotificationsEnabled())) return { sent: 0, failed: 0, disabled: true };
+  if (!product?.isActive) return { sent: 0, failed: 0 };
+
+  const users = await getBroadcastUsers();
+  const stock = await getProductStock(product.id);
+  let sent = 0;
+  let failed = 0;
+
+  for (let index = 0; index < users.length; index += 1) {
+    const target = users[index];
+    if (isAdmin(target.id)) continue;
+    const lang = target.lang === 'en' ? 'en' : 'ar';
+    const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
+    const message = lang === 'en'
+      ? `🆕 <b>New product</b>
+
+<b>${escapeHtml(name)}</b>
+Price: <b>${moneyUsd(product.price)}</b>`
+      : `🆕 <b>منتج جديد</b>
+
+<b>${escapeHtml(name)}</b>
+السعر: <b>${moneyUsd(product.price)}</b>`;
+    try {
+      await bot.sendMessage(target.id, message, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[{
+            text: lang === 'en' ? '🛍️ View product' : '🛍️ عرض المنتج',
+            callback_data: `prod:${product.id}`,
+            style: stock > 0 ? 'success' : 'danger'
+          }]]
+        }
+      });
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(`New product notification to ${target.id}:`, error.message);
+    }
+    if ((index + 1) % 20 === 0) await wait(1000);
+    else await wait(45);
+  }
   return { sent, failed };
 }
 
@@ -769,7 +844,6 @@ async function queueBinanceManualReview(user, transferId, submittedOrderId) {
     `النوع: ${typeText}`,
     `المستخدم: <code>${transfer.userId}</code>`,
     `المبلغ: <b>${moneyUsd(transfer.expectedAmount)}</b>`,
-    `رمز الدفع: <code>${escapeHtml(transfer.verificationCode)}</code>`,
     `Order ID: <code>${escapeHtml(transfer.submittedOrderId || '')}</code>`,
     '',
     'افتح Binance وتأكد من العملية والمبلغ والمستلم قبل الضغط على موافقة.'
@@ -809,7 +883,7 @@ bot.on('message', async msg => {
       if (!isAdmin(user.id)) return bot.sendMessage(msg.chat.id, t(user.lang, 'adminOnly'));
       return bot.sendMessage(msg.chat.id, '👑 <b>لوحة إدارة المالك</b>\nهذه اللوحة لا تظهر للمستخدمين.', {
         parse_mode: 'HTML',
-        reply_markup: adminMenu()
+        reply_markup: await adminMenu()
       });
     }
 
@@ -1038,7 +1112,6 @@ bot.on('callback_query', async query => {
     }
     if (data.startsWith('qty:')) return handleQuantity(query, user, data);
     if (data.startsWith('pay:')) return handlePayment(query, user, data);
-    if (data.startsWith('binverify:')) return beginBinanceVerification(query, user, Number(data.split(':')[1]));
     if (data.startsWith('topup:')) return handleTopupStart(query, user, data.split(':')[1]);
     if (data.startsWith('order:')) return showOrder(query.message.chat.id, user, Number(data.split(':')[1]), query.id);
 
@@ -1146,27 +1219,10 @@ async function handlePayment(query, user, data) {
 }
 
 async function sendBinanceInstructions(user, transfer) {
-  const keyboard = [[{ text: '🧾 تحقق برقم الطلب', callback_data: `binverify:${transfer.id}` }]];
+  await setState(user.id, { action: 'binance_verify', transferId: transfer.id });
   return bot.sendMessage(user.id, binancePay.instructions(transfer, user.lang), {
-    parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: keyboard }
+    parse_mode: 'HTML'
   });
-}
-
-async function beginBinanceVerification(query, user, transferId) {
-  const transfer = await BinanceTransfer.findByPk(transferId);
-  if (!transfer || String(transfer.userId) !== String(user.id)) {
-    return answerCallback(query.id, 'العملية غير موجودة.', true);
-  }
-  if (transfer.status === 'VERIFIED') return answerCallback(query.id, 'تم التحقق سابقاً.', true);
-  if (transfer.status === 'PAYMENT_CONFIRMED') return answerCallback(query.id, 'الدفع مؤكد والتسليم قيد المعالجة.', true);
-  if (transfer.status === 'MANUAL_REVIEW') return answerCallback(query.id, 'العملية حالياً قيد مراجعة الإدارة.', true);
-  await setState(user.id, { action: 'binance_verify', transferId });
-  await answerCallback(query.id);
-  const prompt = user.lang === 'en'
-    ? 'Send the Binance Order ID now. You can copy it from the payment details.'
-    : 'أرسل الآن رقم طلب Binance (Order ID) الموجود داخل تفاصيل التحويل.';
-  return bot.sendMessage(user.id, prompt, { reply_markup: cancelInlineKeyboard() });
 }
 
 async function handleTopupStart(query, user, method) {
@@ -1175,8 +1231,8 @@ async function handleTopupStart(query, user, method) {
   }
   await setState(user.id, { action: 'wallet_topup_amount', method });
   await answerCallback(query.id);
-  const minimum = method === 'binance' ? config.binance.minAmount : 1;
-  return bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار (الحد الأدنى $${minimum}):`, { reply_markup: cancelInlineKeyboard() });
+  const minimum = method === 'binance' ? config.binance.minAmount : 0.01;
+  return bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${minimum}):`, { reply_markup: cancelInlineKeyboard() });
 }
 
 async function handleStateMessage(msg, user, state) {
@@ -1216,7 +1272,7 @@ async function handleStateMessage(msg, user, state) {
 
   if (state.action === 'wallet_topup_amount') {
     const amount = Number(String(msg.text || '').trim());
-    const minimumAmount = state.method === 'binance' ? config.binance.minAmount : 1;
+    const minimumAmount = state.method === 'binance' ? config.binance.minAmount : 0.01;
     if (!Number.isFinite(amount) || amount < minimumAmount || amount > 100000) {
       await bot.sendMessage(user.id, '❌ المبلغ غير صحيح.');
       return true;
@@ -1405,7 +1461,11 @@ async function handleStateMessage(msg, user, state) {
 
     if (state.step === 'nameAr') {
       if (!text) return true;
-      const rich = extractTelegramRichText(text, msg.entities);
+      const rich = extractProductNameRichText(text, msg.entities);
+      if (!rich.plain) {
+        await bot.sendMessage(user.id, '❌ اكتب اسم المنتج أيضاً، مو فقط ID الإيموجي.');
+        return true;
+      }
       data.nameAr = rich.plain;
       data.nameArHtml = rich.html;
       data.nameEmojiId = rich.firstCustomEmojiId;
@@ -1515,7 +1575,11 @@ async function handleStateMessage(msg, user, state) {
 
     const description = parseDescription(product.description);
     if (field === 'nameAr') {
-      const rich = extractTelegramRichText(value, msg.entities);
+      const rich = extractProductNameRichText(value, msg.entities);
+      if (!rich.plain) {
+        await bot.sendMessage(user.id, '❌ اكتب اسم المنتج أيضاً، مو فقط ID الإيموجي.');
+        return true;
+      }
       product.nameAr = rich.plain;
       const translatableName = rich.firstCustomEmojiAlt ? rich.plain.replace(rich.firstCustomEmojiAlt, '').trim() : rich.plain;
       product.nameEn = await translateArToEn(translatableName || rich.plain);
@@ -1654,15 +1718,21 @@ async function handleStateMessage(msg, user, state) {
 
       if (added > 0 && product.isActive) {
         try {
-          const notification = await broadcastStockNotification(product, added);
-          await bot.sendMessage(user.id, [
-            '📢 تم إرسال إشعار المخزون للمشتركين.',
-            `وصل إلى: ${notification.sent}`,
-            `تعذر الإرسال إلى: ${notification.failed}`
-          ].join('\n'));
+          const notification = state.afterCreate
+            ? await broadcastNewProductNotification(product)
+            : await broadcastStockNotification(product, added);
+          if (notification.disabled) {
+            await bot.sendMessage(user.id, '🔕 الإشعارات التلقائية متوقفة، لذلك ما تم إرسال إشعار للمستخدمين.');
+          } else {
+            await bot.sendMessage(user.id, [
+              state.afterCreate ? '📢 تم إرسال إشعار المنتج الجديد للمشتركين.' : '📢 تم إرسال إشعار المخزون للمشتركين.',
+              `وصل إلى: ${notification.sent}`,
+              `تعذر الإرسال إلى: ${notification.failed}`
+            ].join('\n'));
+          }
         } catch (notificationError) {
-          console.error('Stock notification broadcast:', notificationError);
-          await bot.sendMessage(user.id, '⚠️ انضاف المخزون بنجاح، لكن تعذر إرسال إشعار المخزون حالياً.').catch(() => {});
+          console.error('Automatic notification broadcast:', notificationError);
+          await bot.sendMessage(user.id, '⚠️ انضاف المخزون بنجاح، لكن تعذر إرسال الإشعار التلقائي حالياً.').catch(() => {});
         }
       }
 
@@ -1807,12 +1877,11 @@ async function handleBinanceManualAdmin(query, data) {
         message_id: query.message.message_id
       }).catch(() => {});
     }
+    await setState(result.transfer.userId, { action: 'binance_verify', transferId: result.transfer.id });
     await bot.sendMessage(result.transfer.userId, [
-      '❌ لم تتم الموافقة على رقم طلب Binance المرسل.',
-      'تأكد من Order ID داخل تفاصيل التحويل، وبعدها اضغط الزر وأرسله من جديد.'
-    ].join('\n'), {
-      reply_markup: { inline_keyboard: [[{ text: '🧾 إرسال Order ID من جديد', callback_data: `binverify:${result.transfer.id}` }]] }
-    }).catch(() => {});
+      '❌ لم تتم الموافقة على معرف طلب Binance المرسل.',
+      'تأكد من Order ID داخل تفاصيل التحويل وأرسله هنا مباشرة:'
+    ].join('\n')).catch(() => {});
     return;
   }
 
@@ -1965,6 +2034,24 @@ async function handleAdminCallback(query, user, data) {
         ]
       }
     });
+  }
+
+  if (data === 'adm:notifications_toggle') {
+    const enabled = await automaticNotificationsEnabled();
+    await setSetting('automatic_notifications_enabled', enabled ? 'false' : 'true');
+    const nowEnabled = !enabled;
+    await answerCallback(query.id, nowEnabled ? 'تم تشغيل الإشعارات التلقائية.' : 'تم إيقاف الإشعارات التلقائية.');
+    try {
+      await bot.editMessageReplyMarkup(await adminMenu(), {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id
+      });
+    } catch {
+      await bot.sendMessage(query.message.chat.id, nowEnabled ? '🔔 الإشعارات التلقائية شغالة.' : '🔕 الإشعارات التلقائية متوقفة.', {
+        reply_markup: await adminMenu()
+      });
+    }
+    return;
   }
 
   if (data === 'adm:store_toggle') {
@@ -2205,7 +2292,7 @@ async function handleAdminCallback(query, user, data) {
     state.data.type = type;
     await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: state.data });
     await answerCallback(query.id, `تم اختيار: ${productTypeLabel(type)}`);
-    return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nإذا استخدمت Custom Emoji من Telegram Premium بالاسم راح أحفظها تلقائياً.', {
+    return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nتقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة مثل: [5221980268230882832] اسم المنتج.', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -2223,7 +2310,7 @@ async function handleAdminCallback(query, user, data) {
     await setState(user.id, { action: 'admin_edit_product', productId: Number(idRaw), field });
     await answerCallback(query.id);
     const prompts = {
-      nameAr: 'أرسل اسم المنتج بالعربي. إذا بيه Custom Emoji Premium راح تنحفظ تلقائياً.',
+      nameAr: 'أرسل اسم المنتج بالعربي. تقدر تستخدم Custom Emoji Premium مباشرة أو ID بين [] مثل [5221980268230882832] اسم المنتج.',
       price: 'أرسل السعر الجديد بالدولار.',
       descriptionAr: 'أرسل الوصف بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
       warrantyAr: 'أرسل الضمان بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
