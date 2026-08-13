@@ -16,7 +16,11 @@ function moneyIqd(value) {
 }
 
 function parseDescription(value) {
-  if (!value) return { ar: '', en: '', warrantyAr: '', warrantyEn: '', sold: 0 };
+  if (!value) return {
+    ar: '', en: '', warrantyAr: '', warrantyEn: '', sold: 0,
+    nameArHtml: '', nameEmojiId: '', nameEmojiAlt: '',
+    descriptionArHtml: '', warrantyArHtml: ''
+  };
 
   let parsed = value;
   for (let attempt = 0; attempt < 3 && typeof parsed === 'string'; attempt += 1) {
@@ -33,43 +37,55 @@ function parseDescription(value) {
     parsed = { ar: String(parsed || ''), en: String(parsed || '') };
   }
 
-  // Compatibility with the previous bot, which stored descriptions as
-  // { type: 'text', content: '...' }. Reuse that text in both languages so
-  // existing product descriptions are not erased during the migration.
   const legacyContent = parsed.type === 'text' ? String(parsed.content || '') : '';
 
   return {
-    ar: String(
-      parsed.ar ??
-      parsed.descriptionAr ??
-      parsed.description_ar ??
-      parsed.arabic ??
-      parsed.descriptionArabic ??
-      legacyContent ??
-      ''
-    ),
-    en: String(
-      parsed.en ??
-      parsed.descriptionEn ??
-      parsed.description_en ??
-      parsed.english ??
-      parsed.descriptionEnglish ??
-      legacyContent ??
-      ''
-    ),
-    warrantyAr: String(
-      parsed.warrantyAr ??
-      parsed.warranty_ar ??
-      parsed.arWarranty ??
-      ''
-    ),
-    warrantyEn: String(
-      parsed.warrantyEn ??
-      parsed.warranty_en ??
-      parsed.enWarranty ??
-      ''
-    ),
-    sold: Number(parsed.sold ?? parsed.soldCount ?? 0) || 0
+    ar: String(parsed.ar ?? parsed.descriptionAr ?? parsed.description_ar ?? parsed.arabic ?? parsed.descriptionArabic ?? legacyContent ?? ''),
+    en: String(parsed.en ?? parsed.descriptionEn ?? parsed.description_en ?? parsed.english ?? parsed.descriptionEnglish ?? legacyContent ?? ''),
+    warrantyAr: String(parsed.warrantyAr ?? parsed.warranty_ar ?? parsed.arWarranty ?? ''),
+    warrantyEn: String(parsed.warrantyEn ?? parsed.warranty_en ?? parsed.enWarranty ?? ''),
+    sold: Number(parsed.sold ?? parsed.soldCount ?? 0) || 0,
+    nameArHtml: String(parsed.nameArHtml || ''),
+    nameEmojiId: String(parsed.nameEmojiId || ''),
+    nameEmojiAlt: String(parsed.nameEmojiAlt || ''),
+    descriptionArHtml: String(parsed.descriptionArHtml || ''),
+    warrantyArHtml: String(parsed.warrantyArHtml || '')
+  };
+}
+
+function extractTelegramRichText(text, entities = []) {
+  const raw = String(text || '');
+  const custom = (Array.isArray(entities) ? entities : [])
+    .filter(entity => entity?.type === 'custom_emoji' && entity.custom_emoji_id)
+    .sort((a, b) => Number(a.offset || 0) - Number(b.offset || 0));
+
+  if (!custom.length) {
+    return { plain: raw, html: escapeHtml(raw), customEmojiIds: [], firstCustomEmojiId: '', firstCustomEmojiAlt: '' };
+  }
+
+  let cursor = 0;
+  const chunks = [];
+  const ids = [];
+  let firstAlt = '';
+  for (const entity of custom) {
+    const offset = Number(entity.offset || 0);
+    const length = Number(entity.length || 0);
+    if (offset < cursor || length <= 0) continue;
+    chunks.push(escapeHtml(raw.slice(cursor, offset)));
+    const alt = raw.slice(offset, offset + length) || '✨';
+    const id = String(entity.custom_emoji_id);
+    if (!firstAlt) firstAlt = alt;
+    ids.push(id);
+    chunks.push(`<tg-emoji emoji-id="${escapeHtml(id)}">${escapeHtml(alt)}</tg-emoji>`);
+    cursor = offset + length;
+  }
+  chunks.push(escapeHtml(raw.slice(cursor)));
+  return {
+    plain: raw,
+    html: chunks.join(''),
+    customEmojiIds: ids,
+    firstCustomEmojiId: ids[0] || '',
+    firstCustomEmojiAlt: firstAlt || ''
   };
 }
 
@@ -105,9 +121,25 @@ function parseJsonInventory(raw) {
   };
 }
 
-function parseInventoryLineForType(line, productType = 'private') {
+function parseInventoryLineForType(line, productType = 'account') {
   const raw = String(line || '').trim();
   if (!raw) return { item: null, error: null };
+
+  const type = String(productType || 'account').toLowerCase();
+
+  if (type === 'code') {
+    return {
+      item: { email: '', password: '', twoFactor: '', code: raw, extra: '', raw },
+      error: null
+    };
+  }
+
+  if (type === 'free') {
+    return {
+      item: { email: '', password: '', twoFactor: '', code: '', extra: '', raw },
+      error: null
+    };
+  }
 
   let item;
   try {
@@ -115,69 +147,25 @@ function parseInventoryLineForType(line, productType = 'private') {
       item = parseJsonInventory(raw);
     } else {
       const parts = splitInventoryLine(raw).map(value => String(value).trim());
-      if (productType === 'code') {
-        item = { email: '', password: '', twoFactor: '', code: raw, extra: '', raw };
-      } else {
-        const [email = '', password = '', twoFactor = '', ...rest] = parts;
-        item = {
-          email,
-          password,
-          twoFactor,
-          code: '',
-          extra: rest.join('|').trim(),
-          raw
-        };
-      }
+      const [email = '', password = '', ...rest] = parts;
+      item = { email, password, twoFactor: '', code: '', extra: rest.join('|').trim(), raw };
     }
   } catch (error) {
     return { item: null, error: `JSON غير صالح: ${error.message}` };
   }
 
-  if (productType === 'code') {
-    const code = String(item.code || item.email || item.raw || '').trim();
-    if (!code) return { item: null, error: 'الكود فارغ' };
-    return {
-      item: { email: '', password: '', twoFactor: '', code, extra: item.extra || '', raw },
-      error: null
-    };
-  }
-
   const email = String(item.email || '').trim();
   const password = String(item.password || '').trim();
-  const twoFactor = String(item.twoFactor || '').trim();
   const extra = String(item.extra || '').trim();
-
-  if (!looksLikeEmail(email)) {
-    return { item: null, error: 'الإيميل غير صحيح' };
-  }
-
-  if (productType === 'shared') {
-    if (!password) return { item: null, error: 'الحساب المشترك لازم يحتوي إيميل وباسورد' };
-    if (twoFactor) return { item: null, error: 'الحساب المشترك يقبل إيميل وباسورد فقط بدون 2FA' };
-    return {
-      item: { email, password, twoFactor: '', code: '', extra: '', raw },
-      error: null
-    };
-  }
-
-  if (productType === 'wait_code') {
-    // Waiting-code accounts may be email-only or email + password. 2FA is not accepted.
-    if (twoFactor) return { item: null, error: 'منتج انتظار الكود لا يقبل 2FA' };
-    return {
-      item: { email, password, twoFactor: '', code: '', extra, raw },
-      error: null
-    };
-  }
-
-  // Personal/private accounts: email + password, with optional 2FA.
-  if (!password) return { item: null, error: 'الحساب الشخصي لازم يحتوي إيميل وباسورد' };
+  if (!looksLikeEmail(email)) return { item: null, error: 'الإيميل غير صحيح' };
+  if (!password) return { item: null, error: 'لازم يحتوي إيميل وباسورد' };
   return {
-    item: { email, password, twoFactor, code: '', extra, raw },
+    item: { email, password, twoFactor: '', code: '', extra, raw },
     error: null
   };
 }
 
-function parseInventoryTextForProduct(text, productType = 'private') {
+function parseInventoryTextForProduct(text, productType = 'account') {
   const lines = String(text || '').split(/\r?\n/);
   const items = [];
   const errors = [];
@@ -194,7 +182,7 @@ function parseInventoryTextForProduct(text, productType = 'private') {
 }
 
 function parseInventoryText(text) {
-  return parseInventoryTextForProduct(text, 'private').items;
+  return parseInventoryTextForProduct(text, 'account').items;
 }
 
 function deserializeInventory(value, extra = '') {
@@ -203,42 +191,39 @@ function deserializeInventory(value, extra = '') {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') return parsed;
   } catch {}
-  const result = parseInventoryLineForType(raw, 'private');
+  const result = parseInventoryLineForType(raw, 'account');
   const parsed = result.item || { raw };
   if (extra && !parsed.extra) parsed.extra = extra;
   return parsed;
 }
 
 function inventoryPayloadIsValid(productType, item) {
-  const type = String(productType || 'private');
+  const type = String(productType || 'account');
   if (type === 'code') return Boolean(String(item?.code || item?.raw || '').trim());
-  if (!looksLikeEmail(item?.email)) return false;
-  if (type === 'wait_code') return !String(item?.twoFactor || '').trim();
-  if (type === 'shared') {
-    return Boolean(String(item?.password || '').trim()) && !String(item?.twoFactor || '').trim();
-  }
-  return Boolean(String(item?.password || '').trim());
+  if (type === 'free') return Boolean(String(item?.raw || item?.extra || '').trim());
+  return looksLikeEmail(item?.email) && Boolean(String(item?.password || '').trim());
 }
 
 function inventoryFingerprint(productType, item) {
-  const type = String(productType || 'private');
-  const normalized = type === 'code'
-    ? { code: String(item?.code || item?.raw || '').trim() }
-    : { email: normalizeEmail(item?.email) };
+  const type = String(productType || 'account');
+  let normalized;
+  if (type === 'code') normalized = { code: String(item?.code || item?.raw || '').trim() };
+  else if (type === 'free') normalized = { raw: String(item?.raw || item?.extra || '').trim() };
+  else normalized = { email: normalizeEmail(item?.email), password: String(item?.password || '').trim() };
   return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
 
 function renderDelivery(item, lang = 'ar') {
   const labels = lang === 'en'
-    ? { email: 'Email', password: 'Password', twoFactor: '2FA', code: 'Code', extra: 'Extra' }
-    : { email: 'الإيميل', password: 'الباسورد', twoFactor: 'المصادقة الثنائية', code: 'الكود', extra: 'إضافي' };
+    ? { email: 'Email', password: 'Password', code: 'Code', extra: 'Extra' }
+    : { email: 'الإيميل', password: 'الباسورد', code: 'الكود', extra: 'إضافي' };
   const lines = [];
   if (item.email) lines.push(`<b>${labels.email}:</b> <code>${escapeHtml(item.email)}</code>`);
   if (item.password) lines.push(`<b>${labels.password}:</b> <code>${escapeHtml(item.password)}</code>`);
-  if (item.twoFactor) lines.push(`<b>${labels.twoFactor}:</b> <code>${escapeHtml(item.twoFactor)}</code>`);
   if (item.code) lines.push(`<b>${labels.code}:</b> <code>${escapeHtml(item.code)}</code>`);
   if (item.extra) lines.push(`<b>${labels.extra}:</b> ${escapeHtml(item.extra)}`);
-  return lines.join('\n') || escapeHtml(item.raw || (lang === 'en' ? 'Contact support for delivery.' : 'راجع الدعم للتسليم.'));
+  if (!lines.length && item.raw) lines.push(`<code>${escapeHtml(item.raw)}</code>`);
+  return lines.join('\n') || (lang === 'en' ? 'Contact support for delivery.' : 'راجع الدعم للتسليم.');
 }
 
 function randomCaptcha() {
@@ -263,5 +248,6 @@ module.exports = {
   deserializeInventory,
   renderDelivery,
   randomCaptcha,
-  looksLikeEmail
+  looksLikeEmail,
+  extractTelegramRichText
 };

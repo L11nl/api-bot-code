@@ -38,7 +38,7 @@ const Merchant = sequelize.define('Merchant', {
   nameAr: { type: DataTypes.STRING, allowNull: false },
   price: { type: DataTypes.DECIMAL(18, 2), allowNull: false, defaultValue: 0 },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
-  type: { type: DataTypes.STRING, defaultValue: 'private' },
+  type: { type: DataTypes.STRING, defaultValue: 'free' },
   description: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
   image: { type: DataTypes.TEXT, allowNull: true },
   isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
@@ -186,7 +186,7 @@ async function migrateLegacySingleFileBotData() {
     UPDATE "Merchants"
     SET "type" = CASE
       WHEN LOWER(COALESCE("type", '')) = 'single' THEN 'code'
-      WHEN LOWER(COALESCE("type", '')) = 'bulk' THEN 'private'
+      WHEN LOWER(COALESCE("type", '')) = 'bulk' THEN 'account'
       ELSE "type"
     END
     WHERE LOWER(COALESCE("type", '')) IN ('single', 'bulk')

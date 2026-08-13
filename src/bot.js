@@ -27,7 +27,8 @@ const {
   parseInventoryTextForProduct,
   inventoryFingerprint,
   renderDelivery,
-  randomCaptcha
+  randomCaptcha,
+  extractTelegramRichText
 } = require('./utils');
 const {
   getProductStock,
@@ -46,6 +47,7 @@ const {
 } = require('./services/referrals');
 const binancePay = require('./payments/binancePay');
 const { encryptPayload } = require('./cryptoStore');
+const { translateArToEn } = require('./translator');
 
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
@@ -104,7 +106,7 @@ async function getOrCreateUser(from) {
     defaults: {
       lang: config.defaultLanguage,
       balance: 0,
-      verified: !config.captchaEnabled,
+      verified: true,
       username: from.username || null,
       firstName: from.first_name || '',
       referralProcessed: false
@@ -121,7 +123,7 @@ async function getOrCreateUser(from) {
 function mainKeyboard(lang, showReferrals = true, showChannel = false) {
   const keyboard = [
     [{ text: t(lang, 'products') }, { text: t(lang, 'support') }],
-    [{ text: t(lang, 'wallet') }, { text: t(lang, 'orders') }]
+    [{ text: t(lang, 'wallet'), style: 'primary' }, { text: t(lang, 'orders') }]
   ];
   if (showReferrals) keyboard.push([{ text: lang === 'en' ? '🎁 Gifts & referrals' : '🎁 الهدايا والمشاركة' }]);
   if (showChannel) keyboard.push([{ text: lang === 'en' ? '📢 Our channel' : '📢 قناتنا' }]);
@@ -144,13 +146,13 @@ async function getMainKeyboard(lang) {
 function adminMenu() {
   return {
     inline_keyboard: [
-      [{ text: '📦 المنتجات', callback_data: 'adm:products:0' }, { text: '📥 المخزون', callback_data: 'adm:stock' }],
+      [{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }],
+      [{ text: '📦 المنتجات وإدارتها', callback_data: 'adm:products:0', style: 'primary' }],
+      [{ text: '🧾 الطلبات', callback_data: 'adm:orders' }, { text: '💳 دفعات SuperQi', callback_data: 'adm:proofs' }],
       [{ text: '👤 إدارة مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
-      [{ text: '💬 رسائل الدعم', callback_data: 'adm:support' }, { text: '🎁 الهدايا والإحالة', callback_data: 'adm:referrals' }],
-      [{ text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }, { text: '📢 إدارة القناة', callback_data: 'adm:channel' }],
-      [{ text: '💳 دفعات SuperQi', callback_data: 'adm:proofs' }, { text: '🧾 الطلبات', callback_data: 'adm:orders' }],
-      [{ text: '🔐 فتح/إغلاق المتجر', callback_data: 'adm:store_toggle' }, { text: '⚙️ الإعدادات', callback_data: 'adm:settings' }],
-      [{ text: '📊 الإحصائيات', callback_data: 'adm:stats' }]
+      [{ text: '💬 الدعم', callback_data: 'adm:support' }, { text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
+      [{ text: '🎁 الإحالات والهدايا', callback_data: 'adm:referrals' }, { text: '📢 القناة', callback_data: 'adm:channel' }],
+      [{ text: '⚙️ إعدادات المتجر', callback_data: 'adm:settings', style: 'primary' }, { text: '🔐 فتح/إغلاق', callback_data: 'adm:store_toggle' }]
     ]
   };
 }
@@ -200,8 +202,14 @@ async function showMain(chatId, user) {
     }
   }
 
+  // The redesigned store opens directly on the products list.
+  if (!user.verified) {
+    user.verified = true;
+    await user.save({ fields: ['verified'] });
+  }
   await processReferralIfReady(user);
   await bot.sendMessage(chatId, t(user.lang, 'welcome'), { reply_markup: await getMainKeyboard(user.lang) });
+  await showProducts(chatId, user);
 
   if (!isAdmin(user.id) && !user.referralOfferShown) {
     const referral = await getReferralSettings();
@@ -215,6 +223,10 @@ async function showMain(chatId, user) {
   }
 }
 
+function stripTelegramCustomEmojiHtml(value) {
+  return String(value || '').replace(/<tg-emoji[^>]*>/g, '').replace(/<\/tg-emoji>/g, '');
+}
+
 function productCaption(product, stock, lang) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
@@ -225,40 +237,70 @@ function productCaption(product, stock, lang) {
     ? (descriptionData.warrantyEn || descriptionData.warrantyAr || '—')
     : (descriptionData.warrantyAr || descriptionData.warrantyEn || '—');
 
-  // Shared-account limits and owner notes are intentionally secret and admin-only.
+  let richName = escapeHtml(name);
+  if (lang === 'ar' && descriptionData.nameArHtml) richName = descriptionData.nameArHtml;
+  else if (lang === 'en' && descriptionData.nameEmojiId) {
+    const alt = escapeHtml(descriptionData.nameEmojiAlt || '✨');
+    richName = `<tg-emoji emoji-id="${escapeHtml(descriptionData.nameEmojiId)}">${alt}</tg-emoji> ${escapeHtml(name)}`;
+  }
+
+  const richDescription = lang === 'ar' && descriptionData.descriptionArHtml
+    ? descriptionData.descriptionArHtml
+    : escapeHtml(description || '—');
+  const richWarranty = lang === 'ar' && descriptionData.warrantyArHtml
+    ? descriptionData.warrantyArHtml
+    : escapeHtml(warranty);
+
   return [
-    `<b>${escapeHtml(name)}</b>`,
+    `<b>${richName}</b>`,
     `💵 <b>${t(lang, 'price')}:</b> ${moneyUsd(product.price)}`,
     `📦 <b>${t(lang, 'stock')}:</b> ${stock}`,
     `📈 <b>${t(lang, 'sold')}:</b> ${Number(descriptionData.sold || 0)}`,
-    `🛡 <b>${t(lang, 'warranty')}:</b> ${escapeHtml(warranty)}`,
+    `🛡 <b>${t(lang, 'warranty')}:</b> ${richWarranty}`,
     '',
     `❝ <b>${t(lang, 'description')}:</b>`,
-    escapeHtml(description || '—')
+    richDescription
   ].join('\n');
 }
 
-async function showProducts(chatId, user, page = 0) {
-  const rows = await listActiveProducts();
-  const perPage = 8;
-  const pages = Math.max(1, Math.ceil(rows.length / perPage));
-  const safePage = Math.max(0, Math.min(page, pages - 1));
-  const slice = rows.slice(safePage * perPage, safePage * perPage + perPage);
-  if (!slice.length) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
+function productButton(product, stock, lang) {
+  const descriptionData = parseDescription(product.description);
+  const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
+  const displayName = descriptionData.nameEmojiId && descriptionData.nameEmojiAlt
+    ? String(name).replace(descriptionData.nameEmojiAlt, '').trim() || name
+    : name;
+  const button = {
+    text: `${displayName} | ${moneyUsd(product.price)} | 📦 ${stock}`,
+    callback_data: `prod:${product.id}`,
+    style: stock > 0 ? 'success' : 'danger'
+  };
+  if (descriptionData.nameEmojiId) button.icon_custom_emoji_id = descriptionData.nameEmojiId;
+  return button;
+}
 
-  const keyboard = slice.map(({ product, stock }) => {
-    const name = user.lang === 'en' ? (product.nameEn || product.nameAr) : product.nameAr;
-    return [{
-      text: `${name} | ${moneyUsd(product.price)} | 📦 ${stock}`,
-      callback_data: `prod:${product.id}`
-    }];
-  });
-  const navigation = [];
-  if (safePage > 0) navigation.push({ text: '⬅️', callback_data: `products:${safePage - 1}` });
-  navigation.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
-  if (safePage < pages - 1) navigation.push({ text: '➡️', callback_data: `products:${safePage + 1}` });
-  keyboard.push(navigation);
-  return bot.sendMessage(chatId, t(user.lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
+async function sendProductKeyboard(chatId, lang, rows) {
+  const keyboard = rows.map(({ product, stock }) => [productButton(product, stock, lang)]);
+  try {
+    return await bot.sendMessage(chatId, t(lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
+  } catch (error) {
+    // If the bot owner does not have Telegram Premium, custom button icons can be rejected.
+    if (/custom emoji|icon_custom_emoji|BUTTON/i.test(String(error.message || ''))) {
+      for (const row of keyboard) { delete row[0].icon_custom_emoji_id; delete row[0].style; }
+      return bot.sendMessage(chatId, t(lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
+    }
+    throw error;
+  }
+}
+
+async function showProducts(chatId, user) {
+  const rows = await listActiveProducts();
+  if (!rows.length) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
+
+  // Show every added active product. Split only to keep Telegram keyboards comfortable on mobile.
+  const chunkSize = 25;
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    await sendProductKeyboard(chatId, user.lang, rows.slice(offset, offset + chunkSize));
+  }
 }
 
 async function showProduct(chatId, user, merchantId) {
@@ -266,16 +308,28 @@ async function showProduct(chatId, user, merchantId) {
   if (!product || !product.isActive) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
   const stock = await getProductStock(product.id);
   const caption = productCaption(product, stock, user.lang);
-  const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}` }]] };
+  const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}`, style: stock > 0 ? 'success' : 'danger' }]] };
   if (product.image) {
     try {
       await bot.sendPhoto(chatId, product.image, { caption, parse_mode: 'HTML', reply_markup: markup });
       return;
     } catch (error) {
       console.error('Product image failed:', error.message);
+      if (/custom emoji|tg-emoji/i.test(String(error.message || ''))) {
+        const safeCaption = stripTelegramCustomEmojiHtml(caption);
+        await bot.sendPhoto(chatId, product.image, { caption: safeCaption, parse_mode: 'HTML', reply_markup: markup });
+        return;
+      }
     }
   }
-  await bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: markup });
+  try {
+    await bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: markup });
+  } catch (error) {
+    if (/custom emoji|tg-emoji/i.test(String(error.message || ''))) {
+      return bot.sendMessage(chatId, stripTelegramCustomEmojiHtml(caption), { parse_mode: 'HTML', reply_markup: markup });
+    }
+    throw error;
+  }
 }
 
 async function notifyAdmins(text, options = {}) {
@@ -299,6 +353,42 @@ async function getBroadcastUsers() {
     where: { blocked: false, verified: true },
     order: [['id', 'ASC']]
   });
+}
+
+async function sendLocalizedAdminMessage(targetId, msg, targetLang) {
+  if (targetLang !== 'en') return bot.copyMessage(targetId, msg.chat.id, msg.message_id);
+
+  const sourceText = String(msg.text || msg.caption || '').trim();
+  const translated = sourceText ? await translateArToEn(sourceText) : '';
+
+  if (msg.photo?.length) return bot.sendPhoto(targetId, msg.photo[msg.photo.length - 1].file_id, { caption: translated || undefined });
+  if (msg.video) return bot.sendVideo(targetId, msg.video.file_id, { caption: translated || undefined });
+  if (msg.animation) return bot.sendAnimation(targetId, msg.animation.file_id, { caption: translated || undefined });
+  if (msg.document) return bot.sendDocument(targetId, msg.document.file_id, { caption: translated || undefined });
+  if (msg.audio) return bot.sendAudio(targetId, msg.audio.file_id, { caption: translated || undefined });
+  if (msg.voice) return bot.sendVoice(targetId, msg.voice.file_id, { caption: translated || undefined });
+  if (msg.text) return bot.sendMessage(targetId, translated || msg.text);
+  return bot.copyMessage(targetId, msg.chat.id, msg.message_id);
+}
+
+async function broadcastLocalizedMessage(msg) {
+  const users = await getBroadcastUsers();
+  let sent = 0;
+  let failed = 0;
+  for (let index = 0; index < users.length; index += 1) {
+    const target = users[index];
+    if (isAdmin(target.id)) continue;
+    try {
+      await sendLocalizedAdminMessage(target.id, msg, target.lang === 'en' ? 'en' : 'ar');
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(`Localized broadcast to ${target.id}:`, error.message);
+    }
+    if ((index + 1) % 20 === 0) await wait(1000);
+    else await wait(45);
+  }
+  return { sent, failed };
 }
 
 async function broadcastCopiedMessage(sourceChatId, sourceMessageId) {
@@ -345,7 +435,9 @@ async function broadcastStockNotification(product, added) {
       : (product.nameAr || product.nameEn);
     const itemName = product.type === 'code'
       ? (lang === 'en' ? (added === 1 ? 'code' : 'codes') : (added === 1 ? 'كود' : 'أكواد'))
-      : (lang === 'en' ? (added === 1 ? 'account' : 'accounts') : (added === 1 ? 'حساب' : 'حسابات'));
+      : product.type === 'account'
+        ? (lang === 'en' ? (added === 1 ? 'account' : 'accounts') : (added === 1 ? 'حساب' : 'حسابات'))
+        : (lang === 'en' ? (added === 1 ? 'item' : 'items') : (added === 1 ? 'قطعة' : 'قطع'));
     const message = lang === 'en'
       ? `📦 <b>Stock update</b>\n\nAdded <b>${added}</b> ${itemName} for <b>${escapeHtml(productName)}</b>.`
       : `📦 <b>إشعار مخزون</b>\n\nتمت إضافة <b>${added}</b> ${itemName} إلى <b>${escapeHtml(productName)}</b>.`;
@@ -356,7 +448,8 @@ async function broadcastStockNotification(product, added) {
         reply_markup: {
           inline_keyboard: [[{
             text: lang === 'en' ? '🛍️ View product' : '🛍️ عرض المنتج',
-            callback_data: `prod:${product.id}`
+            callback_data: `prod:${product.id}`,
+            style: 'success'
           }]]
         }
       });
@@ -631,7 +724,8 @@ function binanceFailureText(result, lang = 'ar') {
     NO_MATCH: ar ? 'ما حصلت عملية مطابقة بعد. تأكد من رقم الطلب وانتظر دقيقة ثم جرّب.' : 'No matching transaction was found yet.',
     AMOUNT_OR_RECEIVER_MISMATCH: ar ? 'العملية موجودة لكن المبلغ أو المستلم غير مطابق.' : 'The transaction exists, but amount or receiver does not match.',
     OUT_OF_STOCK: ar ? 'الدفع صحيح لكن المخزون غير كافي. راجع الدعم.' : 'Payment is valid, but stock is insufficient. Contact support.',
-    BINANCE_API_PERMISSION: ar ? 'مفتاح Binance مرفوض. لازم يكون API عادي بصلاحية القراءة، وIP مسموح إذا مقيّد.' : 'Binance API key was rejected. It needs read permission and an allowed IP if restricted.'
+    BINANCE_API_PERMISSION: ar ? 'مفتاح Binance مرفوض. لازم يكون API عادي بصلاحية القراءة، وIP مسموح إذا مقيّد.' : 'Binance API key was rejected. It needs read permission and an allowed IP if restricted.',
+    REGION_RESTRICTED: ar ? 'التحقق التلقائي من Binance غير متاح من موقع السيرفر الحالي، لذلك سيتم تحويل العملية لمراجعة الإدارة.' : 'Automatic Binance verification is unavailable from the current server location, so the payment will be sent for admin review.'
   };
   if (result?.detail && messages[result.detail]) return messages[result.detail];
   return messages[result?.reason] || (ar ? `تعذر التحقق: ${result?.detail || result?.reason || 'خطأ'}` : `Verification failed: ${result?.detail || result?.reason || 'error'}`);
@@ -642,14 +736,52 @@ async function notifyBinanceResult(result) {
   if (result.topup) {
     const user = await User.findByPk(result.userId);
     const lang = user?.lang || 'ar';
+    const manual = Boolean(result.manual);
     const text = lang === 'en'
-      ? `✅ Wallet credited through Binance.\nAmount: <b>${moneyUsd(result.amount)}</b>\nNew balance: <b>${moneyUsd(result.newBalance)}</b>`
-      : `✅ تم شحن محفظتك تلقائياً عبر Binance.\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(result.newBalance)}</b>`;
+      ? `✅ Wallet credited through Binance${manual ? ' after admin verification' : ''}.\nAmount: <b>${moneyUsd(result.amount)}</b>\nNew balance: <b>${moneyUsd(result.newBalance)}</b>`
+      : `✅ تم شحن محفظتك عبر Binance${manual ? ' بعد تحقق الإدارة' : ' تلقائياً'}.\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(result.newBalance)}</b>`;
     await bot.sendMessage(result.userId, text, { parse_mode: 'HTML' });
-    await notifyAdmins(`✅ شحن Binance تلقائي\nالمستخدم: <code>${result.userId}</code>\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nرقم العملية: <code>${escapeHtml(result.transactionId || '')}</code>`);
+    await notifyAdmins(`✅ شحن Binance ${manual ? 'بعد تحقق يدوي' : 'تلقائي'}\nالمستخدم: <code>${result.userId}</code>\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nرقم العملية: <code>${escapeHtml(result.transactionId || '')}</code>`);
     return;
   }
   if (result.fulfillment) await sendDeliveryToUser(result.fulfillment.order.userId, result.fulfillment);
+}
+
+
+async function queueBinanceManualReview(user, transferId, submittedOrderId) {
+  const queued = await binancePay.queueManualReview(transferId, submittedOrderId);
+  if (!queued.success) return queued;
+  if (queued.alreadyProcessed) return queued;
+
+  const transfer = queued.transfer;
+  await clearState(user.id);
+  const userText = user.lang === 'en'
+    ? '🕓 Binance automatic verification is unavailable from the current server location. Your Order ID was saved and sent to the admin for manual verification. Do not pay again. You will be notified when it is reviewed.'
+    : '🕓 التحقق التلقائي من Binance غير متاح من موقع السيرفر الحالي. تم حفظ رقم الطلب وإرساله للإدارة للتحقق اليدوي. لا تدفع مرة ثانية، وراح توصلك النتيجة بعد المراجعة.';
+  await bot.sendMessage(user.id, userText);
+
+  const typeText = transfer.orderId
+    ? `شراء من المتجر — الطلب <b>#${transfer.orderId}</b>`
+    : `شحن محفظة — العملية <b>#${transfer.balanceTransactionId || transfer.id}</b>`;
+  await notifyAdmins([
+    '🟡 <b>Binance يحتاج تحقق يدوي</b>',
+    '',
+    `النوع: ${typeText}`,
+    `المستخدم: <code>${transfer.userId}</code>`,
+    `المبلغ: <b>${moneyUsd(transfer.expectedAmount)}</b>`,
+    `رمز الدفع: <code>${escapeHtml(transfer.verificationCode)}</code>`,
+    `Order ID: <code>${escapeHtml(transfer.submittedOrderId || '')}</code>`,
+    '',
+    'افتح Binance وتأكد من العملية والمبلغ والمستلم قبل الضغط على موافقة.'
+  ].join('\n'), {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ تحققت منه — موافقة', callback_data: `binmanual:approve:${transfer.id}` },
+        { text: '❌ رقم غير صحيح', callback_data: `binmanual:reject:${transfer.id}` }
+      ]]
+    }
+  });
+  return queued;
 }
 
 bot.on('message', async msg => {
@@ -671,10 +803,7 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (startMatch) {
-      if (!user.verified) return sendCaptcha(msg.chat.id, user.id, user.lang);
-      return showMain(msg.chat.id, user);
-    }
+    if (startMatch) return showMain(msg.chat.id, user);
 
     if (msg.text === '/admin') {
       if (!isAdmin(user.id)) return bot.sendMessage(msg.chat.id, t(user.lang, 'adminOnly'));
@@ -693,7 +822,7 @@ bot.on('message', async msg => {
       return bot.sendMessage(msg.chat.id, t(user.lang, 'cancelled'), { reply_markup: await getMainKeyboard(user.lang) });
     }
 
-    if (!user.verified) return sendCaptcha(msg.chat.id, user.id, user.lang);
+    if (!user.verified) { user.verified = true; await user.save({ fields: ['verified'] }); }
 
     const freshBeforeGate = await User.findByPk(user.id);
     const preGateState = parseState(freshBeforeGate);
@@ -724,8 +853,8 @@ bot.on('message', async msg => {
       if (!isAdmin(user.id) && !(await isStoreOpen())) return bot.sendMessage(msg.chat.id, '🔒 المتجر مغلق مؤقتاً.');
       const fresh = await User.findByPk(user.id);
       const inline = [];
-      if (binancePay.configured()) inline.push([{ text: '🟡 شحن Binance ID', callback_data: 'topup:binance' }]);
-      inline.push([{ text: '🔵 شحن SuperQi', callback_data: 'topup:superqi' }]);
+      if (binancePay.configured()) inline.push([{ text: '🟡 شحن Binance ID', callback_data: 'topup:binance', style: 'primary' }]);
+      inline.push([{ text: '🔵 شحن SuperQi', callback_data: 'topup:superqi', style: 'primary' }]);
       return bot.sendMessage(msg.chat.id, `${t(user.lang, 'walletBalance')}: <b>${moneyUsd(fresh.balance)}</b>`, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: inline }
@@ -915,6 +1044,7 @@ bot.on('callback_query', async query => {
 
     if (data.startsWith('sq:approve:') || data.startsWith('sq:reject:')) return handleSuperQiAdmin(query, data);
     if (data.startsWith('sqtop:approve:') || data.startsWith('sqtop:reject:')) return handleSuperQiTopupAdmin(query, data);
+    if (data.startsWith('binmanual:approve:') || data.startsWith('binmanual:reject:')) return handleBinanceManualAdmin(query, data);
 
     if (data.startsWith('adm:')) {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
@@ -953,9 +1083,9 @@ async function handleQuantity(query, user, data) {
   if (!product || stock < quantity) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
   await setState(user.id, { action: 'checkout', merchantId, quantity });
   const total = Number(product.price) * quantity;
-  const buttons = [[{ text: t(user.lang, 'payWallet'), callback_data: 'pay:wallet' }]];
-  if (binancePay.configured()) buttons.push([{ text: '🟡 Binance ID', callback_data: 'pay:binance' }]);
-  buttons.push([{ text: t(user.lang, 'paySuperQi'), callback_data: 'pay:superqi' }]);
+  const buttons = [[{ text: t(user.lang, 'payWallet'), callback_data: 'pay:wallet', style: 'primary' }]];
+  if (binancePay.configured()) buttons.push([{ text: '🟡 Binance ID', callback_data: 'pay:binance', style: 'primary' }]);
+  buttons.push([{ text: t(user.lang, 'paySuperQi'), callback_data: 'pay:superqi', style: 'primary' }]);
   await answerCallback(query.id);
   return bot.sendMessage(query.message.chat.id, `${t(user.lang, 'payment')}\n💰 <b>${moneyUsd(total)}</b>`, {
     parse_mode: 'HTML',
@@ -1029,6 +1159,8 @@ async function beginBinanceVerification(query, user, transferId) {
     return answerCallback(query.id, 'العملية غير موجودة.', true);
   }
   if (transfer.status === 'VERIFIED') return answerCallback(query.id, 'تم التحقق سابقاً.', true);
+  if (transfer.status === 'PAYMENT_CONFIRMED') return answerCallback(query.id, 'الدفع مؤكد والتسليم قيد المعالجة.', true);
+  if (transfer.status === 'MANUAL_REVIEW') return answerCallback(query.id, 'العملية حالياً قيد مراجعة الإدارة.', true);
   await setState(user.id, { action: 'binance_verify', transferId });
   await answerCallback(query.id);
   const prompt = user.lang === 'en'
@@ -1066,9 +1198,13 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, '❌ التذكرة مغلقة أو غير موجودة.');
       return true;
     }
-    await bot.sendMessage(ticket.userId, `💬 <b>رد الدعم — التذكرة #${ticket.id}</b>`, { parse_mode: 'HTML' }).catch(() => {});
-    await bot.copyMessage(ticket.userId, msg.chat.id, msg.message_id).catch(async () => {
-      if (msg.text) await bot.sendMessage(ticket.userId, msg.text);
+    const targetUser = await User.findByPk(ticket.userId);
+    const targetLang = targetUser?.lang === 'en' ? 'en' : 'ar';
+    await bot.sendMessage(ticket.userId, targetLang === 'en'
+      ? `💬 <b>Support reply — ticket #${ticket.id}</b>`
+      : `💬 <b>رد الدعم — التذكرة #${ticket.id}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+    await sendLocalizedAdminMessage(ticket.userId, msg, targetLang).catch(async () => {
+      if (msg.text) await bot.sendMessage(ticket.userId, targetLang === 'en' ? await translateArToEn(msg.text) : msg.text);
     });
     ticket.assignedAdminId = user.id;
     ticket.lastMessageAt = new Date();
@@ -1132,6 +1268,18 @@ async function handleStateMessage(msg, user, state) {
     await bot.sendMessage(user.id, '🔄 جاري التحقق من Binance...');
     const result = await binancePay.verify(state.transferId, submittedOrderId);
     if (!result.success) {
+      if (result.reason === 'REGION_RESTRICTED' || result.detail === 'REGION_RESTRICTED') {
+        const queued = await queueBinanceManualReview(user, state.transferId, submittedOrderId);
+        if (queued.success) {
+          if (queued.alreadyProcessed) {
+            await clearState(user.id);
+            await bot.sendMessage(user.id, '✅ هذه العملية متحققة ومضافة سابقاً.');
+          }
+          return true;
+        }
+        await bot.sendMessage(user.id, `❌ ${binanceFailureText(queued, user.lang)}\n\nتأكد من رقم الطلب وحاول مرة ثانية، أو /cancel للإلغاء.`);
+        return true;
+      }
       if (result.paymentConfirmed) {
         await clearState(user.id);
         const text = user.lang === 'en'
@@ -1236,7 +1384,7 @@ async function handleStateMessage(msg, user, state) {
   if (state.action === 'admin_broadcast') {
     await clearState(user.id);
     await bot.sendMessage(user.id, '📣 جاري إرسال الإعلان للمشتركين...');
-    const result = await broadcastCopiedMessage(msg.chat.id, msg.message_id);
+    const result = await broadcastLocalizedMessage(msg);
     await bot.sendMessage(user.id, [
       '✅ انتهى إرسال الإعلان.',
       `وصل إلى: ${result.sent}`,
@@ -1250,78 +1398,66 @@ async function handleStateMessage(msg, user, state) {
     const text = String(msg.text || '').trim();
     const photoFileId = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : '';
 
-    if (state.step === 'nameAr') {
-      if (!text) return true;
-      data.nameAr = text;
-      await setState(user.id, { action: 'admin_new_product', step: 'nameEn', data });
-      await bot.sendMessage(user.id, '2/11 أرسل اسم المنتج بالإنجليزي، أو - حتى يستخدم الاسم العربي:', { reply_markup: cancelInlineKeyboard() });
+    if (state.step === 'type') {
+      await bot.sendMessage(user.id, 'اختَر نوع المنتج من الأزرار أدناه.', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
-    if (state.step === 'nameEn') {
-      data.nameEn = text === '-' ? data.nameAr : text;
+    if (state.step === 'nameAr') {
+      if (!text) return true;
+      const rich = extractTelegramRichText(text, msg.entities);
+      data.nameAr = rich.plain;
+      data.nameArHtml = rich.html;
+      data.nameEmojiId = rich.firstCustomEmojiId;
+      data.nameEmojiAlt = rich.firstCustomEmojiAlt;
+      const translatableName = rich.firstCustomEmojiAlt ? rich.plain.replace(rich.firstCustomEmojiAlt, '').trim() : rich.plain;
+      data.nameEn = await translateArToEn(translatableName || rich.plain);
       await setState(user.id, { action: 'admin_new_product', step: 'price', data });
-      await bot.sendMessage(user.id, '3/11 أرسل السعر بالدولار، مثال: 1.50', { reply_markup: cancelInlineKeyboard() });
+      await bot.sendMessage(user.id, '2/5 أرسل السعر بالدولار، مثال: 5 أو 1.50', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
     if (state.step === 'price') {
       const price = Number(text);
       if (!Number.isFinite(price) || price < 0) {
-        await bot.sendMessage(user.id, '❌ السعر غير صحيح.');
+        await bot.sendMessage(user.id, '❌ السعر غير صحيح. مثال: 5 أو 1.50');
         return true;
       }
       data.price = price;
-      await setState(user.id, { action: 'admin_new_product', step: 'category', data });
-      await bot.sendMessage(user.id, '4/11 أرسل اسم القسم، مثال: اشتراكات', { reply_markup: cancelInlineKeyboard() });
-      return true;
-    }
-
-    if (state.step === 'category') {
-      data.category = text || 'عام';
-      await setState(user.id, { action: 'admin_new_product', step: 'type', data });
-      await bot.sendMessage(user.id, '5/11 اختَر نوع المنتج:', {
-        reply_markup: { inline_keyboard: [
-          [{ text: 'شخصي (إيميل/باسورد/2FA اختياري)', callback_data: 'adm:newtype:private' }],
-          [{ text: 'مشترك (إيميل وباسورد فقط)', callback_data: 'adm:newtype:shared' }],
-          [{ text: 'كود', callback_data: 'adm:newtype:code' }],
-          [{ text: 'ينتظر كود', callback_data: 'adm:newtype:wait_code' }],
-          [{ text: '❌ إغلاق', callback_data: 'flow:cancel' }]
-        ] }
-      });
-      return true;
-    }
-
-    if (state.step === 'type') {
-      await bot.sendMessage(user.id, 'اختَر النوع من الأزرار، أو اكتب إغلاق.');
+      await setState(user.id, { action: 'admin_new_product', step: 'descriptionAr', data });
+      await bot.sendMessage(user.id, '3/5 أرسل وصف المنتج بالعربي، أو - إذا ما تريد وصف.', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
     if (state.step === 'descriptionAr') {
-      data.descriptionAr = text === '-' ? '' : text;
-      await setState(user.id, { action: 'admin_new_product', step: 'descriptionEn', data });
-      await bot.sendMessage(user.id, '7/11 أرسل الوصف بالإنجليزي، أو - بدون وصف:', { reply_markup: cancelInlineKeyboard() });
-      return true;
-    }
-
-    if (state.step === 'descriptionEn') {
-      data.descriptionEn = text === '-' ? '' : text;
+      if (text === '-') {
+        data.descriptionAr = '';
+        data.descriptionArHtml = '';
+        data.descriptionEn = '';
+      } else {
+        const rich = extractTelegramRichText(text, msg.entities);
+        data.descriptionAr = rich.plain;
+        data.descriptionArHtml = rich.html;
+        data.descriptionEn = await translateArToEn(rich.plain);
+      }
       await setState(user.id, { action: 'admin_new_product', step: 'warrantyAr', data });
-      await bot.sendMessage(user.id, '8/11 أرسل الضمان بالعربي، أو - بدون ضمان:', { reply_markup: cancelInlineKeyboard() });
+      await bot.sendMessage(user.id, '4/5 أرسل الضمان بالعربي، مثال: شهر كامل، أو - بدون ضمان.', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
     if (state.step === 'warrantyAr') {
-      data.warrantyAr = text === '-' ? '' : text;
-      await setState(user.id, { action: 'admin_new_product', step: 'warrantyEn', data });
-      await bot.sendMessage(user.id, '9/11 أرسل الضمان بالإنجليزي، أو - بدون ضمان:', { reply_markup: cancelInlineKeyboard() });
-      return true;
-    }
-
-    if (state.step === 'warrantyEn') {
-      data.warrantyEn = text === '-' ? '' : text;
+      if (text === '-') {
+        data.warrantyAr = '';
+        data.warrantyArHtml = '';
+        data.warrantyEn = '';
+      } else {
+        const rich = extractTelegramRichText(text, msg.entities);
+        data.warrantyAr = rich.plain;
+        data.warrantyArHtml = rich.html;
+        data.warrantyEn = await translateArToEn(rich.plain);
+      }
       await setState(user.id, { action: 'admin_new_product', step: 'image', data });
-      await bot.sendMessage(user.id, '10/11 أرسل صورة المنتج، رابط الصورة، أو - بدون صورة:', { reply_markup: cancelInlineKeyboard() });
+      await bot.sendMessage(user.id, '5/5 أرسل صورة المنتج، رابط صورة، أو - بدون صورة.', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
@@ -1331,73 +1467,37 @@ async function handleStateMessage(msg, user, state) {
         await bot.sendMessage(user.id, 'أرسل صورة أو رابط أو - بدون صورة.');
         return true;
       }
-      data.image = imageValue === '-' ? null : imageValue;
-      await setState(user.id, { action: 'admin_new_product', step: 'ownerNote', data });
-      await bot.sendMessage(user.id, '11/11 أرسل اسم المالك/المصدر (سري يظهر إلك فقط)، أو -:', { reply_markup: cancelInlineKeyboard() });
-      return true;
-    }
-
-    if (state.step === 'ownerNote') {
-      data.ownerNote = text === '-' ? null : text;
-      if (data.type === 'shared') {
-        await setState(user.id, { action: 'admin_new_product', step: 'sharedLimit', data });
-        await bot.sendMessage(user.id, 'أرسل عدد مرات بيع الحساب المشترك، مثال 5:', { reply_markup: cancelInlineKeyboard() });
-        return true;
-      }
 
       const product = await Merchant.create({
         nameAr: data.nameAr,
         nameEn: data.nameEn || data.nameAr,
         price: data.price,
-        category: data.category || 'عام',
-        type: data.type || 'private',
+        category: 'عام',
+        type: data.type || 'free',
         description: {
           ar: data.descriptionAr || '',
           en: data.descriptionEn || '',
           warrantyAr: data.warrantyAr || '',
           warrantyEn: data.warrantyEn || '',
-          sold: 0
+          sold: 0,
+          nameArHtml: data.nameArHtml || '',
+          nameEmojiId: data.nameEmojiId || '',
+          nameEmojiAlt: data.nameEmojiAlt || '',
+          descriptionArHtml: data.descriptionArHtml || '',
+          warrantyArHtml: data.warrantyArHtml || ''
         },
-        image: data.image,
+        image: imageValue === '-' ? null : imageValue,
         isActive: true,
         sharedLimit: 1,
-        deliveryMode: data.type === 'wait_code' ? 'wait_code' : 'instant',
-        ownerNote: data.ownerNote
-      });
-      await clearState(user.id);
-      await bot.sendMessage(user.id, '✅ تم إنشاء المنتج ونشره.');
-      await showAdminProductEditor(user.id, product.id);
-      return true;
-    }
-
-    if (state.step === 'sharedLimit') {
-      const sharedLimit = Number(text);
-      if (!Number.isInteger(sharedLimit) || sharedLimit < 2 || sharedLimit > 100) {
-        await bot.sendMessage(user.id, '❌ العدد لازم من 2 إلى 100.');
-        return true;
-      }
-      const product = await Merchant.create({
-        nameAr: data.nameAr,
-        nameEn: data.nameEn || data.nameAr,
-        price: data.price,
-        category: data.category || 'عام',
-        type: 'shared',
-        description: {
-          ar: data.descriptionAr || '',
-          en: data.descriptionEn || '',
-          warrantyAr: data.warrantyAr || '',
-          warrantyEn: data.warrantyEn || '',
-          sold: 0
-        },
-        image: data.image,
-        isActive: true,
-        sharedLimit,
         deliveryMode: 'instant',
-        ownerNote: data.ownerNote
+        ownerNote: null
       });
-      await clearState(user.id);
-      await bot.sendMessage(user.id, '✅ تم إنشاء المنتج المشترك ونشره.');
-      await showAdminProductEditor(user.id, product.id);
+
+      await setState(user.id, { action: 'admin_add_stock', productId: product.id, afterCreate: true });
+      await bot.sendMessage(user.id, '✅ تم إنشاء المنتج ونشره. حالياً مخزونه صفر لذلك يظهر بالأحمر.\n\n' + stockPrompt(product), {
+        parse_mode: 'HTML',
+        reply_markup: cancelInlineKeyboard()
+      });
       return true;
     }
   }
@@ -1414,42 +1514,52 @@ async function handleStateMessage(msg, user, state) {
     if (!value) return true;
 
     const description = parseDescription(product.description);
-    if (field === 'nameAr') product.nameAr = value;
-    else if (field === 'nameEn') product.nameEn = value;
-    else if (field === 'price') {
+    if (field === 'nameAr') {
+      const rich = extractTelegramRichText(value, msg.entities);
+      product.nameAr = rich.plain;
+      const translatableName = rich.firstCustomEmojiAlt ? rich.plain.replace(rich.firstCustomEmojiAlt, '').trim() : rich.plain;
+      product.nameEn = await translateArToEn(translatableName || rich.plain);
+      description.nameArHtml = rich.html;
+      description.nameEmojiId = rich.firstCustomEmojiId;
+      description.nameEmojiAlt = rich.firstCustomEmojiAlt;
+    } else if (field === 'price') {
       const number = Number(value);
       if (!Number.isFinite(number) || number < 0) {
         await bot.sendMessage(user.id, '❌ سعر غير صحيح.');
         return true;
       }
       product.price = number;
-    } else if (field === 'category') product.category = value;
-    else if (field === 'descriptionAr') description.ar = value === '-' ? '' : value;
-    else if (field === 'descriptionEn') description.en = value === '-' ? '' : value;
-    else if (field === 'warrantyAr') description.warrantyAr = value === '-' ? '' : value;
-    else if (field === 'warrantyEn') description.warrantyEn = value === '-' ? '' : value;
-    else if (field === 'image') product.image = value === '-' ? null : value;
-    else if (field === 'ownerNote') product.ownerNote = value === '-' ? null : value;
-    else if (field === 'sharedLimit') {
-      const number = Number(value);
-      if (!Number.isInteger(number) || number < 1 || number > 100) {
-        await bot.sendMessage(user.id, '❌ العدد لازم من 1 إلى 100.');
-        return true;
+    } else if (field === 'descriptionAr') {
+      if (value === '-') {
+        description.ar = '';
+        description.en = '';
+        description.descriptionArHtml = '';
+      } else {
+        const rich = extractTelegramRichText(value, msg.entities);
+        description.ar = rich.plain;
+        description.en = await translateArToEn(rich.plain);
+        description.descriptionArHtml = rich.html;
       }
-      product.sharedLimit = number;
-      if (product.type === 'shared') {
-        await Code.update({ maxUses: number }, {
-          where: { merchantId: product.id, usedCount: 0, isUsed: false }
-        });
+    } else if (field === 'warrantyAr') {
+      if (value === '-') {
+        description.warrantyAr = '';
+        description.warrantyEn = '';
+        description.warrantyArHtml = '';
+      } else {
+        const rich = extractTelegramRichText(value, msg.entities);
+        description.warrantyAr = rich.plain;
+        description.warrantyEn = await translateArToEn(rich.plain);
+        description.warrantyArHtml = rich.html;
       }
+    } else if (field === 'image') {
+      product.image = value === '-' ? null : value;
     }
 
-    // Force JSONB dirty tracking so Arabic/English descriptions always persist.
     product.set('description', { ...description });
     product.changed('description', true);
     await product.save();
     await clearState(user.id);
-    await bot.sendMessage(user.id, '✅ تم الحفظ.');
+    await bot.sendMessage(user.id, '✅ تم الحفظ والترجمة الإنجليزية تحدثت تلقائياً.');
     await showAdminProductEditor(user.id, product.id);
     return true;
   }
@@ -1557,7 +1667,9 @@ async function handleStateMessage(msg, user, state) {
       }
 
       if (added === 0) {
-        await bot.sendMessage(user.id, 'كل البيانات المرسلة موجودة سابقاً. أرسل حسابات جديدة أو اكتب إغلاق.');
+        await bot.sendMessage(user.id, 'كل البيانات المرسلة موجودة سابقاً. أرسل بيانات جديدة أو اكتب إغلاق.');
+      } else {
+        await showAdminProductEditor(user.id, product.id);
       }
     } catch (error) {
       await transaction.rollback();
@@ -1677,6 +1789,54 @@ async function adminCreditUser(targetId, amount, adminId) {
     await transaction.rollback();
     throw error;
   }
+}
+
+async function handleBinanceManualAdmin(query, data) {
+  if (!isAdmin(query.from.id)) return answerCallback(query.id, 'Admins only', true);
+  const [, action, transferIdRaw] = data.split(':');
+  const transferId = Number(transferIdRaw);
+  if (!Number.isInteger(transferId) || transferId < 1) return answerCallback(query.id, 'رقم العملية غير صحيح.', true);
+
+  if (action === 'reject') {
+    const result = await binancePay.rejectManualReview(transferId, query.from.id);
+    if (!result.success) return answerCallback(query.id, binanceFailureText(result, 'ar'), true);
+    await answerCallback(query.id, 'تم رفض الرقم وإرجاع العملية للمحاولة من جديد.');
+    if (query.message) {
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id
+      }).catch(() => {});
+    }
+    await bot.sendMessage(result.transfer.userId, [
+      '❌ لم تتم الموافقة على رقم طلب Binance المرسل.',
+      'تأكد من Order ID داخل تفاصيل التحويل، وبعدها اضغط الزر وأرسله من جديد.'
+    ].join('\n'), {
+      reply_markup: { inline_keyboard: [[{ text: '🧾 إرسال Order ID من جديد', callback_data: `binverify:${result.transfer.id}` }]] }
+    }).catch(() => {});
+    return;
+  }
+
+  const result = await binancePay.approveManualReview(transferId, query.from.id);
+  if (!result.success) {
+    if (result.paymentConfirmed) {
+      await answerCallback(query.id, 'الدفع تأكد، لكن التسليم متوقف حالياً.', true);
+      const transfer = await BinanceTransfer.findByPk(transferId);
+      if (transfer) {
+        await bot.sendMessage(transfer.userId, '✅ تم تأكيد دفع Binance يدوياً، لكن التسليم ينتظر توفر المخزون. لا تدفع مرة ثانية.').catch(() => {});
+      }
+      return;
+    }
+    return answerCallback(query.id, binanceFailureText(result, 'ar'), true);
+  }
+
+  await answerCallback(query.id, result.alreadyProcessed ? 'تمت معالجة العملية سابقاً.' : 'تمت الموافقة والتحقق.');
+  if (query.message) {
+    await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id
+    }).catch(() => {});
+  }
+  if (!result.alreadyProcessed) await notifyBinanceResult(result);
 }
 
 async function handleSuperQiTopupAdmin(query, data) {
@@ -1900,15 +2060,30 @@ async function handleAdminCallback(query, user, data) {
 
   if (data === 'adm:proofs') {
     await answerCallback(query.id);
-    const rows = await PurchaseOrder.findAll({
-      where: { status: 'proof_pending' },
-      order: [['id', 'DESC']],
-      limit: 30,
-      include: [Merchant]
-    });
-    return bot.sendMessage(query.message.chat.id, rows.length
-      ? rows.map(order => `#${order.id} | ${order.Merchant?.nameAr || ''} | ${moneyUsd(order.totalAmount)}`).join('\n')
-      : 'ماكو دفعات معلقة.');
+    const [rows, binanceRows] = await Promise.all([
+      PurchaseOrder.findAll({
+        where: { status: 'proof_pending' },
+        order: [['id', 'DESC']],
+        limit: 30,
+        include: [Merchant]
+      }),
+      BinanceTransfer.findAll({
+        where: { status: 'MANUAL_REVIEW' },
+        order: [['id', 'DESC']],
+        limit: 30
+      })
+    ]);
+    const lines = [];
+    if (rows.length) {
+      lines.push('🔵 <b>SuperQi</b>');
+      lines.push(...rows.map(order => `#${order.id} | ${escapeHtml(order.Merchant?.nameAr || '')} | ${moneyUsd(order.totalAmount)}`));
+    }
+    if (binanceRows.length) {
+      if (lines.length) lines.push('');
+      lines.push('🟡 <b>Binance — تحقق يدوي</b>');
+      lines.push(...binanceRows.map(row => `#${row.id} | مستخدم <code>${row.userId}</code> | ${moneyUsd(row.expectedAmount)} | <code>${escapeHtml(row.submittedOrderId || '')}</code>`));
+    }
+    return bot.sendMessage(query.message.chat.id, lines.length ? lines.join('\n') : 'ماكو دفعات معلقة.', { parse_mode: 'HTML' });
   }
 
   if (data === 'adm:orders') {
@@ -2006,27 +2181,31 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:add_product') {
-    await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: {} });
+    await setState(user.id, { action: 'admin_new_product', step: 'type', data: {} });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, '1/11 أرسل اسم المنتج بالعربي.\nتقدر تكتب إغلاق بأي خطوة بدون إنشاء المنتج.', {
-      reply_markup: cancelInlineKeyboard()
+    return bot.sendMessage(user.id, '➕ <b>إضافة منتج جديد</b>\n\nما نوع المنتج؟', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '🔑 كود', callback_data: 'adm:newtype:code', style: 'primary' }],
+        [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
+        [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
+        [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
+      ] }
     });
   }
 
   if (data.startsWith('adm:newtype:')) {
     const type = data.split(':')[2];
+    if (!['code', 'account', 'free'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const fresh = await User.findByPk(user.id);
     const state = parseState(fresh);
     if (!state || state.action !== 'admin_new_product' || state.step !== 'type') {
       return answerCallback(query.id, 'عملية إضافة المنتج غير فعالة.', true);
     }
     state.data.type = type;
-    await setState(user.id, { action: 'admin_new_product', step: 'descriptionAr', data: state.data });
-    await answerCallback(query.id, 'تم اختيار النوع.');
-    const rule = type === 'shared'
-      ? '\nملاحظة: مخزون المشترك يقبل إيميل وباسورد فقط بدون 2FA.'
-      : '';
-    return bot.sendMessage(user.id, `6/11 أرسل الوصف بالعربي، أو - بدون وصف.${rule}`, {
+    await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: state.data });
+    await answerCallback(query.id, `تم اختيار: ${productTypeLabel(type)}`);
+    return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nإذا استخدمت Custom Emoji من Telegram Premium بالاسم راح أحفظها تلقائياً.', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -2038,26 +2217,32 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:field:')) {
     const [, , idRaw, field] = data.split(':');
+    if (!['nameAr', 'price', 'descriptionAr', 'warrantyAr', 'image'].includes(field)) {
+      return answerCallback(query.id, 'هذا الحقل لم يعد مستخدماً.', true);
+    }
     await setState(user.id, { action: 'admin_edit_product', productId: Number(idRaw), field });
     await answerCallback(query.id);
-    const secret = field === 'ownerNote' ? '\n🔒 هذا الحقل يظهر إلك فقط.' : '';
-    return bot.sendMessage(user.id, `أرسل القيمة الجديدة للحقل: ${field}${secret}\nللصورة أرسل صورة مباشرة، Telegram file_id، رابط، أو - للحذف.\nاكتب إغلاق للإلغاء.`, {
-      reply_markup: cancelInlineKeyboard()
-    });
+    const prompts = {
+      nameAr: 'أرسل اسم المنتج بالعربي. إذا بيه Custom Emoji Premium راح تنحفظ تلقائياً.',
+      price: 'أرسل السعر الجديد بالدولار.',
+      descriptionAr: 'أرسل الوصف بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
+      warrantyAr: 'أرسل الضمان بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
+      image: 'أرسل صورة مباشرة، رابط صورة، أو - لحذف الصورة.'
+    };
+    return bot.sendMessage(user.id, `${prompts[field]}\nاكتب إغلاق للإلغاء.`, { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:type:')) {
     const [, , idRaw, type] = data.split(':');
+    if (!['code', 'account', 'free'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product) return;
     product.type = type;
-    product.sharedLimit = type === 'shared' ? Math.max(2, Number(product.sharedLimit || 5)) : 1;
-    product.deliveryMode = type === 'wait_code' ? 'wait_code' : 'instant';
+    product.sharedLimit = 1;
+    product.deliveryMode = 'instant';
     await product.save();
-    await Code.update({ maxUses: product.sharedLimit }, {
-      where: { merchantId: product.id, usedCount: 0, isUsed: false }
-    });
-    await answerCallback(query.id, 'تم التحديث.');
+    await Code.update({ maxUses: 1 }, { where: { merchantId: product.id, usedCount: 0, isUsed: false } });
+    await answerCallback(query.id, `تم التحويل إلى ${productTypeLabel(type)}.`);
     return showAdminProductEditor(query.message.chat.id, product.id);
   }
 
@@ -2085,21 +2270,12 @@ async function handleAdminCallback(query, user, data) {
     if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
     await setState(user.id, { action: 'admin_add_stock', productId });
     await answerCallback(query.id);
-
-    const examples = {
-      private: '<code>email@example.com|password\nemail@example.com|password|2FA</code>',
-      shared: '<code>email@example.com|password</code>\n\n⚠️ المشترك لا يقبل مصادقة ثنائية.',
-      code: '<code>CODE-ONE\nCODE-TWO</code>',
-      wait_code: '<code>email@example.com\nemail@example.com|password</code>'
-    };
-
     return bot.sendMessage(user.id, [
-      `📥 أرسل مخزون <b>${escapeHtml(product.nameAr)}</b> كنص أو ملف TXT/CSV، كل حساب بسطر.`,
+      `📦 <b>${escapeHtml(product.nameAr)}</b> — ${productTypeLabel(product.type)}`,
       '',
-      examples[product.type] || examples.private,
+      stockPrompt(product),
       '',
-      'المكرر ينحذف تلقائياً، والبيانات الخاطئة ما تنحفظ.',
-      'اكتب إغلاق للإلغاء.'
+      'المكرر ينحذف تلقائياً. اكتب إغلاق للإلغاء.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
 }
@@ -2171,24 +2347,47 @@ async function showAdminUserCard(chatId, targetId) {
   return bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
+function productTypeLabel(type) {
+  if (type === 'code') return 'كود';
+  if (type === 'account') return 'إيميل وباسورد';
+  if (type === 'free') return 'منتج حر';
+  return String(type || 'منتج حر');
+}
+
+function stockPrompt(product) {
+  if (product.type === 'code') {
+    return `📥 أرسل الأكواد الآن، كل كود بسطر.\nمثال:\n<code>ABC-123\nXYZ-456</code>\n\nتقدر ترسل TXT/CSV أيضاً.`;
+  }
+  if (product.type === 'account') {
+    return `📥 أرسل الحسابات الآن، كل حساب بسطر بصيغة:\n<code>email@example.com|password</code>\n\nتقدر ترسل TXT/CSV أيضاً.`;
+  }
+  return `📥 أرسل محتوى المنتج الحر، كل سطر يعتبر قطعة مستقلة تُسلّم لزبون واحد.\nيقبل كتابة، رابط، كود، بيانات أو أي نص.\nمثال:\n<code>أي محتوى تريد تسليمه</code>`;
+}
+
 async function showAdminProducts(chatId, page = 0) {
   const products = await Merchant.findAll({ order: [['id', 'ASC']] });
   const perPage = 8;
   const pages = Math.max(1, Math.ceil(products.length / perPage));
   const safePage = Math.max(0, Math.min(page, pages - 1));
-  const keyboard = products
-    .slice(safePage * perPage, safePage * perPage + perPage)
-    .map(product => [{
-      text: `${product.isActive ? '✅' : '⛔'} ${product.nameAr} | ${moneyUsd(product.price)}`,
-      callback_data: `adm:edit:${product.id}`
+  const keyboard = [];
+
+  for (const product of products.slice(safePage * perPage, safePage * perPage + perPage)) {
+    const stock = await getProductStock(product.id);
+    keyboard.push([{
+      text: `${product.nameAr} | 📦 ${stock} | ${moneyUsd(product.price)}`,
+      callback_data: `adm:edit:${product.id}`,
+      style: !product.isActive || stock < 1 ? 'danger' : 'success'
     }]);
-  keyboard.push([{ text: '➕ إضافة منتج', callback_data: 'adm:add_product' }]);
+  }
+
+  keyboard.push([{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }]);
   const navigation = [];
   if (safePage > 0) navigation.push({ text: '⬅️', callback_data: `adm:products:${safePage - 1}` });
   navigation.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
   if (safePage < pages - 1) navigation.push({ text: '➡️', callback_data: `adm:products:${safePage + 1}` });
   keyboard.push(navigation);
-  await bot.sendMessage(chatId, '📦 <b>المنتجات</b>\nكل الحقول الإدارية سرية ولا تظهر للزبائن.', {
+
+  await bot.sendMessage(chatId, '📦 <b>إدارة المنتجات</b>\n🟢 متوفر  •  🔴 فارغ/مخفي', {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -2200,37 +2399,26 @@ async function showAdminProductEditor(chatId, productId) {
   const description = parseDescription(product.description);
   const stock = await getProductStock(product.id);
   const text = [
-    `📝 <b>تعديل المنتج #${product.id}</b>`,
+    `📝 <b>${escapeHtml(product.nameAr)}</b>`,
     '',
-    `الاسم عربي: <b>${escapeHtml(product.nameAr)}</b>`,
-    `الاسم إنجليزي: <b>${escapeHtml(product.nameEn)}</b>`,
+    `النوع: <b>${productTypeLabel(product.type)}</b>`,
     `السعر: <b>${moneyUsd(product.price)}</b>`,
-    `القسم: <b>${escapeHtml(product.category)}</b>`,
-    `النوع: <b>${escapeHtml(product.type)}</b>`,
     `المخزون: <b>${stock}</b>`,
-    `الحالة: <b>${product.isActive ? 'منشور للجميع' : 'مخفي'}</b>`,
+    `ظهور المنتج: <b>${product.isActive ? 'ظاهر' : 'مخفي'}</b>`,
+    `الترجمة الإنجليزية: <b>تلقائية</b>`,
     '',
-    `الوصف عربي: ${escapeHtml(description.ar || '—')}`,
-    `الوصف إنجليزي: ${escapeHtml(description.en || '—')}`,
-    `الضمان عربي: ${escapeHtml(description.warrantyAr || '—')}`,
-    `الضمان إنجليزي: ${escapeHtml(description.warrantyEn || '—')}`,
+    `الوصف: ${escapeHtml(description.ar || '—')}`,
+    `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
     `الصورة: ${product.image ? 'موجودة' : 'بدون'}`,
-    '',
-    '🔒 <b>حقول سرية للمالك فقط:</b>',
-    `المالك/المصدر: ${escapeHtml(product.ownerNote || '—')}`,
-    `مرات بيع الحساب المشترك: <b>${product.sharedLimit}</b>`
+    description.nameEmojiId ? '✨ Custom Emoji: محفوظة تلقائياً' : '✨ Custom Emoji: لا توجد'
   ].join('\n');
+
   const keyboard = [
-    [{ text: 'اسم عربي', callback_data: `adm:field:${product.id}:nameAr` }, { text: 'اسم English', callback_data: `adm:field:${product.id}:nameEn` }],
-    [{ text: 'السعر', callback_data: `adm:field:${product.id}:price` }, { text: 'القسم', callback_data: `adm:field:${product.id}:category` }],
-    [{ text: 'الوصف عربي', callback_data: `adm:field:${product.id}:descriptionAr` }, { text: 'الوصف English', callback_data: `adm:field:${product.id}:descriptionEn` }],
-    [{ text: 'الضمان عربي', callback_data: `adm:field:${product.id}:warrantyAr` }, { text: 'الضمان English', callback_data: `adm:field:${product.id}:warrantyEn` }],
-    [{ text: 'الصورة', callback_data: `adm:field:${product.id}:image` }, { text: '🔒 المالك/المصدر', callback_data: `adm:field:${product.id}:ownerNote` }],
-    [{ text: '🔒 عدد المشتركين', callback_data: `adm:field:${product.id}:sharedLimit` }],
-    [{ text: 'شخصي', callback_data: `adm:type:${product.id}:private` }, { text: 'مشترك', callback_data: `adm:type:${product.id}:shared` }],
-    [{ text: 'كود', callback_data: `adm:type:${product.id}:code` }, { text: 'ينتظر كود', callback_data: `adm:type:${product.id}:wait_code` }],
-    [{ text: product.isActive ? '⛔ إخفاء' : '✅ نشر للجميع', callback_data: `adm:toggle:${product.id}` }, { text: '📥 إضافة مخزون', callback_data: `adm:stockprod:${product.id}` }],
-    [{ text: '🗑 حذف نهائي', callback_data: `adm:delete:${product.id}` }]
+    [{ text: '✏️ الاسم', callback_data: `adm:field:${product.id}:nameAr` }, { text: '💵 السعر', callback_data: `adm:field:${product.id}:price` }],
+    [{ text: '📝 الوصف', callback_data: `adm:field:${product.id}:descriptionAr` }, { text: '🛡 الضمان', callback_data: `adm:field:${product.id}:warrantyAr` }],
+    [{ text: '🖼 الصورة', callback_data: `adm:field:${product.id}:image` }, { text: '📥 إضافة مخزون', callback_data: `adm:stockprod:${product.id}`, style: 'success' }],
+    [{ text: product.isActive ? '🙈 إخفاء المنتج' : '👁 إظهار المنتج', callback_data: `adm:toggle:${product.id}`, style: product.isActive ? 'danger' : 'success' }],
+    [{ text: '🗑 حذف المنتج', callback_data: `adm:delete:${product.id}`, style: 'danger' }]
   ];
   await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
@@ -2240,7 +2428,11 @@ async function showStockProductList(chatId) {
   const keyboard = [];
   for (const product of products) {
     const stock = await getProductStock(product.id);
-    keyboard.push([{ text: `${product.nameAr} | 📦 ${stock}`, callback_data: `adm:stockprod:${product.id}` }]);
+    keyboard.push([{
+      text: `${product.nameAr} | 📦 ${stock}`,
+      callback_data: `adm:stockprod:${product.id}`,
+      style: stock > 0 ? 'success' : 'danger'
+    }]);
   }
   await bot.sendMessage(chatId, 'اختَر المنتج لإضافة المخزون:', { reply_markup: { inline_keyboard: keyboard } });
 }
