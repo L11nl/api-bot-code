@@ -318,6 +318,53 @@ async function automaticNotificationsEnabled() {
   return String(await getSetting('automatic_notifications_enabled', 'true')).toLowerCase() !== 'false';
 }
 
+function shopDisplayCurrency() {
+  const currency = String(config.network.settlementCurrency || 'USD').toUpperCase();
+  return ['USD', 'IQD', 'EGP'].includes(currency) ? currency : 'USD';
+}
+
+async function shopMoneyContext() {
+  const currency = shopDisplayCurrency();
+  let rate = 1;
+  if (currency === 'IQD') rate = Number(await getIqdRate());
+  if (currency === 'EGP') rate = Number(await getSetting('egp_rate_per_usd', String(config.network.egpRate || 50)));
+  if (!Number.isFinite(rate) || rate <= 0) rate = currency === 'IQD' ? Number(config.iqdRate || 1500) : currency === 'EGP' ? Number(config.network.egpRate || 50) : 1;
+  return { currency, rate };
+}
+
+function localMoneyNumber(amountUsd, context) {
+  const amount = Number(amountUsd || 0) * Number(context?.rate || 1);
+  if (context?.currency === 'IQD') return Math.round(amount).toLocaleString('en-US');
+  return amount.toFixed(2);
+}
+
+function customerMoney(amountUsd, context, lang = 'ar') {
+  const usd = moneyUsd(amountUsd);
+  const currency = String(context?.currency || 'USD').toUpperCase();
+  if (currency === 'USD') return usd;
+  const label = paymentCurrencyLabel(currency, lang);
+  return `${usd} • ${localMoneyNumber(amountUsd, context)} ${label}`;
+}
+
+function customerMoneyCompact(amountUsd, context) {
+  const usd = moneyUsd(amountUsd);
+  const currency = String(context?.currency || 'USD').toUpperCase();
+  if (currency === 'USD') return usd;
+  return `${usd}/${localMoneyNumber(amountUsd, context)} ${currency}`;
+}
+
+async function getHiddenPaymentTypes() {
+  try {
+    const parsed = JSON.parse(String(await getSetting('hidden_payment_types', '[]')));
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function setHiddenPaymentTypes(set) {
+  await setSetting('hidden_payment_types', JSON.stringify([...set].sort()));
+}
 
 async function getActivePaymentMethods() {
   return PaymentMethod.findAll({
@@ -344,6 +391,99 @@ function paymentLocalAmount(amountUsd, method) {
   return { currency, rate, amount };
 }
 
+function normalizePaymentCurrency(currency) {
+  const code = String(currency || 'USD').toUpperCase();
+  return ['USD', 'IQD', 'EGP'].includes(code) ? code : 'USD';
+}
+
+function paymentCurrencyDecimals(currency) {
+  return normalizePaymentCurrency(currency) === 'IQD' ? 0 : 2;
+}
+
+function formatPaymentCurrencyAmount(amount, currency, lang = 'ar') {
+  const code = normalizePaymentCurrency(currency);
+  const value = code === 'IQD'
+    ? Math.round(Number(amount || 0)).toLocaleString('en-US')
+    : Number(amount || 0).toFixed(2);
+  return `${value} ${paymentCurrencyLabel(code, lang)}`;
+}
+
+function minimumTopupLocalAmount(ratePerUsd, currency, minimumUsd = 0.01) {
+  const code = normalizePaymentCurrency(currency);
+  const rate = Number(ratePerUsd || 1);
+  const raw = Math.max(0.01, Number(minimumUsd || 0.01)) * (Number.isFinite(rate) && rate > 0 ? rate : 1);
+  if (code === 'IQD') return Math.max(1, Math.ceil(raw));
+  return Math.max(0.01, Math.ceil((raw - 1e-9) * 100) / 100);
+}
+
+async function resolveTopupInputContext(methodToken) {
+  const token = String(methodToken || '');
+  if (token === 'binance') {
+    return { currency: 'USD', rate: 1, minimumUsd: Math.max(0.01, Number(config.binance.minAmount || 0.01)), methodType: 'binance' };
+  }
+  if (token === 'superqi') {
+    const rate = Number(await getIqdRate());
+    return { currency: 'IQD', rate: Number.isFinite(rate) && rate > 0 ? rate : Number(config.iqdRate || 1500), minimumUsd: 0.01, methodType: 'superqi' };
+  }
+  if (token.startsWith('custom:')) {
+    const id = Number(token.split(':')[1]);
+    const method = await PaymentMethod.findOne({ where: { id, isActive: true } });
+    if (!method) return null;
+    const local = paymentLocalAmount(1, method);
+    return {
+      currency: normalizePaymentCurrency(local.currency),
+      rate: Number(local.rate || 1),
+      minimumUsd: 0.01,
+      methodType: token,
+      paymentMethodId: method.id,
+      methodNameAr: method.nameAr,
+      methodNameEn: method.nameEn
+    };
+  }
+  if (token.startsWith('network:')) {
+    const inheritedType = token.slice('network:'.length);
+    const options = await network.fallbackPayments();
+    const method = (options.methods || []).find(row => String(row.type || '') === inheritedType);
+    if (!method) return null;
+    const local = paymentLocalAmount(1, method);
+    return {
+      currency: normalizePaymentCurrency(local.currency),
+      rate: Number(local.rate || 1),
+      minimumUsd: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : 0.01,
+      methodType: token,
+      inheritedType,
+      methodNameAr: method.nameAr,
+      methodNameEn: method.nameEn
+    };
+  }
+  return null;
+}
+
+function topupAmountPrompt(context, lang = 'ar') {
+  const currency = normalizePaymentCurrency(context?.currency);
+  const rate = Number(context?.rate || 1);
+  const minimum = minimumTopupLocalAmount(rate, currency, context?.minimumUsd || 0.01);
+  const minimumText = formatPaymentCurrencyAmount(minimum, currency, lang);
+  if (lang === 'en') {
+    if (currency === 'EGP') return `Send the top-up amount in Egyptian pounds (minimum ${minimumText}). Current rate: $1 = ${formatPaymentCurrencyAmount(rate, currency, lang)}.`;
+    if (currency === 'IQD') return `Send the top-up amount in Iraqi dinars (minimum ${minimumText}). Current rate: $1 = ${formatPaymentCurrencyAmount(rate, currency, lang)}.`;
+    return `Send the top-up amount in USD (minimum $${Number(minimum).toFixed(2)}).`;
+  }
+  if (currency === 'EGP') return `أرسل مبلغ الشحن بالجنيه المصري (الحد الأدنى ${minimumText}).\nسعر الصرف الحالي: 1$ = ${formatPaymentCurrencyAmount(rate, currency, lang)}.`;
+  if (currency === 'IQD') return `أرسل مبلغ الشحن بالدينار العراقي (الحد الأدنى ${minimumText}).\nسعر الصرف الحالي: 1$ = ${formatPaymentCurrencyAmount(rate, currency, lang)}.`;
+  return `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${Number(minimum).toFixed(2)}):`;
+}
+
+async function binanceShopEquivalentLine(amountUsd, lang = 'ar') {
+  const context = await shopMoneyContext();
+  if (normalizePaymentCurrency(context.currency) === 'USD') return '';
+  const local = formatPaymentCurrencyAmount(Number(amountUsd || 0) * Number(context.rate || 1), context.currency, lang);
+  const oneDollar = formatPaymentCurrencyAmount(Number(context.rate || 1), context.currency, lang);
+  return lang === 'en'
+    ? `💱 Store currency: $1 = ${oneDollar} — ${moneyUsd(amountUsd)} equals ${local}. Binance payment itself remains in USDT.`
+    : `💱 عملة المتجر: 1$ = ${oneDollar} — ${moneyUsd(amountUsd)} تعادل ${local}. الدفع عبر Binance يبقى USDT.`;
+}
+
 async function createConfiguredPaymentMethod(data) {
   const row = await PaymentMethod.create({
     nameAr: data.nameAr,
@@ -367,17 +507,17 @@ async function localSuperQiNumber() {
 
 async function externalPaymentButtons(lang, mode = 'pay') {
   const rows = [];
+  const hidden = await getHiddenPaymentTypes();
   const localBinanceReady = await binancePay.configured();
   const localSuperQi = await localSuperQiNumber();
-  const customOverride = network.enabledClient() && String(await getSetting('custom_payment_override', 'false')).toLowerCase() === 'true';
 
-  if (localBinanceReady) {
+  if (localBinanceReady && !hidden.has('binance')) {
     rows.push([emojiButton('Binance ID', PREMIUM_EMOJI.binance, {
       callback_data: `${mode}:binance`,
       style: 'primary'
     })]);
   }
-  if (localSuperQi) {
+  if (localSuperQi && !hidden.has('superqi')) {
     rows.push([emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
       callback_data: `${mode}:superqi`,
       style: 'primary'
@@ -397,16 +537,16 @@ async function externalPaymentButtons(lang, mode = 'pay') {
       const inherited = await network.fallbackPayments();
       const methods = Array.isArray(inherited?.methods) ? inherited.methods : [];
       for (const method of methods) {
-        if (method.type === 'binance' && localBinanceReady) continue;
-        if (method.type === 'superqi' && localSuperQi) continue;
-        if (String(method.type || '').startsWith('custom:') && customOverride) continue;
-        // Owner custom methods are inherited only until this client chooses its own custom payment list. Local methods remain first.
+        const type = String(method.type || '');
+        if (hidden.has(type)) continue;
+        if (type === 'binance' && localBinanceReady) continue;
+        if (type === 'superqi' && localSuperQi) continue;
         const emoji = method.iconCustomEmojiId
           ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
-          : (method.type === 'binance' ? PREMIUM_EMOJI.binance : method.type === 'superqi' ? PREMIUM_EMOJI.superqi : null);
+          : (type === 'binance' ? PREMIUM_EMOJI.binance : type === 'superqi' ? PREMIUM_EMOJI.superqi : null);
         const label = lang === 'en' ? (method.nameEn || method.nameAr) : (method.nameAr || method.nameEn);
         rows.push([emojiButton(label, emoji, {
-          callback_data: `${mode}:network:${method.type}`,
+          callback_data: `${mode}:network:${type}`,
           style: 'primary'
         })]);
       }
@@ -418,12 +558,12 @@ async function externalPaymentButtons(lang, mode = 'pay') {
 }
 
 async function showWalletMenu(chatId, user) {
-  const fresh = await User.findByPk(user.id);
+  const [fresh, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
   const inline = await externalPaymentButtons(user.lang, 'topup');
   if (isAdmin(user.id)) {
     inline.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
   }
-  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${moneyUsd(fresh.balance)}`, {
+  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${customerMoney(fresh.balance, moneyContext, user.lang)}`, {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: inline }
   });
@@ -530,7 +670,7 @@ function stripTelegramCustomEmojiHtml(value) {
   return String(value || '').replace(/<tg-emoji[^>]*>/g, '').replace(/<\/tg-emoji>/g, '');
 }
 
-function productCaption(product, stock, lang) {
+function productCaption(product, stock, lang, moneyContext) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
   const description = lang === 'en'
@@ -566,7 +706,7 @@ function productCaption(product, stock, lang) {
   ].join('\n');
 }
 
-function productButton(product, stock, lang) {
+function productButton(product, stock, lang, moneyContext) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
   const displayName = descriptionData.nameEmojiId && descriptionData.nameEmojiAlt
@@ -582,7 +722,8 @@ function productButton(product, stock, lang) {
 }
 
 async function sendProductKeyboard(chatId, lang, rows) {
-  const keyboard = rows.map(({ product, stock }) => [productButton(product, stock, lang)]);
+  const moneyContext = await shopMoneyContext();
+  const keyboard = rows.map(({ product, stock }) => [productButton(product, stock, lang, moneyContext)]);
   try {
     return await bot.sendMessage(chatId, t(lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
   } catch (error) {
@@ -609,8 +750,8 @@ async function showProducts(chatId, user) {
 async function showProduct(chatId, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
   if (!product || !product.isActive) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
-  const stock = await getProductStock(product.id);
-  const caption = productCaption(product, stock, user.lang);
+  const [stock, moneyContext] = await Promise.all([getProductStock(product.id), shopMoneyContext()]);
+  const caption = productCaption(product, stock, user.lang, moneyContext);
   const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}`, style: stock > 0 ? 'success' : 'danger' }]] };
   if (product.image) {
     try {
@@ -1093,9 +1234,10 @@ async function notifyBinanceResult(result) {
     const user = await User.findByPk(result.userId);
     const lang = user?.lang || 'ar';
     const manual = Boolean(result.manual);
+    const moneyContext = await shopMoneyContext();
     const text = lang === 'en'
-      ? `✅ Wallet credited through Binance${manual ? ' after admin verification' : ''}.\nAmount: <b>${moneyUsd(result.amount)}</b>\nNew balance: <b>${moneyUsd(result.newBalance)}</b>`
-      : `✅ تم شحن محفظتك عبر Binance${manual ? ' بعد تحقق الإدارة' : ' تلقائياً'}.\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(result.newBalance)}</b>`;
+      ? `✅ Wallet credited through Binance${manual ? ' after admin verification' : ''}.\nAmount: <b>${customerMoney(result.amount, moneyContext, lang)}</b>\nNew balance: <b>${customerMoney(result.newBalance, moneyContext, lang)}</b>`
+      : `✅ تم شحن محفظتك عبر Binance${manual ? ' بعد تحقق الإدارة' : ' تلقائياً'}.\nالمبلغ: <b>${customerMoney(result.amount, moneyContext, lang)}</b>\nالرصيد الجديد: <b>${customerMoney(result.newBalance, moneyContext, lang)}</b>`;
     await bot.sendMessage(result.userId, text, { parse_mode: 'HTML' });
     await notifyAdmins(`✅ شحن Binance ${manual ? 'بعد تحقق يدوي' : 'تلقائي'}\nالمستخدم: <code>${result.userId}</code>\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nرقم العملية: <code>${escapeHtml(result.transactionId || '')}</code>`);
     return;
@@ -1471,7 +1613,7 @@ async function handleBuy(query, user, merchantId) {
 }
 
 async function sendCheckoutOptions(chatId, user, product, quantity) {
-  const freshUser = await User.findByPk(user.id);
+  const [freshUser, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
   const total = Number(product.price) * Number(quantity);
   const balance = Number(freshUser?.balance || 0);
   const canUseWallet = balance + 1e-9 >= total;
@@ -1490,7 +1632,7 @@ async function sendCheckoutOptions(chatId, user, product, quantity) {
 
   const lines = [];
   if (!canUseWallet) {
-    lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${moneyUsd(balance)}`);
+    lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${customerMoney(balance, moneyContext, user.lang)}`);
     lines.push(`💰 <b>${user.lang === 'en' ? 'Product total' : 'سعر المنتج'}:</b> ${moneyUsd(total)}`);
     lines.push(`➕ <b>${user.lang === 'en' ? 'Amount needed to complete payment' : 'يجب إرسال لإكمال الدفع'}:</b> ${moneyUsd(missing)}`);
     lines.push('');
@@ -1521,6 +1663,13 @@ async function handleQuantity(query, user, data) {
 
 async function handlePayment(query, user, data) {
   const methodToken = data.slice('pay:'.length);
+  const hiddenTypes = await getHiddenPaymentTypes();
+  const visibilityType = methodToken.startsWith('network:')
+    ? methodToken.slice('network:'.length)
+    : (methodToken === 'binance' || methodToken === 'superqi' ? methodToken : null);
+  if (visibilityType && hiddenTypes.has(visibilityType)) {
+    return answerCallback(query.id, user.lang === 'en' ? 'This payment method is hidden in this store.' : 'طريقة الدفع مخفية في هذا المتجر.', true);
+  }
   const freshUser = await User.findByPk(user.id);
   const state = parseState(freshUser);
   if (!state || state.action !== 'checkout') return answerCallback(query.id, t(user.lang, 'cancelled'), true);
@@ -1618,15 +1767,17 @@ async function handlePayment(query, user, data) {
       order.paymentRef = `network-binance:${intent.intentId}`;
       await order.save({ fields: ['paymentRef'] });
       await setState(user.id, { action: 'network_binance_verify_order', orderId: order.id, intentId: intent.intentId });
+      const equivalentLine = await binanceShopEquivalentLine(amountDue, user.lang);
       return bot.sendMessage(user.id, [
         `✅ <b>${user.lang === 'en' ? 'Payment request created' : 'تم إنشاء طلب الدفع'}</b>`,
         '',
         `💰 ${user.lang === 'en' ? 'Send' : 'حوّل'}: <b>${Number(amountDue).toFixed(2)} USDT</b>`,
+        equivalentLine,
         `🆔 ${user.lang === 'en' ? 'To Binance ID' : 'إلى Binance ID'}:`,
         `<code>${escapeHtml(intent.payId)}</code>`,
         '',
         user.lang === 'en' ? 'After sending, send the Binance Order ID here:' : 'بعد التحويل ارسل معرف الطلب هنا:'
-      ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+      ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
     }
 
     const rate = await getIqdRate();
@@ -1692,27 +1843,53 @@ async function handlePayment(query, user, data) {
 
 async function sendBinanceInstructions(user, transfer, orderId = null) {
   await setState(user.id, { action: 'binance_verify', transferId: transfer.id, orderId });
-  return bot.sendMessage(user.id, await binancePay.instructions(transfer, user.lang), {
+  const base = await binancePay.instructions(transfer, user.lang);
+  const equivalentLine = await binanceShopEquivalentLine(Number(transfer.expectedAmount || 0), user.lang);
+  let text = base;
+  if (equivalentLine) {
+    const lines = String(base).split('\n');
+    const insertAt = Math.max(0, lines.length - 1);
+    lines.splice(insertAt, 0, equivalentLine, '');
+    text = lines.join('\n');
+  }
+  return bot.sendMessage(user.id, text, {
     parse_mode: 'HTML',
     reply_markup: cancelInlineKeyboard()
   });
 }
 
 async function handleTopupStart(query, user, methodToken) {
+  const hiddenTypes = await getHiddenPaymentTypes();
+  const visibilityType = methodToken.startsWith('network:')
+    ? methodToken.slice('network:'.length)
+    : (methodToken === 'binance' || methodToken === 'superqi' ? methodToken : null);
+  if (visibilityType && hiddenTypes.has(visibilityType)) {
+    return answerCallback(query.id, user.lang === 'en' ? 'This payment method is hidden in this store.' : 'طريقة الدفع مخفية في هذا المتجر.', true);
+  }
   if (methodToken === 'binance' && !(await binancePay.configured())) {
     return answerCallback(query.id, 'Binance غير مهيأ.', true);
   }
-  if (methodToken.startsWith('custom:')) {
-    const id = Number(methodToken.split(':')[1]);
-    const customMethod = await PaymentMethod.findOne({ where: { id, isActive: true } });
-    if (!customMethod) return answerCallback(query.id, user.lang === 'en' ? 'Payment method is unavailable.' : 'طريقة الدفع غير متاحة.', true);
+
+  let inputContext;
+  try {
+    inputContext = await resolveTopupInputContext(methodToken);
+  } catch (error) {
+    console.error('Resolve top-up input currency:', error.message);
+    inputContext = null;
   }
-  await setState(user.id, { action: 'wallet_topup_amount', method: methodToken });
+  if (!inputContext) {
+    return answerCallback(query.id, user.lang === 'en' ? 'Payment method is unavailable.' : 'طريقة الدفع غير متاحة.', true);
+  }
+
+  await setState(user.id, {
+    action: 'wallet_topup_amount',
+    method: methodToken,
+    topupCurrency: inputContext.currency,
+    topupRatePerUsd: inputContext.rate,
+    topupMinimumUsd: inputContext.minimumUsd
+  });
   await answerCallback(query.id);
-  const minimum = methodToken === 'binance' ? config.binance.minAmount : 0.01;
-  return bot.sendMessage(user.id, user.lang === 'en'
-    ? `Send the top-up amount in USD (minimum $${minimum}):`
-    : `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${minimum}):`, { reply_markup: cancelInlineKeyboard() });
+  return bot.sendMessage(user.id, topupAmountPrompt(inputContext, user.lang), { reply_markup: cancelInlineKeyboard() });
 }
 
 async function handleStateMessage(msg, user, state) {
@@ -1773,10 +1950,19 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, suspendedStoreText(user.lang), { reply_markup: suspendedMainKeyboard(user.lang) });
       return true;
     }
-    const amount = Number(String(msg.text || '').trim());
-    const minimumAmount = state.method === 'binance' ? config.binance.minAmount : 0.01;
-    if (!Number.isFinite(amount) || amount < minimumAmount || amount > 100000) {
-      await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Invalid amount.' : '❌ المبلغ غير صحيح.');
+
+    const enteredAmount = Number(String(msg.text || '').trim().replace(/,/g, ''));
+    const inputCurrency = normalizePaymentCurrency(state.topupCurrency || 'USD');
+    const inputRate = Number(state.topupRatePerUsd || 1);
+    const minimumUsd = Math.max(0.01, Number(state.topupMinimumUsd || (state.method === 'binance' ? config.binance.minAmount : 0.01)));
+    const minimumLocal = minimumTopupLocalAmount(inputRate, inputCurrency, minimumUsd);
+    const exactUsd = enteredAmount / (Number.isFinite(inputRate) && inputRate > 0 ? inputRate : 1);
+    const amount = Number(exactUsd.toFixed(2));
+
+    if (!Number.isFinite(enteredAmount) || enteredAmount < minimumLocal || !Number.isFinite(amount) || amount < minimumUsd || amount > 100000) {
+      await bot.sendMessage(user.id, user.lang === 'en'
+        ? `❌ Invalid amount. Minimum: ${formatPaymentCurrencyAmount(minimumLocal, inputCurrency, user.lang)}.`
+        : `❌ المبلغ غير صحيح. الحد الأدنى: ${formatPaymentCurrencyAmount(minimumLocal, inputCurrency, user.lang)}.`);
       return true;
     }
 
@@ -1823,22 +2009,24 @@ async function handleStateMessage(msg, user, state) {
           amount,
           type: 'deposit',
           txid: `NETBIN-${intent.intentId}`,
-          caption: 'Inherited Binance wallet topup',
+          caption: `Inherited Binance wallet topup (${enteredAmount} ${inputCurrency})`,
           status: 'awaiting_binance_id',
           paymentOrigin: 'network_fallback',
           networkMethod: 'binance',
           lastReminderAt: new Date()
         });
         await setState(user.id, { action: 'network_binance_verify_topup', intentId: intent.intentId, transactionId: transaction.id });
+        const equivalentLine = await binanceShopEquivalentLine(amount, user.lang);
         await bot.sendMessage(user.id, [
           `✅ <b>${user.lang === 'en' ? 'Top-up request created' : 'تم إنشاء طلب الشحن'}</b>`,
           '',
           `💰 ${user.lang === 'en' ? 'Send' : 'حوّل'}: <b>${Number(amount).toFixed(2)} USDT</b>`,
+          equivalentLine,
           `🆔 ${user.lang === 'en' ? 'To Binance ID' : 'إلى Binance ID'}:`,
           `<code>${escapeHtml(intent.payId)}</code>`,
           '',
           user.lang === 'en' ? 'After sending, send the Binance Order ID here:' : 'بعد التحويل ارسل معرف الطلب هنا:'
-        ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+        ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
         return true;
       }
 
@@ -1848,7 +2036,7 @@ async function handleStateMessage(msg, user, state) {
         amount,
         type: 'deposit',
         txid: `NETMAN-${Date.now()}-${user.id}`,
-        caption: `${methodName} inherited manual wallet topup`,
+        caption: `${methodName} inherited manual wallet topup (${enteredAmount} ${inputCurrency})`,
         status: 'awaiting_proof',
         paymentOrigin: 'network_fallback',
         networkMethod: inheritedType,
@@ -1861,12 +2049,11 @@ async function handleStateMessage(msg, user, state) {
         methodNameAr: inherited.nameAr,
         methodNameEn: inherited.nameEn
       });
-      const inheritedLocal = paymentLocalAmount(amount, inherited);
       await bot.sendMessage(user.id, [
         `💳 <b>${escapeHtml(methodName)}</b>`,
         '',
-        `${user.lang === 'en' ? 'Amount in USD' : 'المبلغ بالدولار'}: <b>${moneyUsd(amount)}</b>`,
-        `${user.lang === 'en' ? 'Amount in payment currency' : 'المبلغ بعملة الدفع'}: <b>${inheritedLocal.amount.toFixed(inheritedLocal.currency === 'IQD' ? 0 : 2)} ${inheritedLocal.currency}</b>`,
+        `${user.lang === 'en' ? 'Top-up amount' : 'مبلغ الشحن'}: <b>${formatPaymentCurrencyAmount(enteredAmount, inputCurrency, user.lang)}</b>`,
+        `${user.lang === 'en' ? 'Wallet credit' : 'يضاف للمحفظة'}: <b>${moneyUsd(amount)}</b>`,
         `${user.lang === 'en' ? 'Send to' : 'حوّل إلى'}: <code>${escapeHtml(inherited.paymentNumber)}</code>`,
         '',
         t(user.lang, 'proofPrompt')
@@ -1898,15 +2085,13 @@ async function handleStateMessage(msg, user, state) {
       paymentMethodId = paymentMethod.id;
     }
 
-    const rate = await getIqdRate();
-    const localTopup = paymentMethod ? paymentLocalAmount(amount, paymentMethod) : { currency: 'IQD', amount: amount * rate, rate };
     const transaction = await BalanceTransaction.create({
       userId: user.id,
       amount,
       type: 'deposit',
       paymentMethodId,
       txid: `${txPrefix}-${Date.now()}-${user.id}`,
-      caption: `${methodName} manual wallet topup`,
+      caption: `${methodName} manual wallet topup (${enteredAmount} ${inputCurrency})`,
       status: 'awaiting_proof',
       lastReminderAt: new Date(),
       paymentOrigin: 'local'
@@ -1915,9 +2100,9 @@ async function handleStateMessage(msg, user, state) {
     await bot.sendMessage(user.id, [
       `${icon ? premiumEmojiHtml(icon) : '💳'} <b>${user.lang === 'en' ? `Top up via ${escapeHtml(methodName)}` : `شحن المحفظة عبر ${escapeHtml(methodName)}`}</b>`,
       '',
-      `${user.lang === 'en' ? 'Amount in USD' : 'المبلغ بالدولار'}: <b>${moneyUsd(amount)}</b>`,
-      `${user.lang === 'en' ? 'Exchange rate' : 'سعر الصرف'}: <b>${moneyIqd(rate)} ${user.lang === 'en' ? 'per $1' : 'لكل 1$'}</b>`,
-      `${user.lang === 'en' ? 'Amount to send' : 'المبلغ المطلوب'}: <b>${localTopup.amount.toFixed(localTopup.currency === 'IQD' ? 0 : 2)} ${localTopup.currency}</b>`,
+      `${user.lang === 'en' ? 'Top-up amount' : 'مبلغ الشحن'}: <b>${formatPaymentCurrencyAmount(enteredAmount, inputCurrency, user.lang)}</b>`,
+      `${user.lang === 'en' ? 'Wallet credit' : 'يضاف للمحفظة'}: <b>${moneyUsd(amount)}</b>`,
+      `${user.lang === 'en' ? 'Exchange rate' : 'سعر الصرف'}: <b>$1 = ${formatPaymentCurrencyAmount(inputRate, inputCurrency, user.lang)}</b>`,
       '',
       `${user.lang === 'en' ? 'Send to' : 'حوّل إلى الرقم'}:`,
       `<code>${escapeHtml(number)}</code>`,
@@ -1996,8 +2181,8 @@ async function handleStateMessage(msg, user, state) {
       activity: 'topup'
     }).catch(error => console.error('Settlement notify failed:', error.message));
     await clearState(user.id);
-    const updated = await User.findByPk(user.id);
-    await bot.sendMessage(user.id, `✅ ${user.lang === 'en' ? 'Balance credited' : 'تم شحن رصيدك'}: <b>${moneyUsd(amount)}</b>\n${t(user.lang, 'walletBalance')}: <b>${moneyUsd(updated.balance)}</b>`, { parse_mode: 'HTML' });
+    const [updated, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
+    await bot.sendMessage(user.id, `✅ ${user.lang === 'en' ? 'Balance credited' : 'تم شحن رصيدك'}: <b>${customerMoney(amount, moneyContext, user.lang)}</b>\n${t(user.lang, 'walletBalance')}: <b>${customerMoney(updated.balance, moneyContext, user.lang)}</b>`, { parse_mode: 'HTML' });
     return true;
   }
 
@@ -2491,12 +2676,13 @@ async function handleStateMessage(msg, user, state) {
       }
       data.paymentNumber = text;
       await setState(user.id, { action: 'admin_new_payment_method', step: 'currency', data });
-      await bot.sendMessage(user.id, '3/4 اختَر العملة التي تستقبلها هذه الطريقة:', {
-        reply_markup: { inline_keyboard: [[
-          { text: '💵 USD', callback_data: 'adm:pmcurrency:USD' },
-          { text: '🇮🇶 IQD', callback_data: 'adm:pmcurrency:IQD' },
-          { text: '🇪🇬 EGP', callback_data: 'adm:pmcurrency:EGP' }
-        ]] }
+      const currencyButtons = [
+        { text: '🇪🇬 جنيه مصري (EGP)', callback_data: 'adm:pmcurrency:EGP' },
+        { text: '🇮🇶 دينار عراقي (IQD)', callback_data: 'adm:pmcurrency:IQD' },
+        { text: '💵 دولار (USD)', callback_data: 'adm:pmcurrency:USD' }
+      ];
+      await bot.sendMessage(user.id, '3/4 اختَر عملة الاستلام لهذه الطريقة. الزبون راح يكتب مبلغ الشحن بهذه العملة نفسها:', {
+        reply_markup: { inline_keyboard: currencyButtons.map(button => [button]) }
       });
       return true;
     }
@@ -3164,7 +3350,8 @@ async function handleSuperQiTopupAdmin(query, data) {
     await ledger.save({ transaction: dbTransaction });
     await dbTransaction.commit();
     await answerCallback(query.id, 'تم الشحن.');
-    await bot.sendMessage(targetUser.id, `✅ ${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} تم شحن محفظتك عبر سوبركي.\nالمبلغ: <b>${moneyUsd(ledger.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' });
+    const moneyContext = await shopMoneyContext();
+    await bot.sendMessage(targetUser.id, `✅ ${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} تم شحن محفظتك عبر سوبركي.\nالمبلغ: <b>${customerMoney(ledger.amount, moneyContext, targetUser.lang || 'ar')}</b>\nالرصيد الجديد: <b>${customerMoney(targetUser.balance, moneyContext, targetUser.lang || 'ar')}</b>`, { parse_mode: 'HTML' });
   } catch (error) {
     await dbTransaction.rollback();
     throw error;
@@ -3227,10 +3414,11 @@ async function handleCustomTopupAdmin(query, data) {
     const targetLang = targetUser.lang === 'en' ? 'en' : 'ar';
     const methodName = localizedPaymentName(method, targetLang);
     const icon = customPaymentEmoji(method);
+    const moneyContext = await shopMoneyContext();
     await bot.sendMessage(targetUser.id, [
       `✅ ${icon ? premiumEmojiHtml(icon) : '💳'} <b>${targetLang === 'en' ? `Wallet topped up via ${escapeHtml(methodName)}` : `تم شحن محفظتك عبر ${escapeHtml(methodName)}`}</b>`,
-      `${targetLang === 'en' ? 'Amount' : 'المبلغ'}: <b>${moneyUsd(ledger.amount)}</b>`,
-      `${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${moneyUsd(targetUser.balance)}</b>`
+      `${targetLang === 'en' ? 'Amount' : 'المبلغ'}: <b>${customerMoney(ledger.amount, moneyContext, targetLang)}</b>`,
+      `${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${customerMoney(targetUser.balance, moneyContext, targetLang)}</b>`
     ].join('\n'), { parse_mode: 'HTML' });
   } catch (error) {
     await dbTransaction.rollback();
@@ -3343,7 +3531,9 @@ async function handleNetworkTopupAdmin(query, data) {
   }).catch(error => console.error('Settlement notify failed:', error.message));
   await answerCallback(query.id, 'تم الشحن وتسجيل الحساب مع مالك الشبكة.');
   if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
-  await bot.sendMessage(targetUser.id, `✅ تم شحن محفظتك بمبلغ <b>${moneyUsd(ledger.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+  const moneyContext = await shopMoneyContext();
+  const targetLang = targetUser?.lang === 'en' ? 'en' : 'ar';
+  await bot.sendMessage(targetUser.id, `✅ ${targetLang === 'en' ? 'Wallet credited' : 'تم شحن محفظتك'}: <b>${customerMoney(ledger.amount, moneyContext, targetLang)}</b>\n${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${customerMoney(targetUser.balance, moneyContext, targetLang)}</b>`, { parse_mode: 'HTML' }).catch(() => {});
 }
 
 async function showOrders(chatId, user) {
@@ -3363,7 +3553,7 @@ async function showOrders(chatId, user) {
 
 async function showOrder(chatId, user, orderId, callbackId = null) {
   if (callbackId) await answerCallback(callbackId);
-  const order = await PurchaseOrder.findByPk(orderId, { include: [Merchant] });
+  const [order, moneyContext] = await Promise.all([PurchaseOrder.findByPk(orderId, { include: [Merchant] }), shopMoneyContext()]);
   if (!order || (String(order.userId) !== String(user.id) && !isAdmin(user.id))) return;
   const name = user.lang === 'en' ? (order.Merchant?.nameEn || order.Merchant?.nameAr) : order.Merchant?.nameAr;
   const deliveries = await DeliveryRecord.findAll({ where: { orderId: order.id }, order: [['createdAt', 'ASC']] });
@@ -3372,13 +3562,13 @@ async function showOrder(chatId, user, orderId, callbackId = null) {
     `🧾 <b>${isEn ? 'Order' : 'الطلب'} #${order.id}</b>`,
     `${isEn ? 'Product' : 'المنتج'}: ${escapeHtml(name || '')}`,
     `${isEn ? 'Quantity' : 'الكمية'}: ${order.quantity}`,
-    `${isEn ? 'Total' : 'السعر الكامل'}: ${moneyUsd(order.totalAmount)}`
+    `${isEn ? 'Total' : 'السعر الكامل'}: ${customerMoney(order.totalAmount, moneyContext, user.lang)}`
   ];
   if (Number(order.walletApplied || 0) > 0) {
-    lines.push(`${isEn ? 'From wallet' : 'من المحفظة'}: ${moneyUsd(order.walletApplied)}`);
+    lines.push(`${isEn ? 'From wallet' : 'من المحفظة'}: ${customerMoney(order.walletApplied, moneyContext, user.lang)}`);
   }
   if (Number(order.externalAmount || 0) > 0 && Number(order.externalAmount || 0) + 1e-9 < Number(order.totalAmount || 0)) {
-    lines.push(`${isEn ? 'External payment' : 'الدفع الخارجي'}: ${moneyUsd(order.externalAmount)}`);
+    lines.push(`${isEn ? 'External payment' : 'الدفع الخارجي'}: ${customerMoney(order.externalAmount, moneyContext, user.lang)}`);
   }
   lines.push(`${isEn ? 'Payment' : 'طريقة الدفع'}: ${escapeHtml(order.paymentMethod)}`);
   lines.push(`${isEn ? 'Status' : 'الحالة'}: ${escapeHtml(order.status)}`);
@@ -3396,12 +3586,46 @@ async function showAdminPaymentMethods(chatId) {
     customPaymentEmoji(method),
     { callback_data: `adm:pm:${method.id}`, style: method.isActive ? 'success' : 'danger' }
   )]);
+
   rows.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
-  if (network.enabledClient()) rows.push([{ text: '↩️ استخدام طرق المالك الرئيسية', callback_data: 'adm:payment_methods_inherit', style: 'primary' }]);
+
+  let inheritedLines = [];
+  if (network.enabledClient()) {
+    const hidden = await getHiddenPaymentTypes();
+    let inheritedMethods = [];
+    try {
+      const inherited = await network.fallbackPayments();
+      inheritedMethods = Array.isArray(inherited?.methods) ? inherited.methods : [];
+    } catch (error) {
+      inheritedLines.push(`⚠️ تعذر قراءة طرق المالك: ${escapeHtml(error.message)}`);
+    }
+
+    const byType = new Map(inheritedMethods.map(method => [String(method.type || ''), method]));
+    const [localBinanceReady, localSuperQi] = await Promise.all([binancePay.configured(), localSuperQiNumber()]);
+    if (localBinanceReady && !byType.has('binance')) byType.set('binance', { type: 'binance', nameAr: 'Binance ID', nameEn: 'Binance ID' });
+    if (localSuperQi && !byType.has('superqi')) byType.set('superqi', { type: 'superqi', nameAr: 'سوبركي', nameEn: 'SuperQi' });
+
+    for (const [type, method] of byType) {
+      if (!type) continue;
+      const isHidden = hidden.has(type);
+      const name = method.nameAr || method.nameEn || type;
+      const emoji = method.iconCustomEmojiId
+        ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
+        : (type === 'binance' ? PREMIUM_EMOJI.binance : type === 'superqi' ? PREMIUM_EMOJI.superqi : null);
+      rows.push([emojiButton(`${isHidden ? '🚫 مخفية' : '👁 ظاهرة'} — ${name}`, emoji, {
+        callback_data: `adm:pmvis:${type}`,
+        style: isHidden ? 'danger' : 'success'
+      })]);
+    }
+    rows.push([{ text: '👁 إظهار كل طرق الدفع الرئيسية', callback_data: 'adm:payment_methods_inherit', style: 'primary' }]);
+    inheritedLines.push('', 'تگدر تخفي Binance أو سوبركي أو أي طريقة دفع رئيسية في هذا البوت وحده. هذا ما يغيّر شي بباقي البوتات.');
+  }
+
   return bot.sendMessage(chatId, [
-    '💳 <b>طرق الدفع الإضافية</b>',
+    '💳 <b>طرق الدفع</b>',
     '',
-    'هاي الطرق تظهر تلقائياً عند شراء منتج أو شحن المحفظة.'
+    'طرقك المحلية تقدر تعدلها وتشغلها أو توقفها.',
+    ...inheritedLines
   ].join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: rows }
@@ -3461,10 +3685,12 @@ async function showNetworkAccounts(chatId) {
     const usd = Number(account.amountUsd || account.values?.usd || 0);
     const iqd = Number(account.values?.iqd || 0);
     const egp = Number(account.values?.egp || 0);
+    const localCurrency = shopDisplayCurrency();
     lines.push('', account.direction === 'owe'
       ? `🔴 عليك لـ <b>${escapeHtml(account.counterpartyName)}</b>: <b>$${usd.toFixed(2)}</b>`
       : `🟢 إلك على <b>${escapeHtml(account.counterpartyName)}</b>: <b>$${usd.toFixed(2)}</b>`);
-    lines.push(`🇮🇶 ${Math.round(iqd).toLocaleString('en-US')} IQD  •  🇪🇬 ${egp.toFixed(2)} EGP`);
+    if (localCurrency === 'IQD') lines.push(`🇮🇶 ${Math.round(iqd).toLocaleString('en-US')} IQD`);
+    else if (localCurrency === 'EGP') lines.push(`🇪🇬 ${egp.toFixed(2)} EGP`);
     if (account.direction === 'owe' && usd > 0) {
       keyboard.push([{
         text: `✅ تم تسديد الدين لـ ${String(account.counterpartyName).slice(0, 28)} — $${usd.toFixed(2)}`,
@@ -3780,9 +4006,20 @@ async function handleAdminCallback(query, user, data) {
 
   if (data === 'adm:payment_methods_inherit') {
     if (!network.enabledClient()) return answerCallback(query.id, 'هذا الخيار للبوتات المرتبطة فقط.', true);
-    await PaymentMethod.update({ isActive: false }, { where: {} });
-    await setSetting('custom_payment_override', 'false');
-    await answerCallback(query.id, 'رجعت طرق الدفع العامة مالالمالك. Binance وسوبركي يبقن محلياً إذا أنت مغيرهم.');
+    await setHiddenPaymentTypes(new Set());
+    await answerCallback(query.id, 'تم إظهار كل طرق الدفع الرئيسية في هذا البوت.');
+    return showAdminPaymentMethods(query.message.chat.id);
+  }
+
+  if (data.startsWith('adm:pmvis:')) {
+    if (!network.enabledClient()) return answerCallback(query.id, 'هذا الخيار للبوتات المرتبطة فقط.', true);
+    const type = data.slice('adm:pmvis:'.length);
+    if (!type) return answerCallback(query.id, 'طريقة دفع غير صحيحة.', true);
+    const hidden = await getHiddenPaymentTypes();
+    if (hidden.has(type)) hidden.delete(type);
+    else hidden.add(type);
+    await setHiddenPaymentTypes(hidden);
+    await answerCallback(query.id, hidden.has(type) ? 'تم إخفاء الطريقة في هذا البوت فقط.' : 'تم إظهار الطريقة في هذا البوت.');
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
@@ -4048,12 +4285,21 @@ async function handleAdminCallback(query, user, data) {
       binancePay.configured(),
       binancePay.getRuntimeConfig()
     ]);
+    const localCurrency = shopDisplayCurrency();
+    const currencyLine = localCurrency === 'IQD'
+      ? `عملة المتجر: <b>IQD</b> — سعر 1$: <b>${moneyIqd(rate)}</b>`
+      : localCurrency === 'EGP'
+        ? `عملة المتجر: <b>EGP</b> — سعر 1$: <b>${escapeHtml(String(egpRate))} EGP</b>`
+        : 'عملة المتجر: <b>USD</b>';
+    const currencyButtons = [];
+    if (localCurrency === 'IQD') currencyButtons.push({ text: '🇮🇶 سعر الدولار IQD', callback_data: 'adm:set:iqd_rate' });
+    if (localCurrency === 'EGP') currencyButtons.push({ text: '🇪🇬 سعر الدولار EGP', callback_data: 'adm:set:egp_rate_per_usd' });
+    currencyButtons.push(emojiButton('رقم سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:set:superqi_number' }));
     return bot.sendMessage(query.message.chat.id, [
       '⚙️ <b>الإعدادات</b>',
       '',
       `المتجر: <b>${open ? 'مفتوح' : 'مغلق'}</b>`,
-      `سعر الدولار بالعراقي: ${moneyIqd(rate)}`,
-      `سعر الدولار بالمصري: <b>${escapeHtml(String(egpRate))} EGP</b>`,
+      currencyLine,
       `رقم SuperQi المحلي: <code>${escapeHtml(number || (network.enabledClient() ? 'غير مضاف — يستخدم الرئيسي تلقائياً' : 'غير مضاف'))}</code>`,
       `القناة الإجبارية: <code>${escapeHtml(channel || 'متوقفة')}</code>`,
       `Binance ID المحلي: <code>${escapeHtml(binanceRuntime.payId || 'غير مضاف')}</code>`,
@@ -4062,11 +4308,7 @@ async function handleAdminCallback(query, user, data) {
     ].filter(Boolean).join('\n'), {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [
-        [
-          { text: '🇮🇶 سعر الدولار IQD', callback_data: 'adm:set:iqd_rate' },
-          { text: '🇪🇬 سعر الدولار EGP', callback_data: 'adm:set:egp_rate_per_usd' },
-          emojiButton('رقم سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:set:superqi_number' })
-        ],
+        currencyButtons,
         [
           emojiButton(network.enabledClient() ? 'تغيير API Binance' : 'إعداد API Binance', PREMIUM_EMOJI.binance, { callback_data: 'adm:binance_setup', style: 'primary' }),
           { text: '🗑 حذف Binance المحلي', callback_data: 'adm:binance_clear', style: 'danger' }
