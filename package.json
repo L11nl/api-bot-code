@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.0.2",
+  "version": "12.1.2",
   "private": true,
-  "description": "Telegram digital store v12.0.2 with global cross-shop payment-wallet discovery/sync, customer-selected USD/IQD/EGP display currency, owner-routed approvals, Binance USDT exception, Railway DB fixes, and high-precision base wallet accounting.",
+  "description": "Telegram digital store v12.1.1: service products are private to the bot/shop that created them; shared catalog products and shared payment wallets remain network-wide.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
