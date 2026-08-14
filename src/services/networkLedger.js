@@ -75,6 +75,175 @@ async function applyBalanceDelta({ debtorShopId, creditorShopId, amountUsd, tran
   return balance;
 }
 
+
+async function updatePendingAfterNet(row, remainingUsd, transaction) {
+  const remaining = Number(Math.max(0, Number(remainingUsd || 0)).toFixed(2));
+  if (remaining < 0.005) {
+    // Nothing is actually due anymore. Keep the historical request, but remove it
+    // from all pending debt calculations. This is intentionally NOT "confirmed":
+    // no money changed hands; the two opposite obligations simply cancelled out.
+    row.status = 'netted';
+    row.debtorNotified = true;
+    row.verificationError = null;
+    row.submittedOrderId = null;
+    await row.save({
+      transaction,
+      fields: ['status', 'debtorNotified', 'verificationError', 'submittedOrderId']
+    });
+    return 0;
+  }
+
+  row.amountUsd = remaining;
+  row.settlementCurrency = 'USD';
+  row.settlementAmount = remaining;
+  row.iqdAmount = null;
+  row.egpAmount = null;
+  row.debtorNotified = false;
+  await row.save({
+    transaction,
+    fields: [
+      'amountUsd',
+      'settlementCurrency',
+      'settlementAmount',
+      'iqdAmount',
+      'egpAmount',
+      'debtorNotified'
+    ]
+  });
+  return remaining;
+}
+
+async function reconcilePairDebts(shop1Raw, shop2Raw, externalTransaction = null) {
+  const pair = pairParts(shop1Raw, shop2Raw);
+  if (pair.shopAId === pair.shopBId) return null;
+
+  const transaction = externalTransaction || await sequelize.transaction();
+  try {
+    const balance = await lockBalance(transaction, pair.shopAId, pair.shopBId);
+
+    // Only requests that have NOT submitted a Binance Order ID can be netted.
+    // Once an Order ID exists, money may already have been sent, so that request
+    // must finish verification instead of being silently cancelled.
+    const pending = await NetworkDebtPayment.findAll({
+      where: {
+        status: 'pending',
+        submittedOrderId: null,
+        [Op.or]: [
+          { debtorShopId: pair.shopAId, creditorShopId: pair.shopBId },
+          { debtorShopId: pair.shopBId, creditorShopId: pair.shopAId }
+        ]
+      },
+      order: [['createdAt', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    const aToB = pending.filter(row =>
+      normalizeShopId(row.debtorShopId) === pair.shopAId &&
+      normalizeShopId(row.creditorShopId) === pair.shopBId
+    );
+    const bToA = pending.filter(row =>
+      normalizeShopId(row.debtorShopId) === pair.shopBId &&
+      normalizeShopId(row.creditorShopId) === pair.shopAId
+    );
+
+    // 1) Pending request vs pending request in the opposite direction.
+    let i = 0;
+    let j = 0;
+    while (i < aToB.length && j < bToA.length) {
+      const left = aToB[i];
+      const right = bToA[j];
+      const leftAmount = Number(left.amountUsd || 0);
+      const rightAmount = Number(right.amountUsd || 0);
+
+      if (leftAmount < 0.005) {
+        await updatePendingAfterNet(left, 0, transaction);
+        i += 1;
+        continue;
+      }
+      if (rightAmount < 0.005) {
+        await updatePendingAfterNet(right, 0, transaction);
+        j += 1;
+        continue;
+      }
+
+      const offset = Math.min(leftAmount, rightAmount);
+      const leftRemaining = await updatePendingAfterNet(left, leftAmount - offset, transaction);
+      const rightRemaining = await updatePendingAfterNet(right, rightAmount - offset, transaction);
+      if (leftRemaining < 0.005) i += 1;
+      if (rightRemaining < 0.005) j += 1;
+    }
+
+    // 2) Any remaining pending request can also cancel an opposite open balance.
+    // Positive balance: A owes B. Negative balance: B owes A.
+    let signed = Number(balance.amountSignedUsd || 0);
+    if (Math.abs(signed) >= 0.005) {
+      const oppositePending = pending.filter(row => {
+        if (row.status !== 'pending' || row.submittedOrderId) return false;
+        if (signed > 0) {
+          return normalizeShopId(row.debtorShopId) === pair.shopBId &&
+            normalizeShopId(row.creditorShopId) === pair.shopAId;
+        }
+        return normalizeShopId(row.debtorShopId) === pair.shopAId &&
+          normalizeShopId(row.creditorShopId) === pair.shopBId;
+      });
+
+      for (const row of oppositePending) {
+        if (Math.abs(signed) < 0.005) break;
+        const requestAmount = Number(row.amountUsd || 0);
+        if (requestAmount < 0.005) continue;
+        const offset = Math.min(Math.abs(signed), requestAmount);
+        await updatePendingAfterNet(row, requestAmount - offset, transaction);
+        signed = signed > 0 ? signed - offset : signed + offset;
+      }
+    }
+
+    if (Math.abs(signed) < 0.005) signed = 0;
+    const rounded = Number(signed.toFixed(2));
+    if (Number(balance.amountSignedUsd || 0) !== rounded) {
+      balance.amountSignedUsd = rounded;
+      await balance.save({ transaction, fields: ['amountSignedUsd'] });
+    }
+
+    if (!externalTransaction) await transaction.commit();
+    return balance;
+  } catch (error) {
+    if (!externalTransaction) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function reconcileAllForShop(shopIdRaw) {
+  const shopId = normalizeShopId(shopIdRaw);
+  const pairs = await NetworkDebtBalance.findAll({
+    where: { [Op.or]: [{ shopAId: shopId }, { shopBId: shopId }] },
+    attributes: ['shopAId', 'shopBId'],
+    raw: true
+  });
+
+  // Also include pairs that may currently exist only as pending requests because
+  // createDebtPaymentRequest() reserves the open balance to zero.
+  const pendingPairs = await NetworkDebtPayment.findAll({
+    where: {
+      status: 'pending',
+      submittedOrderId: null,
+      [Op.or]: [{ debtorShopId: shopId }, { creditorShopId: shopId }]
+    },
+    attributes: ['debtorShopId', 'creditorShopId'],
+    raw: true
+  });
+
+  const seen = new Set();
+  for (const row of [...pairs, ...pendingPairs]) {
+    const a = row.shopAId || row.debtorShopId;
+    const b = row.shopBId || row.creditorShopId;
+    const pair = pairParts(a, b);
+    if (pair.shopAId === pair.shopBId || seen.has(pair.pairKey)) continue;
+    seen.add(pair.pairKey);
+    await reconcilePairDebts(pair.shopAId, pair.shopBId);
+  }
+}
+
 async function recordObligation({
   debtorShopId,
   creditorShopId,
@@ -125,6 +294,9 @@ async function recordObligation({
 
     if (debtor !== creditor) {
       await applyBalanceDelta({ debtorShopId: debtor, creditorShopId: creditor, amountUsd: amount, transaction });
+      // Immediately offset this new obligation against any opposite, still-unpaid
+      // settlement request for the same two shops.
+      await reconcilePairDebts(debtor, creditor, transaction);
     }
     if (!externalTransaction) await transaction.commit();
     return { duplicate: false, entry };
@@ -179,6 +351,7 @@ async function currencySnapshot(amountUsd) {
 
 async function commerceStatusForShop(shopIdRaw) {
   const shopId = normalizeShopId(shopIdRaw);
+  await reconcileAllForShop(shopId);
   const balances = await NetworkDebtBalance.findAll({
     where: { [Op.or]: [{ shopAId: shopId }, { shopBId: shopId }] }
   });
@@ -236,6 +409,9 @@ async function latestNotificationEventId() {
 
 async function accountsForShop(shopIdRaw) {
   const shopId = normalizeShopId(shopIdRaw);
+  // Self-heal old v12.0.x data too: opening the accounts screen is enough to
+  // net opposite unpaid requests that were created before this fix.
+  await reconcileAllForShop(shopId);
   const balances = await NetworkDebtBalance.findAll({
     where: { [Op.or]: [{ shopAId: shopId }, { shopBId: shopId }] },
     order: [['updatedAt', 'DESC']]
@@ -288,12 +464,16 @@ async function accountsForShop(shopIdRaw) {
   };
 }
 
-async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw) {
+async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw, options = {}) {
   const debtor = normalizeShopId(debtorShopIdRaw);
   const creditor = normalizeShopId(creditorShopIdRaw);
   if (debtor === creditor) throw new Error('INVALID_COUNTERPARTY');
+  const binancePayId = String(options?.binancePayId || '').trim();
+  if (!binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
+
   const transaction = await sequelize.transaction();
   try {
+    await reconcilePairDebts(debtor, creditor, transaction);
     const balance = await lockBalance(transaction, debtor, creditor);
     const dir = directionFor(balance, debtor);
     if (!dir || dir.direction !== 'owe' || normalizeShopId(dir.creditorShopId) !== creditor || dir.amountUsd <= 0) {
@@ -305,16 +485,18 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw) {
       lock: transaction.LOCK.UPDATE
     });
     if (existing) {
+      if (!existing.binancePayId && binancePayId) {
+        existing.binancePayId = binancePayId;
+        await existing.save({ transaction, fields: ['binancePayId'] });
+      }
       await transaction.commit();
       return existing;
     }
 
     const amount = Number(dir.amountUsd.toFixed(2));
-    const values = await currencySnapshot(amount);
-    const settlementCurrency = await getShopCurrency(creditor);
-    const settlementAmount = settlementCurrency === 'IQD' ? values.iqd : settlementCurrency === 'EGP' ? values.egp : values.usd;
-    // Reserve the current debt immediately. New sales after this moment build a
-    // new balance independently. If the creditor rejects, this amount returns.
+    // Reserve the current debt immediately. New operations after this point build
+    // a new balance independently. The reserved amount stays part of liability
+    // until Binance verification succeeds.
     balance.amountSignedUsd = 0;
     await balance.save({ transaction });
     const request = await NetworkDebtPayment.create({
@@ -322,12 +504,17 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw) {
       debtorShopId: debtor,
       creditorShopId: creditor,
       amountUsd: amount,
-      settlementCurrency,
-      settlementAmount: Number(settlementAmount.toFixed(settlementCurrency === 'IQD' ? 0 : 2)),
-      iqdAmount: Number(values.iqd.toFixed(2)),
-      egpAmount: Number(values.egp.toFixed(2)),
+      settlementCurrency: 'USD',
+      settlementAmount: amount,
+      iqdAmount: null,
+      egpAmount: null,
       status: 'pending',
-      requestedByShopId: debtor
+      requestedByShopId: debtor,
+      binancePayId,
+      submittedOrderId: null,
+      transactionId: null,
+      verificationError: null,
+      debtorNotified: false
     }, { transaction });
     await transaction.commit();
     return request;
@@ -335,6 +522,131 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw) {
     await transaction.rollback();
     throw error;
   }
+}
+
+async function submitDebtBinanceOrder(requestId, debtorShopIdRaw, submittedOrderId) {
+  const debtor = normalizeShopId(debtorShopIdRaw);
+  const orderId = String(submittedOrderId || '').trim();
+  if (!/^[A-Za-z0-9_-]{6,128}$/.test(orderId)) throw new Error('INVALID_ORDER_ID');
+  const transaction = await sequelize.transaction();
+  try {
+    const request = await NetworkDebtPayment.findByPk(String(requestId), { transaction, lock: transaction.LOCK.UPDATE });
+    if (!request || normalizeShopId(request.debtorShopId) !== debtor) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
+    if (request.status !== 'pending') throw new Error('PAYMENT_REQUEST_ALREADY_RESOLVED');
+    const duplicate = await NetworkDebtPayment.findOne({
+      where: {
+        id: { [Op.ne]: request.id },
+        [Op.or]: [
+          { submittedOrderId: orderId },
+          { transactionId: orderId }
+        ]
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (duplicate) throw new Error('DUPLICATE_TRANSACTION');
+    request.submittedOrderId = orderId;
+    request.verificationError = null;
+    request.debtorNotified = false;
+    await request.save({ transaction, fields: ['submittedOrderId', 'verificationError', 'debtorNotified'] });
+    await transaction.commit();
+    return request;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function debtBinanceVerificationsForCreditor(creditorShopIdRaw) {
+  const creditor = normalizeShopId(creditorShopIdRaw);
+  return NetworkDebtPayment.findAll({
+    where: {
+      creditorShopId: creditor,
+      status: 'pending',
+      submittedOrderId: { [Op.not]: null }
+    },
+    order: [['createdAt', 'ASC']],
+    limit: 100
+  });
+}
+
+async function finishDebtBinanceVerification(requestId, creditorShopIdRaw, result = {}) {
+  const creditor = normalizeShopId(creditorShopIdRaw);
+  const transaction = await sequelize.transaction();
+  try {
+    const request = await NetworkDebtPayment.findByPk(String(requestId), { transaction, lock: transaction.LOCK.UPDATE });
+    if (!request || normalizeShopId(request.creditorShopId) !== creditor) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
+    if (request.status !== 'pending') {
+      await transaction.commit();
+      return request;
+    }
+
+    if (result.success) {
+      const transactionId = String(result.transactionId || '').trim();
+      if (!transactionId) throw new Error('TRANSACTION_ID_REQUIRED');
+      const duplicate = await NetworkDebtPayment.findOne({
+        where: {
+          id: { [Op.ne]: request.id },
+          transactionId,
+          status: 'confirmed'
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (duplicate) {
+        request.verificationError = 'DUPLICATE_TRANSACTION';
+        request.submittedOrderId = null;
+        request.debtorNotified = false;
+        await request.save({ transaction, fields: ['verificationError', 'submittedOrderId', 'debtorNotified'] });
+        await transaction.commit();
+        return request;
+      }
+      request.status = 'confirmed';
+      request.confirmedByShopId = creditor;
+      request.transactionId = transactionId;
+      request.verificationError = null;
+      request.verifiedAt = new Date();
+      request.confirmedAt = new Date();
+      request.debtorNotified = false;
+      await request.save({ transaction });
+    } else {
+      request.verificationError = String(result.reason || 'NO_MATCH').slice(0, 80);
+      // Allow the debtor to submit another Order ID without creating a new debt request.
+      request.submittedOrderId = null;
+      request.debtorNotified = false;
+      await request.save({ transaction, fields: ['verificationError', 'submittedOrderId', 'debtorNotified'] });
+    }
+    await transaction.commit();
+    return request;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function debtPaymentResultsForDebtor(debtorShopIdRaw) {
+  const debtor = normalizeShopId(debtorShopIdRaw);
+  return NetworkDebtPayment.findAll({
+    where: {
+      debtorShopId: debtor,
+      debtorNotified: false,
+      [Op.or]: [
+        { status: 'confirmed' },
+        { verificationError: { [Op.not]: null } }
+      ]
+    },
+    order: [['updatedAt', 'ASC']],
+    limit: 100
+  });
+}
+
+async function acknowledgeDebtPaymentResult(requestId, debtorShopIdRaw) {
+  const debtor = normalizeShopId(debtorShopIdRaw);
+  const request = await NetworkDebtPayment.findOne({ where: { id: String(requestId), debtorShopId: debtor } });
+  if (!request) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
+  request.debtorNotified = true;
+  await request.save({ fields: ['debtorNotified'] });
+  return request;
 }
 
 async function resolveDebtPaymentRequest(requestId, actorShopIdRaw, approve) {
@@ -455,9 +767,16 @@ module.exports = {
   notificationEventsAfter,
   latestNotificationEventId,
   createDebtPaymentRequest,
+  submitDebtBinanceOrder,
+  debtBinanceVerificationsForCreditor,
+  finishDebtBinanceVerification,
+  debtPaymentResultsForDebtor,
+  acknowledgeDebtPaymentResult,
   resolveDebtPaymentRequest,
   salesStatsForProduct,
   getShopName,
   getShopCurrency,
-  currencySnapshot
+  currencySnapshot,
+  reconcilePairDebts,
+  reconcileAllForShop
 };
