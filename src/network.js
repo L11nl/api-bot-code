@@ -161,9 +161,34 @@ async function productStockProtection(merchantId, productOwnerShopId = 'master')
 
 async function syncCatalogToLocal() {
   if (!enabledClient()) return null;
+  const thisShopId = String(config.network.shopId || '');
+
+  // Service products are strictly local to the bot that created them.
+  // Migrate any service created by this shop in an older version from
+  // network-managed to local before syncing the shared catalog.
+  const localServices = await Merchant.findAll({ where: { type: 'service' } });
+  for (const service of localServices) {
+    const owner = String(service.networkOwnerShopId || '').trim();
+    if (!owner || owner === thisShopId) {
+      if (service.networkManaged || service.ownerNote !== 'Local service') {
+        await service.update({
+          networkManaged: false,
+          networkOwnerShopId: thisShopId,
+          isActive: true,
+          ownerNote: 'Local service'
+        });
+      }
+    } else if (service.isActive) {
+      // A legacy service copied from another bot must never be visible here.
+      await service.update({ isActive: false });
+    }
+  }
+
   const data = await clientRequest('get', '/api/v1/catalog');
   const seen = new Set();
   for (const remote of data.products || []) {
+    // Defense in depth: shared catalog must never contain service products.
+    if (String(remote.type || '') === 'service') continue;
     seen.add(remote.networkProductId);
     let product = await Merchant.findOne({ where: { networkProductId: remote.networkProductId } });
     const values = {
@@ -189,7 +214,22 @@ async function syncCatalogToLocal() {
   }
   const stale = await Merchant.findAll({ where: { networkManaged: true } });
   for (const product of stale) {
-    if (!seen.has(product.networkProductId)) await product.update({ isActive: false });
+    if (seen.has(product.networkProductId)) continue;
+    if (String(product.type || '') === 'service') {
+      const owner = String(product.networkOwnerShopId || '').trim();
+      if (!owner || owner === thisShopId) {
+        await product.update({
+          networkManaged: false,
+          networkOwnerShopId: thisShopId,
+          isActive: true,
+          ownerNote: 'Local service'
+        });
+      } else {
+        await product.update({ isActive: false });
+      }
+      continue;
+    }
+    await product.update({ isActive: false });
   }
   return data.products || [];
 }
@@ -755,7 +795,11 @@ function installMasterRoutes(app, getBot) {
     }
   };
 
-  app.get('/api/v1/catalog', (req, res) => route(req, res, async () => ({ products: await catalogSnapshot() })));
+  app.get('/api/v1/catalog', (req, res) => route(req, res, async () => ({
+    // "service" is a local-only product type. Never expose it through the
+    // shared network catalog, even if an old database row still exists.
+    products: (await catalogSnapshot()).filter(product => String(product.type || '') !== 'service')
+  })));
 
   app.get('/api/v1/status/me', (req, res) => route(req, res, async client => ({
     status: await ledger.commerceStatusForShop(client.shopId)
@@ -774,6 +818,7 @@ function installMasterRoutes(app, getBot) {
     const nameAr = String(body.nameAr || '').trim();
     const price = Number(body.price);
     const type = String(body.type || 'free');
+    if (type === 'service') throw new Error('SERVICE_PRODUCTS_ARE_LOCAL_ONLY');
     if (!nameAr || nameAr.length > 160) throw new Error('INVALID_PRODUCT_NAME');
     if (!Number.isFinite(price) || price < 0 || price > 1000000) throw new Error('INVALID_PRODUCT_PRICE');
     if (!['code', 'account', 'free', 'private', 'shared'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
@@ -812,6 +857,7 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
     const body = req.body || {};
+    if (String(body.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_ARE_LOCAL_ONLY');
     const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
