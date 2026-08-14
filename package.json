@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "11.9.0",
+  "version": "12.0.0",
   "private": true,
-  "description": "Telegram digital store v11.8 with USD-only customer wallets, currency-grouped shared payment methods, owner-routed approvals, fair network ledgers, and automatic USD debt settlement through each creditor shop Binance verification.",
+  "description": "Telegram digital store v12.0 with customer-selected USD/IQD/EGP display currency, network-wide shared payment wallets, owner-routed approvals, Binance USDT exception, and high-precision base wallet accounting.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
