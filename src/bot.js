@@ -239,6 +239,7 @@ function isMainMenuText(value) {
     t('ar', 'orders'), t('en', 'orders'),
     t('ar', 'support'), t('en', 'support'),
     t('ar', 'language'), t('en', 'language'),
+    '💱 العملة', '💱 Currency',
     '🎁 الهدايا والمشاركة', '🎁 Gifts & referrals',
     '📢 قناتنا', '📢 Our channel'
   ].includes(text);
@@ -274,6 +275,7 @@ async function getOrCreateUser(from) {
       verified: true,
       username: from.username || null,
       firstName: from.first_name || '',
+      paymentCurrency: null,
       referralProcessed: false
     }
   });
@@ -283,6 +285,47 @@ async function getOrCreateUser(from) {
   if (Object.keys(changes).length) await user.update(changes);
   user._createdNow = created;
   return user;
+}
+
+function normalizeCustomerPaymentCurrency(value) {
+  const code = String(value || '').toUpperCase();
+  return ['IQD', 'EGP'].includes(code) ? code : '';
+}
+
+function customerPaymentCurrencyLabel(currency, lang = 'ar') {
+  const code = normalizeCustomerPaymentCurrency(currency);
+  if (code === 'EGP') return lang === 'en' ? 'Egyptian pound' : 'الجنيه المصري';
+  if (code === 'IQD') return lang === 'en' ? 'Iraqi dinar' : 'الدينار العراقي';
+  return lang === 'en' ? 'Not selected' : 'غير محددة';
+}
+
+async function showCustomerCurrencySelector(chatId, user, after = 'main') {
+  const current = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
+  const text = user.lang === 'en'
+    ? [
+        '💱 <b>Choose your payment currency</b>',
+        '',
+        'Product prices and wallet balance stay in USD.',
+        'Your choice only controls which local payment methods are shown.',
+        current ? `Current choice: <b>${customerPaymentCurrencyLabel(current, 'en')}</b>` : ''
+      ].filter(Boolean).join('\n')
+    : [
+        '💱 <b>اختَر عملة الدفع</b>',
+        '',
+        'أسعار المنتجات ورصيد المحفظة يبقون بالدولار.',
+        'اختيارك يحدد فقط طرق الدفع المحلية اللي تظهر إلك.',
+        current ? `اختيارك الحالي: <b>${customerPaymentCurrencyLabel(current, 'ar')}</b>` : ''
+      ].filter(Boolean).join('\n');
+
+  return bot.sendMessage(chatId, text, {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🇪🇬 جنيه مصري', callback_data: `currency:set:EGP:${after}`, style: current === 'EGP' ? 'success' : 'primary' }],
+        [{ text: '🇮🇶 دينار عراقي', callback_data: `currency:set:IQD:${after}`, style: current === 'IQD' ? 'success' : 'primary' }]
+      ]
+    }
+  });
 }
 
 function mainKeyboard(lang, showReferrals = true, showChannel = false) {
@@ -298,7 +341,10 @@ function mainKeyboard(lang, showReferrals = true, showChannel = false) {
   ];
   if (showReferrals) keyboard.push([{ text: lang === 'en' ? '🎁 Gifts & referrals' : '🎁 الهدايا والمشاركة' }]);
   if (showChannel) keyboard.push([{ text: lang === 'en' ? '📢 Our channel' : '📢 قناتنا' }]);
-  keyboard.push([emojiButton('عربي / English', PREMIUM_EMOJI.language)]);
+  keyboard.push([
+    { text: lang === 'en' ? '💱 Currency' : '💱 العملة' },
+    emojiButton('عربي / English', PREMIUM_EMOJI.language)
+  ]);
   return {
     keyboard,
     resize_keyboard: true,
@@ -408,12 +454,33 @@ function formatPaymentCurrencyAmount(amount, currency, lang = 'ar') {
   return `${value} ${paymentCurrencyLabel(code, lang)}`;
 }
 
-function minimumTopupLocalAmount(ratePerUsd, currency, minimumUsd = 0.01) {
+function minimumTopupLocalAmount(ratePerUsd, currency, minimumUsd = 0.01, explicitMinimumLocal = null) {
   const code = normalizePaymentCurrency(currency);
+  const explicit = Number(explicitMinimumLocal);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    if (code === 'IQD') return Math.max(1, Math.ceil(explicit));
+    return Math.max(0.01, Math.ceil((explicit - 1e-9) * 100) / 100);
+  }
   const rate = Number(ratePerUsd || 1);
   const raw = Math.max(0.01, Number(minimumUsd || 0.01)) * (Number.isFinite(rate) && rate > 0 ? rate : 1);
   if (code === 'IQD') return Math.max(1, Math.ceil(raw));
   return Math.max(0.01, Math.ceil((raw - 1e-9) * 100) / 100);
+}
+
+function minimumTransferForMethod(method) {
+  const currency = normalizePaymentCurrency(method?.settlementCurrency || 'USD');
+  const fallback = currency === 'IQD' ? 1 : 0.01;
+  const value = Number(method?.minimumTransferAmount || fallback);
+  const normalized = Number.isFinite(value) && value > 0 ? value : fallback;
+  if (currency === 'IQD') return Math.max(1, Math.ceil(normalized));
+  return Math.max(0.01, Math.ceil((normalized - 1e-9) * 100) / 100);
+}
+
+function minimumTransferUsdForMethod(method) {
+  const local = paymentLocalAmount(1, method);
+  const minimumLocal = minimumTransferForMethod(method);
+  const rate = Number(local.rate || 1);
+  return Number((minimumLocal / (Number.isFinite(rate) && rate > 0 ? rate : 1)).toFixed(8));
 }
 
 async function resolveTopupInputContext(methodToken) {
@@ -433,7 +500,8 @@ async function resolveTopupInputContext(methodToken) {
     return {
       currency: normalizePaymentCurrency(local.currency),
       rate: Number(local.rate || 1),
-      minimumUsd: 0.01,
+      minimumUsd: minimumTransferUsdForMethod(method),
+      minimumLocal: minimumTransferForMethod(method),
       methodType: token,
       paymentMethodId: method.id,
       methodNameAr: method.nameAr,
@@ -450,10 +518,31 @@ async function resolveTopupInputContext(methodToken) {
       currency: normalizePaymentCurrency(local.currency),
       rate: Number(local.rate || 1),
       minimumUsd: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : 0.01,
+      minimumLocal: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : null,
       methodType: token,
       inheritedType,
       methodNameAr: method.nameAr,
       methodNameEn: method.nameEn
+    };
+  }
+  if (token.startsWith('shared:')) {
+    const methodId = token.slice('shared:'.length);
+    const shared = await network.listSharedPaymentMethods();
+    const method = (shared.methods || []).find(row => String(row.id || '') === methodId && row.isActive !== false);
+    if (!method) return null;
+    const local = paymentLocalAmount(1, method);
+    return {
+      currency: normalizePaymentCurrency(local.currency),
+      rate: Number(local.rate || 1),
+      minimumUsd: minimumTransferUsdForMethod(method),
+      minimumLocal: minimumTransferForMethod(method),
+      methodType: token,
+      sharedPaymentMethodId: method.id,
+      methodNameAr: method.nameAr,
+      methodNameEn: method.nameEn,
+      paymentNumber: method.paymentNumber,
+      ownerShopId: method.ownerShopId,
+      ownerShopName: method.ownerShopName
     };
   }
   return null;
@@ -462,7 +551,7 @@ async function resolveTopupInputContext(methodToken) {
 function topupAmountPrompt(context, lang = 'ar') {
   const currency = normalizePaymentCurrency(context?.currency);
   const rate = Number(context?.rate || 1);
-  const minimum = minimumTopupLocalAmount(rate, currency, context?.minimumUsd || 0.01);
+  const minimum = minimumTopupLocalAmount(rate, currency, context?.minimumUsd || 0.01, context?.minimumLocal);
   const minimumText = formatPaymentCurrencyAmount(minimum, currency, lang);
   if (lang === 'en') {
     if (currency === 'EGP') return `Send the top-up amount in Egyptian pounds (minimum ${minimumText}). Current rate: $1 = ${formatPaymentCurrencyAmount(rate, currency, lang)}.`;
@@ -474,14 +563,20 @@ function topupAmountPrompt(context, lang = 'ar') {
   return `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${Number(minimum).toFixed(2)}):`;
 }
 
-async function binanceShopEquivalentLine(amountUsd, lang = 'ar') {
-  const context = await shopMoneyContext();
-  if (normalizePaymentCurrency(context.currency) === 'USD') return '';
-  const local = formatPaymentCurrencyAmount(Number(amountUsd || 0) * Number(context.rate || 1), context.currency, lang);
-  const oneDollar = formatPaymentCurrencyAmount(Number(context.rate || 1), context.currency, lang);
-  return lang === 'en'
-    ? `💱 Store currency: $1 = ${oneDollar} — ${moneyUsd(amountUsd)} equals ${local}. Binance payment itself remains in USDT.`
-    : `💱 عملة المتجر: 1$ = ${oneDollar} — ${moneyUsd(amountUsd)} تعادل ${local}. الدفع عبر Binance يبقى USDT.`;
+async function syncPaymentMethodToNetwork(method) {
+  if (!method || (!network.isMaster() && !network.enabledClient())) return null;
+  return network.upsertSharedPaymentMethod({
+    localMethodId: method.id,
+    nameAr: method.nameAr,
+    nameEn: method.nameEn,
+    paymentNumber: method.paymentNumber,
+    iconCustomEmojiId: method.iconCustomEmojiId,
+    iconAlt: method.iconAlt,
+    settlementCurrency: method.settlementCurrency,
+    ratePerUsd: Number(method.ratePerUsd || 1),
+    minimumTransferAmount: minimumTransferForMethod(method),
+    isActive: Boolean(method.isActive)
+  });
 }
 
 async function createConfiguredPaymentMethod(data) {
@@ -494,9 +589,11 @@ async function createConfiguredPaymentMethod(data) {
     isActive: true,
     sortOrder: 0,
     settlementCurrency: data.settlementCurrency || 'USD',
-    ratePerUsd: Number(data.ratePerUsd || 1)
+    ratePerUsd: Number(data.ratePerUsd || 1),
+    minimumTransferAmount: Math.max(0.0001, Number(data.minimumTransferAmount || ((data.settlementCurrency || 'USD') === 'IQD' ? 1 : 0.01)))
   });
   if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
+  try { await syncPaymentMethodToNetwork(row); } catch (error) { console.error('Shared payment sync:', error.message); }
   return row;
 }
 
@@ -505,65 +602,166 @@ async function localSuperQiNumber() {
   return String(await getSuperQiNumber()).trim();
 }
 
-async function externalPaymentButtons(lang, mode = 'pay') {
-  const rows = [];
+async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
+  const lang = user?.lang === 'en' ? 'en' : 'ar';
+  const selectedCurrency = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
+  if (!selectedCurrency) return [];
+
   const hidden = await getHiddenPaymentTypes();
   const localBinanceReady = await binancePay.configured();
   const localSuperQi = await localSuperQiNumber();
+  const entries = [];
+  const currentShopId = network.isMaster() ? 'master' : (network.enabledClient() ? String(config.network.shopId) : 'standalone');
 
+  const pushEntry = (currency, button, minimumLocal = null, rate = 1, kind = 'local') => {
+    const normalizedCurrency = normalizePaymentCurrency(currency);
+    // Customers choose EGP or IQD. USD is reserved for Binance/USDT only.
+    if (normalizedCurrency !== selectedCurrency && normalizedCurrency !== 'USD') return;
+    if (normalizedCurrency === 'USD' && kind !== 'binance') return;
+    if (amountUsd != null && Number.isFinite(Number(amountUsd)) && minimumLocal != null) {
+      const dueLocal = Number(amountUsd) * Number(rate || 1);
+      if (dueLocal + 1e-9 < Number(minimumLocal || 0)) return;
+    }
+    entries.push({ currency: normalizedCurrency, button, kind });
+  };
+
+  let inheritedMethods = [];
+  if (network.enabledClient()) {
+    try {
+      const inherited = await network.fallbackPayments();
+      inheritedMethods = Array.isArray(inherited?.methods) ? inherited.methods : [];
+    } catch (error) {
+      console.error('Inherited payment methods:', error.message);
+    }
+  }
+
+  // Binance is always USDT. Use this shop's Binance first; clients fall back
+  // to the master's Binance only when they have not configured their own.
   if (localBinanceReady && !hidden.has('binance')) {
-    rows.push([emojiButton('Binance ID', PREMIUM_EMOJI.binance, {
+    pushEntry('USD', emojiButton('Binance ID', PREMIUM_EMOJI.binance, {
       callback_data: `${mode}:binance`,
       style: 'primary'
-    })]);
+    }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance');
+  } else if (network.enabledClient() && !hidden.has('binance')) {
+    const inheritedBinance = inheritedMethods.find(method => String(method.type || '') === 'binance');
+    if (inheritedBinance) {
+      const emoji = inheritedBinance.iconCustomEmojiId
+        ? { id: String(inheritedBinance.iconCustomEmojiId), alt: inheritedBinance.iconAlt || '💳' }
+        : PREMIUM_EMOJI.binance;
+      pushEntry('USD', emojiButton('Binance ID', emoji, {
+        callback_data: `${mode}:network:binance`,
+        style: 'primary'
+      }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance');
+    }
   }
-  if (localSuperQi && !hidden.has('superqi')) {
-    rows.push([emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
+
+  // A shop's own local methods have priority for the customer's selected
+  // currency. If the shop has any, other shops' methods for that currency stay
+  // hidden in this bot.
+  let localCurrencyMethods = 0;
+
+  if (selectedCurrency === 'IQD' && localSuperQi && !hidden.has('superqi')) {
+    const iqdRate = Number(await getIqdRate());
+    pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
       callback_data: `${mode}:superqi`,
       style: 'primary'
-    })]);
+    }), null, iqdRate, 'local');
+    localCurrencyMethods += 1;
   }
 
   const customMethods = await getActivePaymentMethods();
   for (const method of customMethods) {
-    rows.push([emojiButton(localizedPaymentName(method, lang), customPaymentEmoji(method), {
+    const local = paymentLocalAmount(1, method);
+    if (normalizePaymentCurrency(local.currency) !== selectedCurrency) continue;
+    pushEntry(local.currency, emojiButton(localizedPaymentName(method, lang), customPaymentEmoji(method), {
       callback_data: `${mode}:custom:${method.id}`,
       style: 'primary'
-    })]);
+    }), minimumTransferForMethod(method), local.rate, 'local');
+    localCurrencyMethods += 1;
   }
 
-  if (network.enabledClient()) {
-    try {
-      const inherited = await network.fallbackPayments();
-      const methods = Array.isArray(inherited?.methods) ? inherited.methods : [];
-      for (const method of methods) {
-        const type = String(method.type || '');
-        if (hidden.has(type)) continue;
-        if (type === 'binance' && localBinanceReady) continue;
-        if (type === 'superqi' && localSuperQi) continue;
-        const emoji = method.iconCustomEmojiId
-          ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
-          : (type === 'binance' ? PREMIUM_EMOJI.binance : type === 'superqi' ? PREMIUM_EMOJI.superqi : null);
-        const label = lang === 'en' ? (method.nameEn || method.nameAr) : (method.nameAr || method.nameEn);
-        rows.push([emojiButton(label, emoji, {
-          callback_data: `${mode}:network:${type}`,
+  if (localCurrencyMethods === 0) {
+    // For IQD, a client falls back to the master's private SuperQi if available.
+    if (network.enabledClient() && selectedCurrency === 'IQD' && !hidden.has('superqi')) {
+      const inheritedSuperQi = inheritedMethods.find(method => String(method.type || '') === 'superqi');
+      if (inheritedSuperQi) {
+        const emoji = inheritedSuperQi.iconCustomEmojiId
+          ? { id: String(inheritedSuperQi.iconCustomEmojiId), alt: inheritedSuperQi.iconAlt || '💳' }
+          : PREMIUM_EMOJI.superqi;
+        const local = paymentLocalAmount(1, inheritedSuperQi);
+        pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', emoji, {
+          callback_data: `${mode}:network:superqi`,
           style: 'primary'
-        })]);
+        }), null, local.rate, 'fallback');
+      }
+    }
+
+    // Custom methods are shared. Prefer the master's methods for a client.
+    // If the master has none for this currency (for example EGP), use one
+    // shared provider group, which naturally lets Ahmed provide Egyptian rails
+    // to the rest of the network. A shop that adds its own methods overrides
+    // this fallback only inside its own bot.
+    try {
+      const shared = await network.listSharedPaymentMethods();
+      const candidates = (shared.methods || []).filter(method =>
+        method.isActive !== false &&
+        normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency &&
+        String(method.ownerShopId || '') !== currentShopId
+      );
+
+      let providerId = '';
+      if (network.enabledClient() && candidates.some(method => String(method.ownerShopId || '') === 'master')) {
+        providerId = 'master';
+      } else if (candidates.length) {
+        providerId = String(candidates[0].ownerShopId || '');
+      }
+
+      for (const method of candidates.filter(row => String(row.ownerShopId || '') === providerId)) {
+        const labelBase = lang === 'en' ? (method.nameEn || method.nameAr) : (method.nameAr || method.nameEn);
+        const owner = String(method.ownerShopName || method.ownerShopId || '').trim();
+        const label = owner ? `${labelBase} • ${owner}` : labelBase;
+        const emoji = method.iconCustomEmojiId ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' } : null;
+        const local = paymentLocalAmount(1, method);
+        pushEntry(local.currency, emojiButton(label, emoji, {
+          callback_data: `${mode}:shared:${method.id}`,
+          style: 'primary'
+        }), minimumTransferForMethod(method), local.rate, 'fallback');
       }
     } catch (error) {
-      console.error('Inherited payment methods:', error.message);
+      console.error('Shared payment methods:', error.message);
     }
+  }
+
+  const groupLabels = lang === 'en'
+    ? { USD: '💵 Pay with USDT', IQD: '🇮🇶 Pay in Iraqi dinar', EGP: '🇪🇬 Pay in Egyptian pound' }
+    : { USD: '💵 دفع بالدولار USDT', IQD: '🇮🇶 دفع بالدينار العراقي', EGP: '🇪🇬 دفع بالجنيه المصري' };
+  const rows = [];
+  for (const currency of ['USD', selectedCurrency]) {
+    const group = entries.filter(entry => entry.currency === currency);
+    if (!group.length) continue;
+    rows.push([{ text: groupLabels[currency], callback_data: `noop:payment_group:${currency}` }]);
+    for (const entry of group) rows.push([entry.button]);
   }
   return rows;
 }
 
 async function showWalletMenu(chatId, user) {
-  const [fresh, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
-  const inline = await externalPaymentButtons(user.lang, 'topup');
+  const fresh = await User.findByPk(user.id);
+  const selectedCurrency = normalizeCustomerPaymentCurrency(fresh?.paymentCurrency);
+  if (!selectedCurrency) return showCustomerCurrencySelector(chatId, fresh || user, 'wallet');
+
+  const inline = await externalPaymentButtons(fresh, 'topup');
+  inline.push([{ text: fresh.lang === 'en' ? '💱 Change payment currency' : '💱 تغيير عملة الدفع', callback_data: 'currency:choose:wallet' }]);
   if (isAdmin(user.id)) {
     inline.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
   }
-  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${customerMoney(fresh.balance, moneyContext, user.lang)}`, {
+  const currencyLine = fresh.lang === 'en'
+    ? `Selected local currency: <b>${customerPaymentCurrencyLabel(selectedCurrency, 'en')}</b>`
+    : `عملة الدفع المحلية: <b>${customerPaymentCurrencyLabel(selectedCurrency, 'ar')}</b>`;
+  return bot.sendMessage(chatId, [
+    `${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(fresh.lang, 'walletBalance')}:</b> ${moneyUsd(fresh.balance)}`,
+    currencyLine
+  ].join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: inline }
   });
@@ -741,6 +939,9 @@ async function sendCaptcha(chatId, userId, lang) {
 }
 
 async function showMain(chatId, user) {
+  if (!isAdmin(user.id) && !normalizeCustomerPaymentCurrency(user.paymentCurrency)) {
+    return showCustomerCurrencySelector(chatId, user, 'main');
+  }
   if (!isAdmin(user.id)) {
     const joined = await ensureRequiredChannel(chatId, user);
     if (!joined) return;
@@ -1353,8 +1554,8 @@ async function notifyBinanceResult(result) {
     const manual = Boolean(result.manual);
     const moneyContext = await shopMoneyContext();
     const text = lang === 'en'
-      ? `✅ Wallet credited through Binance${manual ? ' after admin verification' : ''}.\nAmount: <b>${customerMoney(result.amount, moneyContext, lang)}</b>\nNew balance: <b>${customerMoney(result.newBalance, moneyContext, lang)}</b>`
-      : `✅ تم شحن محفظتك عبر Binance${manual ? ' بعد تحقق الإدارة' : ' تلقائياً'}.\nالمبلغ: <b>${customerMoney(result.amount, moneyContext, lang)}</b>\nالرصيد الجديد: <b>${customerMoney(result.newBalance, moneyContext, lang)}</b>`;
+      ? `✅ Wallet credited through Binance${manual ? ' after admin verification' : ''}.\nAmount: <b>${moneyUsd(result.amount)}</b>\nNew balance: <b>${moneyUsd(result.newBalance)}</b>`
+      : `✅ تم شحن محفظتك عبر Binance${manual ? ' بعد تحقق الإدارة' : ' تلقائياً'}.\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(result.newBalance)}</b>`;
     await bot.sendMessage(result.userId, text, { parse_mode: 'HTML' });
     await notifyAdmins(`✅ شحن Binance ${manual ? 'بعد تحقق يدوي' : 'تلقائي'}\nالمستخدم: <code>${result.userId}</code>\nالمبلغ: <b>${moneyUsd(result.amount)}</b>\nرقم العملية: <code>${escapeHtml(result.transactionId || '')}</code>`);
     return;
@@ -1469,6 +1670,7 @@ bot.on('message', async msg => {
     }
 
     if (msg.text === t('ar', 'wallet') || msg.text === t('en', 'wallet')) {
+      if (!normalizeCustomerPaymentCurrency(user.paymentCurrency)) return showCustomerCurrencySelector(msg.chat.id, user, 'wallet');
       if (!isAdmin(user.id)) {
         const status = await currentCommerceStatus();
         if (status?.suspended) return bot.sendMessage(msg.chat.id, suspendedStoreText(user.lang, status), { reply_markup: suspendedMainKeyboard(user.lang) });
@@ -1514,6 +1716,10 @@ bot.on('message', async msg => {
       });
     }
 
+    if (msg.text === '💱 العملة' || msg.text === '💱 Currency') {
+      return showCustomerCurrencySelector(msg.chat.id, user, 'main');
+    }
+
     if (msg.text === t('ar', 'language') || msg.text === t('en', 'language')) {
       user.lang = user.lang === 'ar' ? 'en' : 'ar';
       await user.save();
@@ -1529,9 +1735,28 @@ bot.on('callback_query', async query => {
   if (!query.from || !rateAllowed(query.from.id)) return;
   const user = await getOrCreateUser(query.from);
   const data = String(query.data || '');
+  if (data.startsWith('noop:')) return answerCallback(query.id);
 
   if (user.blocked && !isAdmin(user.id)) return answerCallback(query.id, 'حسابك محظور.', true);
   if (data === 'noop') return answerCallback(query.id);
+
+  if (data.startsWith('currency:choose:')) {
+    const after = String(data.split(':')[2] || 'main');
+    await answerCallback(query.id);
+    return showCustomerCurrencySelector(query.message.chat.id, user, after);
+  }
+
+  if (data.startsWith('currency:set:')) {
+    const parts = data.split(':');
+    const currency = normalizeCustomerPaymentCurrency(parts[2]);
+    const after = String(parts[3] || 'main');
+    if (!currency) return answerCallback(query.id, user.lang === 'en' ? 'Invalid currency.' : 'عملة غير صحيحة.', true);
+    user.paymentCurrency = currency;
+    await user.save({ fields: ['paymentCurrency'] });
+    await answerCallback(query.id, user.lang === 'en' ? 'Currency saved.' : 'تم حفظ العملة.');
+    if (after === 'wallet') return showWalletMenu(query.message.chat.id, user);
+    return showMain(query.message.chat.id, user);
+  }
 
   if (data === 'flow:cancel') {
     const state = parseState(await User.findByPk(user.id));
@@ -1698,6 +1923,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('binmanual:approve:') || data.startsWith('binmanual:reject:')) return handleBinanceManualAdmin(query, data);
     if (data.startsWith('netord:approve:') || data.startsWith('netord:reject:')) return handleNetworkOrderAdmin(query, data);
     if (data.startsWith('nettop:approve:') || data.startsWith('nettop:reject:')) return handleNetworkTopupAdmin(query, data);
+    if (data.startsWith('shpay:approve:') || data.startsWith('shpay:reject:')) return handleSharedPaymentOwnerAdmin(query, data);
 
     if (data.startsWith('adm:')) {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
@@ -1731,6 +1957,9 @@ async function handleBuy(query, user, merchantId) {
 
 async function sendCheckoutOptions(chatId, user, product, quantity) {
   const [freshUser, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
+  if (!normalizeCustomerPaymentCurrency(freshUser?.paymentCurrency)) {
+    return showCustomerCurrencySelector(chatId, freshUser || user, 'main');
+  }
   const total = Number(product.price) * Number(quantity);
   const balance = Number(freshUser?.balance || 0);
   const canUseWallet = balance + 1e-9 >= total;
@@ -1745,11 +1974,11 @@ async function sendCheckoutOptions(chatId, user, product, quantity) {
       style: 'primary'
     })]);
   }
-  buttons.push(...await externalPaymentButtons(user.lang, 'pay'));
+  buttons.push(...await externalPaymentButtons(freshUser, 'pay', missing > 0 ? missing : total));
 
   const lines = [];
   if (!canUseWallet) {
-    lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${customerMoney(balance, moneyContext, user.lang)}`);
+    lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${moneyUsd(balance)}`);
     lines.push(`💰 <b>${user.lang === 'en' ? 'Product total' : 'سعر المنتج'}:</b> ${moneyUsd(total)}`);
     lines.push(`➕ <b>${user.lang === 'en' ? 'Amount needed to complete payment' : 'يجب إرسال لإكمال الدفع'}:</b> ${moneyUsd(missing)}`);
     lines.push('');
@@ -1778,8 +2007,38 @@ async function handleQuantity(query, user, data) {
   return sendCheckoutOptions(query.message.chat.id, user, product, quantity);
 }
 
+async function paymentTokenMatchesCustomerCurrency(user, methodToken) {
+  const token = String(methodToken || '');
+  if (token === 'wallet' || token === 'binance' || token === 'network:binance') return true;
+  const selectedCurrency = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
+  if (!selectedCurrency) return false;
+  if (token === 'superqi' || token === 'network:superqi') return selectedCurrency === 'IQD';
+  try {
+    if (token.startsWith('custom:')) {
+      const id = Number(token.split(':')[1]);
+      const method = await PaymentMethod.findOne({ where: { id, isActive: true } });
+      return Boolean(method && normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency);
+    }
+    if (token.startsWith('shared:')) {
+      const id = token.slice('shared:'.length);
+      const shared = await network.listSharedPaymentMethods();
+      const method = (shared.methods || []).find(row => String(row.id || '') === id && row.isActive !== false);
+      return Boolean(method && normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency);
+    }
+  } catch (error) {
+    console.error('Payment currency validation:', error.message);
+    return false;
+  }
+  return false;
+}
+
 async function handlePayment(query, user, data) {
   const methodToken = data.slice('pay:'.length);
+  const currencyUser = await User.findByPk(user.id);
+  if (!(await paymentTokenMatchesCustomerCurrency(currencyUser || user, methodToken))) {
+    await answerCallback(query.id, user.lang === 'en' ? 'Choose the matching payment currency first.' : 'اختَر عملة الدفع المناسبة أولاً.', true);
+    return showCustomerCurrencySelector(query.message.chat.id, currencyUser || user, 'main');
+  }
   const hiddenTypes = await getHiddenPaymentTypes();
   const visibilityType = methodToken.startsWith('network:')
     ? methodToken.slice('network:'.length)
@@ -1797,11 +2056,40 @@ async function handlePayment(query, user, data) {
 
   let method = methodToken;
   let customMethod = null;
+  let sharedMethod = null;
   if (methodToken.startsWith('custom:')) {
     const customId = Number(methodToken.split(':')[1]);
     customMethod = await PaymentMethod.findOne({ where: { id: customId, isActive: true } });
     if (!customMethod) return answerCallback(query.id, user.lang === 'en' ? 'Payment method is unavailable.' : 'طريقة الدفع غير متاحة.', true);
     method = `custom:${customMethod.id}`;
+    const walletPart = Math.min(Number(freshUser.balance || 0), expectedTotal);
+    const expectedExternal = Math.max(0, expectedTotal - walletPart) || expectedTotal;
+    const local = paymentLocalAmount(expectedExternal, customMethod);
+    const minimumLocal = minimumTransferForMethod(customMethod);
+    if (local.amount + 1e-9 < minimumLocal) {
+      return answerCallback(query.id, user.lang === 'en'
+        ? `Minimum for this method is ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`
+        : `الحد الأدنى لهذه الطريقة هو ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`, true);
+    }
+  } else if (methodToken.startsWith('shared:')) {
+    const sharedId = methodToken.slice('shared:'.length);
+    try {
+      const shared = await network.listSharedPaymentMethods();
+      sharedMethod = (shared.methods || []).find(row => String(row.id || '') === sharedId && row.isActive !== false) || null;
+    } catch (error) {
+      console.error('Resolve shared payment:', error.message);
+    }
+    if (!sharedMethod) return answerCallback(query.id, user.lang === 'en' ? 'Shared payment method is unavailable.' : 'طريقة الدفع المشتركة غير متاحة.', true);
+    method = `shared:${sharedMethod.id}`;
+    const walletPart = Math.min(Number(freshUser.balance || 0), expectedTotal);
+    const expectedExternal = Math.max(0, expectedTotal - walletPart);
+    const local = paymentLocalAmount(expectedExternal, sharedMethod);
+    const minimumLocal = minimumTransferForMethod(sharedMethod);
+    if (local.amount + 1e-9 < minimumLocal) {
+      return answerCallback(query.id, user.lang === 'en'
+        ? `Minimum for this method is ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`
+        : `الحد الأدنى لهذه الطريقة هو ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`, true);
+    }
   }
 
   if (method === 'wallet' && Number(freshUser.balance || 0) + 1e-9 < expectedTotal) {
@@ -1855,6 +2143,41 @@ async function handlePayment(query, user, data) {
     return sendBinanceInstructions(user, created.transfer, order.id);
   }
 
+  if (sharedMethod) {
+    order.paymentOrigin = 'network_shared';
+    await order.save({ fields: ['paymentOrigin'] });
+    const local = paymentLocalAmount(amountDue, sharedMethod);
+    const minimumLocal = minimumTransferForMethod(sharedMethod);
+    if (local.amount + 1e-9 < minimumLocal) {
+      await refundWalletReservation(order.id).catch(() => {});
+      await order.update({ status: 'cancelled' }).catch(() => {});
+      return bot.sendMessage(user.id, user.lang === 'en'
+        ? `❌ Minimum for this method is ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`
+        : `❌ الحد الأدنى لهذه الطريقة هو ${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}.`);
+    }
+    await setState(user.id, {
+      action: 'shared_payment_proof',
+      orderId: order.id,
+      sharedPaymentMethodId: sharedMethod.id,
+      methodNameAr: sharedMethod.nameAr,
+      methodNameEn: sharedMethod.nameEn,
+      paymentAmount: local.amount
+    });
+    const methodName = user.lang === 'en' ? (sharedMethod.nameEn || sharedMethod.nameAr) : (sharedMethod.nameAr || sharedMethod.nameEn);
+    return bot.sendMessage(user.id, [
+      `💳 <b>${escapeHtml(methodName)}</b>`,
+      sharedMethod.ownerShopName ? `${user.lang === 'en' ? 'Payment owner' : 'صاحب طريقة الدفع'}: <b>${escapeHtml(sharedMethod.ownerShopName)}</b>` : '',
+      '',
+      `${user.lang === 'en' ? 'Order amount' : 'المبلغ المطلوب'}: <b>${moneyUsd(amountDue)}</b>`,
+      `${user.lang === 'en' ? 'Amount in payment currency' : 'المبلغ بعملة الدفع'}: <b>${formatPaymentCurrencyAmount(local.amount, local.currency, user.lang)}</b>`,
+      `${user.lang === 'en' ? 'Send to' : 'حوّل إلى'}: <code>${escapeHtml(sharedMethod.paymentNumber)}</code>`,
+      `${user.lang === 'en' ? 'Minimum transfer' : 'الحد الأدنى للتحويل'}: <b>${formatPaymentCurrencyAmount(minimumLocal, local.currency, user.lang)}</b>`,
+      '',
+      t(user.lang, 'proofPrompt'),
+      user.lang === 'en' ? 'The payment-method owner will confirm receipt.' : 'صاحب طريقة الدفع راح يؤكد وصول المبلغ.'
+    ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
   if (method.startsWith('network:')) {
     const inheritedType = method.slice('network:'.length);
     const options = await network.fallbackPayments();
@@ -1884,12 +2207,10 @@ async function handlePayment(query, user, data) {
       order.paymentRef = `network-binance:${intent.intentId}`;
       await order.save({ fields: ['paymentRef'] });
       await setState(user.id, { action: 'network_binance_verify_order', orderId: order.id, intentId: intent.intentId });
-      const equivalentLine = await binanceShopEquivalentLine(amountDue, user.lang);
       return bot.sendMessage(user.id, [
         `✅ <b>${user.lang === 'en' ? 'Payment request created' : 'تم إنشاء طلب الدفع'}</b>`,
         '',
         `💰 ${user.lang === 'en' ? 'Send' : 'حوّل'}: <b>${Number(amountDue).toFixed(2)} USDT</b>`,
-        equivalentLine,
         `🆔 ${user.lang === 'en' ? 'To Binance ID' : 'إلى Binance ID'}:`,
         `<code>${escapeHtml(intent.payId)}</code>`,
         '',
@@ -1960,15 +2281,7 @@ async function handlePayment(query, user, data) {
 
 async function sendBinanceInstructions(user, transfer, orderId = null) {
   await setState(user.id, { action: 'binance_verify', transferId: transfer.id, orderId });
-  const base = await binancePay.instructions(transfer, user.lang);
-  const equivalentLine = await binanceShopEquivalentLine(Number(transfer.expectedAmount || 0), user.lang);
-  let text = base;
-  if (equivalentLine) {
-    const lines = String(base).split('\n');
-    const insertAt = Math.max(0, lines.length - 1);
-    lines.splice(insertAt, 0, equivalentLine, '');
-    text = lines.join('\n');
-  }
+  const text = await binancePay.instructions(transfer, user.lang);
   return bot.sendMessage(user.id, text, {
     parse_mode: 'HTML',
     reply_markup: cancelInlineKeyboard()
@@ -1976,6 +2289,11 @@ async function sendBinanceInstructions(user, transfer, orderId = null) {
 }
 
 async function handleTopupStart(query, user, methodToken) {
+  const currencyUser = await User.findByPk(user.id);
+  if (!(await paymentTokenMatchesCustomerCurrency(currencyUser || user, methodToken))) {
+    await answerCallback(query.id, user.lang === 'en' ? 'Choose the matching payment currency first.' : 'اختَر عملة الدفع المناسبة أولاً.', true);
+    return showCustomerCurrencySelector(query.message.chat.id, currencyUser || user, 'wallet');
+  }
   const hiddenTypes = await getHiddenPaymentTypes();
   const visibilityType = methodToken.startsWith('network:')
     ? methodToken.slice('network:'.length)
@@ -2003,7 +2321,8 @@ async function handleTopupStart(query, user, methodToken) {
     method: methodToken,
     topupCurrency: inputContext.currency,
     topupRatePerUsd: inputContext.rate,
-    topupMinimumUsd: inputContext.minimumUsd
+    topupMinimumUsd: inputContext.minimumUsd,
+    topupMinimumLocal: inputContext.minimumLocal || null
   });
   await answerCallback(query.id);
   return bot.sendMessage(user.id, topupAmountPrompt(inputContext, user.lang), { reply_markup: cancelInlineKeyboard() });
@@ -2072,7 +2391,7 @@ async function handleStateMessage(msg, user, state) {
     const inputCurrency = normalizePaymentCurrency(state.topupCurrency || 'USD');
     const inputRate = Number(state.topupRatePerUsd || 1);
     const minimumUsd = Math.max(0.01, Number(state.topupMinimumUsd || (state.method === 'binance' ? config.binance.minAmount : 0.01)));
-    const minimumLocal = minimumTopupLocalAmount(inputRate, inputCurrency, minimumUsd);
+    const minimumLocal = minimumTopupLocalAmount(inputRate, inputCurrency, minimumUsd, state.topupMinimumLocal);
     const exactUsd = enteredAmount / (Number.isFinite(inputRate) && inputRate > 0 ? inputRate : 1);
     const amount = Number(exactUsd.toFixed(2));
 
@@ -2092,6 +2411,54 @@ async function handleStateMessage(msg, user, state) {
       }
       await clearState(user.id);
       await sendBinanceInstructions(user, created.transfer);
+      return true;
+    }
+
+    if (String(state.method || '').startsWith('shared:')) {
+      const sharedId = String(state.method).slice('shared:'.length);
+      let sharedMethod = null;
+      try {
+        const shared = await network.listSharedPaymentMethods();
+        sharedMethod = (shared.methods || []).find(row => String(row.id || '') === sharedId && row.isActive !== false) || null;
+      } catch (error) {
+        console.error('Resolve shared topup method:', error.message);
+      }
+      if (!sharedMethod) {
+        await clearState(user.id);
+        await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Shared payment method is unavailable.' : '❌ طريقة الدفع المشتركة غير متاحة.');
+        return true;
+      }
+      const transaction = await BalanceTransaction.create({
+        userId: user.id,
+        amount,
+        type: 'deposit',
+        txid: `SHARED-${Date.now()}-${user.id}`,
+        caption: `${sharedMethod.nameAr || sharedMethod.nameEn} shared wallet topup (${enteredAmount} ${inputCurrency})`,
+        status: 'awaiting_proof',
+        paymentOrigin: 'network_shared',
+        networkMethod: sharedMethod.id,
+        lastReminderAt: new Date()
+      });
+      await setState(user.id, {
+        action: 'shared_topup_proof',
+        transactionId: transaction.id,
+        sharedPaymentMethodId: sharedMethod.id,
+        methodNameAr: sharedMethod.nameAr,
+        methodNameEn: sharedMethod.nameEn,
+        paymentAmount: enteredAmount
+      });
+      const methodName = user.lang === 'en' ? (sharedMethod.nameEn || sharedMethod.nameAr) : (sharedMethod.nameAr || sharedMethod.nameEn);
+      await bot.sendMessage(user.id, [
+        `💳 <b>${escapeHtml(methodName)}</b>`,
+        sharedMethod.ownerShopName ? `${user.lang === 'en' ? 'Payment owner' : 'صاحب طريقة الدفع'}: <b>${escapeHtml(sharedMethod.ownerShopName)}</b>` : '',
+        '',
+        `${user.lang === 'en' ? 'Top-up amount' : 'مبلغ الشحن'}: <b>${formatPaymentCurrencyAmount(enteredAmount, inputCurrency, user.lang)}</b>`,
+        `${user.lang === 'en' ? 'Wallet credit' : 'يضاف للمحفظة'}: <b>${moneyUsd(amount)}</b>`,
+        `${user.lang === 'en' ? 'Send to' : 'حوّل إلى'}: <code>${escapeHtml(sharedMethod.paymentNumber)}</code>`,
+        '',
+        t(user.lang, 'proofPrompt'),
+        user.lang === 'en' ? 'The payment-method owner will confirm receipt.' : 'صاحب طريقة الدفع راح يؤكد وصول المبلغ.'
+      ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
@@ -2133,12 +2500,10 @@ async function handleStateMessage(msg, user, state) {
           lastReminderAt: new Date()
         });
         await setState(user.id, { action: 'network_binance_verify_topup', intentId: intent.intentId, transactionId: transaction.id });
-        const equivalentLine = await binanceShopEquivalentLine(amount, user.lang);
         await bot.sendMessage(user.id, [
           `✅ <b>${user.lang === 'en' ? 'Top-up request created' : 'تم إنشاء طلب الشحن'}</b>`,
           '',
           `💰 ${user.lang === 'en' ? 'Send' : 'حوّل'}: <b>${Number(amount).toFixed(2)} USDT</b>`,
-          equivalentLine,
           `🆔 ${user.lang === 'en' ? 'To Binance ID' : 'إلى Binance ID'}:`,
           `<code>${escapeHtml(intent.payId)}</code>`,
           '',
@@ -2299,7 +2664,7 @@ async function handleStateMessage(msg, user, state) {
     }).catch(error => console.error('Settlement notify failed:', error.message));
     await clearState(user.id);
     const [updated, moneyContext] = await Promise.all([User.findByPk(user.id), shopMoneyContext()]);
-    await bot.sendMessage(user.id, `✅ ${user.lang === 'en' ? 'Balance credited' : 'تم شحن رصيدك'}: <b>${customerMoney(amount, moneyContext, user.lang)}</b>\n${t(user.lang, 'walletBalance')}: <b>${customerMoney(updated.balance, moneyContext, user.lang)}</b>`, { parse_mode: 'HTML' });
+    await bot.sendMessage(user.id, `✅ ${user.lang === 'en' ? 'Balance credited' : 'تم شحن رصيدك'}: <b>${moneyUsd(amount)}</b>\n${t(user.lang, 'walletBalance')}: <b>${moneyUsd(updated.balance)}</b>`, { parse_mode: 'HTML' });
     return true;
   }
 
@@ -2496,6 +2861,87 @@ async function handleStateMessage(msg, user, state) {
     return true;
   }
 
+  if (state.action === 'shared_payment_proof') {
+    const fileId = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : msg.document?.file_id;
+    if (!fileId) {
+      await bot.sendMessage(user.id, t(user.lang, 'proofPrompt'));
+      return true;
+    }
+    const order = await PurchaseOrder.findByPk(state.orderId);
+    if (!order || String(order.userId) !== String(user.id) || order.status !== 'pending_payment') {
+      await clearState(user.id);
+      return true;
+    }
+    try {
+      const created = await network.createSharedPaymentRequest({
+        sharedPaymentMethodId: state.sharedPaymentMethodId,
+        activity: 'purchase',
+        sourceRef: `order:${order.id}`,
+        sourceEntityId: String(order.id),
+        customerId: String(user.id),
+        customerName: user.firstName || user.username || String(user.id),
+        amountUsd: Number(order.externalAmount || order.totalAmount),
+        paymentAmount: Number(state.paymentAmount || 0) || undefined
+      });
+      order.proofFileId = fileId;
+      order.status = 'proof_pending';
+      order.paymentOrigin = 'network_shared';
+      order.paymentRef = `sharedreq:${created.request.id}`;
+      await order.save();
+      await clearState(user.id);
+      const ownerName = created.method?.ownerShopName || created.method?.ownerShopId || '';
+      await bot.sendMessage(user.id, user.lang === 'en'
+        ? `✅ Receipt recorded. ${ownerName ? `The payment owner (${ownerName})` : 'The payment owner'} will confirm the transfer, then delivery will complete automatically.`
+        : `✅ تم تسجيل الإيصال. ${ownerName ? `صاحب طريقة الدفع (${ownerName})` : 'صاحب طريقة الدفع'} راح يؤكد وصول المبلغ، وبعدها يتم التسليم تلقائياً.`);
+    } catch (error) {
+      console.error('Create shared purchase request:', error.message);
+      await bot.sendMessage(user.id, error.message === 'BELOW_MINIMUM_TRANSFER'
+        ? '❌ المبلغ أقل من الحد الأدنى لهذه الطريقة.'
+        : '❌ تعذر إرسال طلب التحقق لصاحب طريقة الدفع. جرّب مرة ثانية أو اكتب إغلاق.');
+    }
+    return true;
+  }
+
+  if (state.action === 'shared_topup_proof') {
+    const fileId = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : msg.document?.file_id;
+    if (!fileId) {
+      await bot.sendMessage(user.id, t(user.lang, 'proofPrompt'));
+      return true;
+    }
+    const transaction = await BalanceTransaction.findByPk(state.transactionId);
+    if (!transaction || String(transaction.userId) !== String(user.id) || transaction.status !== 'awaiting_proof') {
+      await clearState(user.id);
+      return true;
+    }
+    try {
+      const created = await network.createSharedPaymentRequest({
+        sharedPaymentMethodId: state.sharedPaymentMethodId,
+        activity: 'topup',
+        sourceRef: `topup:${transaction.id}`,
+        sourceEntityId: String(transaction.id),
+        customerId: String(user.id),
+        customerName: user.firstName || user.username || String(user.id),
+        amountUsd: Number(transaction.amount),
+        paymentAmount: Number(state.paymentAmount || 0) || undefined
+      });
+      transaction.imageFileId = fileId;
+      transaction.status = 'proof_pending';
+      transaction.txid = `SHAREDREQ-${created.request.id}`;
+      await transaction.save();
+      await clearState(user.id);
+      const ownerName = created.method?.ownerShopName || created.method?.ownerShopId || '';
+      await bot.sendMessage(user.id, user.lang === 'en'
+        ? `✅ Receipt recorded. ${ownerName ? `The payment owner (${ownerName})` : 'The payment owner'} will confirm it, then your wallet will be credited automatically.`
+        : `✅ تم تسجيل الإيصال. ${ownerName ? `صاحب طريقة الدفع (${ownerName})` : 'صاحب طريقة الدفع'} راح يؤكد وصول المبلغ، وبعدها تنشحن محفظتك تلقائياً.`);
+    } catch (error) {
+      console.error('Create shared topup request:', error.message);
+      await bot.sendMessage(user.id, error.message === 'BELOW_MINIMUM_TRANSFER'
+        ? '❌ المبلغ أقل من الحد الأدنى لهذه الطريقة.'
+        : '❌ تعذر إرسال طلب التحقق لصاحب طريقة الدفع. جرّب مرة ثانية أو اكتب إغلاق.');
+    }
+    return true;
+  }
+
   if (state.action === 'custom_topup_proof') {
     if (!msg.photo?.length) {
       await bot.sendMessage(user.id, t(user.lang, 'proofPrompt'));
@@ -2581,6 +3027,36 @@ async function handleStateMessage(msg, user, state) {
   }
 
   if (!isAdmin(user.id)) return false;
+
+  if (state.action === 'admin_debt_binance_order') {
+    const submittedOrderId = String(msg.text || '').trim();
+    if (!/^[A-Za-z0-9_-]{6,128}$/.test(submittedOrderId)) {
+      await bot.sendMessage(user.id, '❌ Order ID غير صحيح. أرسل المعرف كما يظهر داخل Binance.');
+      return true;
+    }
+    try {
+      const result = await network.submitDebtBinanceOrder(state.debtPaymentId, submittedOrderId);
+      await clearState(user.id);
+      await bot.sendMessage(user.id, [
+        '🔄 <b>تم استلام Order ID</b>',
+        '',
+        `المبلغ: <b>$${Number(state.amountUsd || result?.request?.amountUsd || 0).toFixed(2)}</b>`,
+        `إلى: <b>${escapeHtml(state.creditorName || state.creditorShopId || '')}</b>`,
+        '',
+        'النظام راح يتحقق تلقائياً من حساب Binance الخاص بالطرف المستلم.',
+        'إذا نجحت العملية ينغلق الدين تلقائياً وينفتح البيع إذا كان متوقف.'
+      ].join('\n'), { parse_mode: 'HTML' });
+      return true;
+    } catch (error) {
+      const text = error.message === 'DUPLICATE_TRANSACTION'
+        ? '❌ Order ID مستخدم سابقاً بتسوية ثانية.'
+        : error.message === 'INVALID_ORDER_ID'
+          ? '❌ Order ID غير صحيح.'
+          : `❌ تعذر حفظ Order ID: ${error.message}`;
+      await bot.sendMessage(user.id, text);
+      return true;
+    }
+  }
 
   if (state.action === 'admin_broadcast') {
     await clearState(user.id);
@@ -2782,7 +3258,7 @@ async function handleStateMessage(msg, user, state) {
       data.iconCustomEmojiId = rich.firstCustomEmojiId || '';
       data.iconAlt = rich.firstCustomEmojiAlt || '💳';
       await setState(user.id, { action: 'admin_new_payment_method', step: 'number', data });
-      await bot.sendMessage(user.id, '2/4 أرسل رقم/معرّف الدفع الذي راح يظهر للزبون.\nمثال: 0770xxxxxxx أو Wallet-ID-123', { reply_markup: cancelInlineKeyboard() });
+      await bot.sendMessage(user.id, '2/5 أرسل رقم/معرّف الدفع الذي راح يظهر للزبون.\nمثال: 010xxxxxxx أو Wallet-ID-123', { reply_markup: cancelInlineKeyboard() });
       return true;
     }
 
@@ -2798,19 +3274,33 @@ async function handleStateMessage(msg, user, state) {
         { text: '🇮🇶 دينار عراقي (IQD)', callback_data: 'adm:pmcurrency:IQD' },
         { text: '💵 دولار (USD)', callback_data: 'adm:pmcurrency:USD' }
       ];
-      await bot.sendMessage(user.id, '3/4 اختَر عملة الاستلام لهذه الطريقة. الزبون راح يكتب مبلغ الشحن بهذه العملة نفسها:', {
+      await bot.sendMessage(user.id, '3/5 اختَر عملة الاستلام لهذه الطريقة. الزبون راح يكتب مبلغ الشحن بهذه العملة نفسها:', {
         reply_markup: { inline_keyboard: currencyButtons.map(button => [button]) }
       });
       return true;
     }
 
     if (state.step === 'rate') {
-      const rate = Number(text);
+      const rate = Number(text.replace(/,/g, ''));
       if (!Number.isFinite(rate) || rate <= 0) {
         await bot.sendMessage(user.id, '❌ سعر الصرف غير صحيح. مثال للعراقي: 1500، وللمصري: 50.');
         return true;
       }
       data.ratePerUsd = rate;
+      await setState(user.id, { action: 'admin_new_payment_method', step: 'minimum', data });
+      const currency = normalizePaymentCurrency(data.settlementCurrency);
+      const example = currency === 'IQD' ? '1000' : currency === 'EGP' ? '10' : '0.50';
+      await bot.sendMessage(user.id, `5/5 كم الحد الأدنى للتحويل بهذه الطريقة؟\nأرسل الرقم بعملة ${paymentCurrencyLabel(currency, 'ar')} فقط. مثال: ${example}`, { reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+
+    if (state.step === 'minimum') {
+      const minimum = Number(text.replace(/,/g, ''));
+      if (!Number.isFinite(minimum) || minimum <= 0) {
+        await bot.sendMessage(user.id, '❌ الحد الأدنى غير صحيح. أرسل رقم أكبر من صفر.');
+        return true;
+      }
+      data.minimumTransferAmount = minimum;
       const method = await createConfiguredPaymentMethod(data);
       await clearState(user.id);
       const icon = customPaymentEmoji(method);
@@ -2820,8 +3310,9 @@ async function handleStateMessage(msg, user, state) {
         `الرقم: <code>${escapeHtml(method.paymentNumber)}</code>`,
         `العملة: <b>${method.settlementCurrency}</b>`,
         `سعر 1$: <b>${Number(method.ratePerUsd)}</b> ${method.settlementCurrency}`,
+        `الحد الأدنى: <b>${formatPaymentCurrencyAmount(method.minimumTransferAmount, method.settlementCurrency, 'ar')}</b>`,
         '',
-        'ظهرت تلقائياً في شراء المنتجات وشحن المحفظة.'
+        'هذه طريقة دفع مشتركة: تظهر تلقائياً بباقي البوتات حسب قسم عملتها، بينما Binance/SuperQi الأساسيين يبقون خاصين بكل بوت.'
       ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 إدارة طرق الدفع', callback_data: 'adm:payment_methods' }]] } });
       return true;
     }
@@ -2853,8 +3344,16 @@ async function handleStateMessage(msg, user, state) {
         return true;
       }
       method.paymentNumber = text;
+    } else if (state.field === 'minimum') {
+      const minimum = Number(text.replace(/,/g, ''));
+      if (!Number.isFinite(minimum) || minimum <= 0) {
+        await bot.sendMessage(user.id, '❌ الحد الأدنى غير صحيح.');
+        return true;
+      }
+      method.minimumTransferAmount = minimum;
     }
     await method.save();
+    try { await syncPaymentMethodToNetwork(method); } catch (error) { console.error('Payment method edit sync:', error.message); }
     await clearState(user.id);
     await bot.sendMessage(user.id, '✅ تم تحديث طريقة الدفع.', {
       reply_markup: { inline_keyboard: [[{ text: 'رجوع لطريقة الدفع', callback_data: `adm:pm:${method.id}` }]] }
@@ -3468,7 +3967,7 @@ async function handleSuperQiTopupAdmin(query, data) {
     await dbTransaction.commit();
     await answerCallback(query.id, 'تم الشحن.');
     const moneyContext = await shopMoneyContext();
-    await bot.sendMessage(targetUser.id, `✅ ${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} تم شحن محفظتك عبر سوبركي.\nالمبلغ: <b>${customerMoney(ledger.amount, moneyContext, targetUser.lang || 'ar')}</b>\nالرصيد الجديد: <b>${customerMoney(targetUser.balance, moneyContext, targetUser.lang || 'ar')}</b>`, { parse_mode: 'HTML' });
+    await bot.sendMessage(targetUser.id, `✅ ${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} تم شحن محفظتك عبر سوبركي.\nالمبلغ: <b>${moneyUsd(ledger.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' });
   } catch (error) {
     await dbTransaction.rollback();
     throw error;
@@ -3534,8 +4033,8 @@ async function handleCustomTopupAdmin(query, data) {
     const moneyContext = await shopMoneyContext();
     await bot.sendMessage(targetUser.id, [
       `✅ ${icon ? premiumEmojiHtml(icon) : '💳'} <b>${targetLang === 'en' ? `Wallet topped up via ${escapeHtml(methodName)}` : `تم شحن محفظتك عبر ${escapeHtml(methodName)}`}</b>`,
-      `${targetLang === 'en' ? 'Amount' : 'المبلغ'}: <b>${customerMoney(ledger.amount, moneyContext, targetLang)}</b>`,
-      `${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${customerMoney(targetUser.balance, moneyContext, targetLang)}</b>`
+      `${targetLang === 'en' ? 'Amount' : 'المبلغ'}: <b>${moneyUsd(ledger.amount)}</b>`,
+      `${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${moneyUsd(targetUser.balance)}</b>`
     ].join('\n'), { parse_mode: 'HTML' });
   } catch (error) {
     await dbTransaction.rollback();
@@ -3650,7 +4149,33 @@ async function handleNetworkTopupAdmin(query, data) {
   if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
   const moneyContext = await shopMoneyContext();
   const targetLang = targetUser?.lang === 'en' ? 'en' : 'ar';
-  await bot.sendMessage(targetUser.id, `✅ ${targetLang === 'en' ? 'Wallet credited' : 'تم شحن محفظتك'}: <b>${customerMoney(ledger.amount, moneyContext, targetLang)}</b>\n${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${customerMoney(targetUser.balance, moneyContext, targetLang)}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+  await bot.sendMessage(targetUser.id, `✅ ${targetLang === 'en' ? 'Wallet credited' : 'تم شحن محفظتك'}: <b>${moneyUsd(ledger.amount)}</b>\n${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+}
+
+async function handleSharedPaymentOwnerAdmin(query, data) {
+  if (!isAdmin(query.from.id)) return answerCallback(query.id, 'Admins only', true);
+  const parts = data.split(':');
+  const action = parts[1];
+  const requestId = parts.slice(2).join(':');
+  if (!requestId) return answerCallback(query.id, 'طلب الدفع غير صحيح.', true);
+  try {
+    const actor = {
+      telegramId: query.from?.id ? String(query.from.id) : null,
+      username: query.from?.username ? String(query.from.username) : null,
+      displayName: [query.from?.first_name, query.from?.last_name].filter(Boolean).join(' ') || query.from?.username || String(query.from?.id || '')
+    };
+    const result = await network.resolveSharedPaymentRequest(requestId, action === 'approve', actor);
+    await answerCallback(query.id, action === 'approve' ? 'تم تأكيد وصول المبلغ.' : 'تم رفض العملية.');
+    if (query.message) {
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id
+      }).catch(() => {});
+    }
+    return result;
+  } catch (error) {
+    return answerCallback(query.id, `تعذر معالجة العملية: ${error.message}`, true);
+  }
 }
 
 async function showOrders(chatId, user) {
@@ -3679,13 +4204,13 @@ async function showOrder(chatId, user, orderId, callbackId = null) {
     `🧾 <b>${isEn ? 'Order' : 'الطلب'} #${order.id}</b>`,
     `${isEn ? 'Product' : 'المنتج'}: ${escapeHtml(name || '')}`,
     `${isEn ? 'Quantity' : 'الكمية'}: ${order.quantity}`,
-    `${isEn ? 'Total' : 'السعر الكامل'}: ${customerMoney(order.totalAmount, moneyContext, user.lang)}`
+    `${isEn ? 'Total' : 'السعر الكامل'}: ${moneyUsd(order.totalAmount)}`
   ];
   if (Number(order.walletApplied || 0) > 0) {
-    lines.push(`${isEn ? 'From wallet' : 'من المحفظة'}: ${customerMoney(order.walletApplied, moneyContext, user.lang)}`);
+    lines.push(`${isEn ? 'From wallet' : 'من المحفظة'}: ${moneyUsd(order.walletApplied)}`);
   }
   if (Number(order.externalAmount || 0) > 0 && Number(order.externalAmount || 0) + 1e-9 < Number(order.totalAmount || 0)) {
-    lines.push(`${isEn ? 'External payment' : 'الدفع الخارجي'}: ${customerMoney(order.externalAmount, moneyContext, user.lang)}`);
+    lines.push(`${isEn ? 'External payment' : 'الدفع الخارجي'}: ${moneyUsd(order.externalAmount)}`);
   }
   lines.push(`${isEn ? 'Payment' : 'طريقة الدفع'}: ${escapeHtml(order.paymentMethod)}`);
   lines.push(`${isEn ? 'Status' : 'الحالة'}: ${escapeHtml(order.status)}`);
@@ -3743,7 +4268,7 @@ async function showAdminPaymentMethods(chatId) {
   return bot.sendMessage(chatId, [
     '💳 <b>طرق الدفع</b>',
     '',
-    'طرقك المحلية تقدر تعدلها وتشغلها أو توقفها.',
+    'طرق الدفع التي تضيفها هنا تكون مشتركة تلقائياً مع كل البوتات، وتقدر تعدلها أو توقفها أو تحذفها. Binance/SuperQi الأساسيين يبقون خاصين بكل بوت.',
     ...inheritedLines
   ].join('\n'), {
     parse_mode: 'HTML',
@@ -3761,6 +4286,7 @@ async function showAdminPaymentMethod(chatId, id) {
     `رقم الدفع: <code>${escapeHtml(method.paymentNumber)}</code>`,
     `العملة: <b>${method.settlementCurrency || 'USD'}</b>`,
     `سعر 1$: <b>${Number(method.ratePerUsd || 1)}</b> ${method.settlementCurrency || 'USD'}`,
+    `الحد الأدنى: <b>${formatPaymentCurrencyAmount(method.minimumTransferAmount || minimumTransferForMethod(method), method.settlementCurrency || 'USD', 'ar')}</b>`,
     `الحالة: <b>${method.isActive ? 'مفعلة' : 'متوقفة'}</b>`,
     `Custom Emoji ID: <code>${escapeHtml(method.iconCustomEmojiId || 'بدون')}</code>`
   ].join('\n'), {
@@ -3770,7 +4296,9 @@ async function showAdminPaymentMethod(chatId, id) {
         { text: '✏️ تغيير الاسم', callback_data: `adm:pmfield:${method.id}:name` },
         { text: '🔢 تغيير الرقم', callback_data: `adm:pmfield:${method.id}:number` }
       ],
+      [{ text: '💰 تغيير الحد الأدنى', callback_data: `adm:pmfield:${method.id}:minimum` }],
       [{ text: method.isActive ? '⛔ إيقاف الطريقة' : '✅ تشغيل الطريقة', callback_data: `adm:pmtoggle:${method.id}`, style: method.isActive ? 'danger' : 'success' }],
+      [{ text: '🗑 حذف طريقة الدفع', callback_data: `adm:pmdelete:${method.id}`, style: 'danger' }],
       [{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]
     ] }
   });
@@ -3790,45 +4318,82 @@ async function showNetworkAccounts(chatId) {
   const lines = [
     '🤝 <b>الحسابات بين المتاجر</b>',
     '',
-    'الحساب هنا صافي تلقائياً: إذا صار دين بالعكس بين نفس الطرفين، النظام يخصمه من الدين السابق بدل ما يحسب مبلغين متعاكسين.'
+    'كل الديون والتسويات هنا بالدولار فقط. إذا صار دين بالعكس بين نفس الطرفين، النظام يسوي صافي تلقائياً.'
   ];
   const keyboard = [];
   lines.push('', `💸 عمولة البيع من مخزون الآخرين (${Number(data.sellerCommissionPercent ?? config.network.sellerCommissionPercent ?? 10).toFixed(0)}%): <b>$${Number(data.sellerCommissionEarnedUsd || 0).toFixed(2)}</b>`);
   const debtStatus = data.commerceStatus || await currentCommerceStatus(true);
   if (debtStatus?.suspended) {
-    lines.push('', `⛔ <b>البيع متوقف مؤقتاً</b> لأن الالتزامات الحالية وصلت إلى <b>$${Number(debtStatus.liabilityUsd || 0).toFixed(2)}</b> (حد الإيقاف $${Number(debtStatus.thresholdUsd || 40).toFixed(2)}).`, 'يبقى الإيقاف إلى أن تسجل التسديد ويؤكد الطرف المقابل وصول المبلغ.');
+    lines.push(
+      '',
+      `⛔ <b>البيع متوقف مؤقتاً</b> لأن الالتزامات الحالية وصلت إلى <b>$${Number(debtStatus.liabilityUsd || 0).toFixed(2)}</b> (حد الإيقاف $${Number(debtStatus.thresholdUsd || 40).toFixed(2)}).`,
+      'ينفتح البيع تلقائياً بعد نجاح تسوية Binance.'
+    );
   }
 
   if (!data.accounts?.length) lines.push('', '✅ ماكو ديون مفتوحة حالياً.');
   for (const account of data.accounts || []) {
     const usd = Number(account.amountUsd || account.values?.usd || 0);
-    const iqd = Number(account.values?.iqd || 0);
-    const egp = Number(account.values?.egp || 0);
-    const localCurrency = shopDisplayCurrency();
     lines.push('', account.direction === 'owe'
       ? `🔴 عليك لـ <b>${escapeHtml(account.counterpartyName)}</b>: <b>$${usd.toFixed(2)}</b>`
       : `🟢 إلك على <b>${escapeHtml(account.counterpartyName)}</b>: <b>$${usd.toFixed(2)}</b>`);
-    if (localCurrency === 'IQD') lines.push(`🇮🇶 ${Math.round(iqd).toLocaleString('en-US')} IQD`);
-    else if (localCurrency === 'EGP') lines.push(`🇪🇬 ${egp.toFixed(2)} EGP`);
+
     if (account.direction === 'owe' && usd > 0) {
-      keyboard.push([{
-        text: `✅ تم تسديد الدين لـ ${String(account.counterpartyName).slice(0, 28)} — $${usd.toFixed(2)}`,
-        callback_data: `adm:debt_paid:${account.counterpartyId}`,
-        style: 'success'
-      }]);
+      let profile = null;
+      try { profile = await network.getCounterpartyPaymentProfile(account.counterpartyId); } catch {}
+      if (profile?.binanceReady && profile?.binancePayId) {
+        lines.push(`💳 التسوية: Binance ID <code>${escapeHtml(profile.binancePayId)}</code>`);
+        keyboard.push([{
+          text: `💰 تسديد $${usd.toFixed(2)} عبر Binance لـ ${String(account.counterpartyName).slice(0, 22)}`,
+          callback_data: `adm:debt_paid:${account.counterpartyId}`,
+          style: 'success'
+        }]);
+      } else {
+        lines.push('⚠️ الطرف المقابل ما مفعّل Binance للتسوية حالياً.');
+      }
     }
   }
 
   for (const pending of data.pendingOutgoing || []) {
-    lines.push('', `🕓 أنت سجلت تسديد <b>$${Number(pending.amountUsd || 0).toFixed(2)}</b> إلى <b>${escapeHtml(pending.creditorName || pending.creditorShopId)}</b> — ننتظر تأكيد الاستلام.`, `المبلغ المثبت للتسوية: <b>${Number(pending.values?.settlementAmount || pending.settlementAmount || pending.amountUsd || 0).toFixed((pending.values?.settlementCurrency || pending.settlementCurrency) === 'IQD' ? 0 : 2)} ${escapeHtml(pending.values?.settlementCurrency || pending.settlementCurrency || 'USD')}</b>`);
+    const amount = Number(pending.amountUsd || 0);
+    lines.push('', `🕓 تسوية معلقة إلى <b>${escapeHtml(pending.creditorName || pending.creditorShopId)}</b>: <b>$${amount.toFixed(2)}</b>`);
+    if (pending.status === 'confirmed') {
+      lines.push('✅ تم التحقق منها تلقائياً.');
+    } else if (pending.submittedOrderId) {
+      lines.push(`🔄 Order ID: <code>${escapeHtml(pending.submittedOrderId)}</code> — جاري التحقق تلقائياً عند الطرف المستلم.`);
+    } else if (pending.verificationError) {
+      lines.push(`❌ آخر محاولة لم تنجح: <code>${escapeHtml(pending.verificationError)}</code>. أرسل Order ID صحيح للمحاولة مرة ثانية.`);
+      keyboard.push([{
+        text: `🔁 إعادة إرسال Order ID — $${amount.toFixed(2)}`,
+        callback_data: `adm:debt_retry:${pending.id}`,
+        style: 'primary'
+      }]);
+    } else {
+      lines.push(`🆔 Binance ID: <code>${escapeHtml(pending.binancePayId || '')}</code>`, 'بعد التحويل لازم ترسل Order ID حتى يتم التحقق تلقائياً.');
+      keyboard.push([{
+        text: `🆔 إرسال Order ID — $${amount.toFixed(2)}`,
+        callback_data: `adm:debt_retry:${pending.id}`,
+        style: 'primary'
+      }]);
+    }
   }
+
   for (const pending of data.pendingIncoming || []) {
-    lines.push('', `⚠️ <b>${escapeHtml(pending.debtorName || pending.debtorShopId)}</b> يقول إنه سدّد لك <b>$${Number(pending.amountUsd || 0).toFixed(2)}</b>.`, `المبلغ المثبت: <b>${Number(pending.values?.settlementAmount || pending.settlementAmount || pending.amountUsd || 0).toFixed((pending.values?.settlementCurrency || pending.settlementCurrency) === 'IQD' ? 0 : 2)} ${escapeHtml(pending.values?.settlementCurrency || pending.settlementCurrency || 'USD')}</b> — وافق فقط إذا وصل فعلاً.`);
+    const amount = Number(pending.amountUsd || 0);
+    if (pending.binancePayId) {
+      lines.push('', `📥 <b>${escapeHtml(pending.debtorName || pending.debtorShopId)}</b> عنده تسوية Binance معلقة إلك بقيمة <b>$${amount.toFixed(2)}</b>.`);
+      if (pending.submittedOrderId) lines.push('🔄 وصل Order ID والنظام يتحقق منه تلقائياً بحساب Binance الخاص بهذا البوت.');
+      continue;
+    }
+
+    // Compatibility only for old manual settlement requests created before v11.8.
+    lines.push('', `⚠️ طلب تسوية قديم من <b>${escapeHtml(pending.debtorName || pending.debtorShopId)}</b> بقيمة <b>$${amount.toFixed(2)}</b>.`);
     keyboard.push([
       { text: '✅ وصل المبلغ', callback_data: `adm:debt_resolve:1:${pending.id}`, style: 'success' },
       { text: '❌ ما وصل', callback_data: `adm:debt_resolve:0:${pending.id}`, style: 'danger' }
     ]);
   }
+
   keyboard.push([{ text: '🔄 تحديث الحسابات', callback_data: 'adm:network_accounts' }]);
   keyboard.push([{ text: '⬅️ رجوع لقسم الشبكة', callback_data: 'adm:menu:network' }]);
   return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
@@ -3905,14 +4470,73 @@ async function handleAdminCallback(query, user, data) {
     const counterpartyShopId = data.slice('adm:debt_paid:'.length);
     try {
       let request;
-      if (network.isMaster()) request = await networkLedger.createDebtPaymentRequest('master', counterpartyShopId);
-      else request = (await network.markDebtPaid(counterpartyShopId))?.request;
+      let creditor;
+      if (network.isMaster()) {
+        creditor = await network.getCounterpartyPaymentProfile(counterpartyShopId);
+        if (!creditor?.binanceReady || !creditor?.binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
+        request = await networkLedger.createDebtPaymentRequest('master', counterpartyShopId, { binancePayId: creditor.binancePayId });
+      } else {
+        const started = await network.startDebtBinancePayment(counterpartyShopId);
+        request = started?.request;
+        creditor = started?.creditor;
+      }
+      if (!request) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
       invalidateCommerceStatus();
-      await answerCallback(query.id, 'تم تسجيل التسديد. ننتظر تأكيد الطرف الثاني.');
-      await bot.sendMessage(query.message.chat.id, `🕓 تم تسجيل أنك سددت <b>$${Number(request?.amountUsd || 0).toFixed(2)}</b>. الدين لن يعتبر منتهياً نهائياً إلا بعد موافقة الطرف المستلم.`, { parse_mode: 'HTML' });
-      return showNetworkAccounts(query.message.chat.id);
+      await setState(user.id, {
+        action: 'admin_debt_binance_order',
+        debtPaymentId: request.id,
+        creditorShopId: counterpartyShopId,
+        creditorName: creditor?.shopName || counterpartyShopId,
+        binancePayId: request.binancePayId || creditor?.binancePayId,
+        amountUsd: Number(request.amountUsd || 0)
+      });
+      await answerCallback(query.id, 'تم إنشاء تسوية Binance.');
+      return bot.sendMessage(query.message.chat.id, [
+        '💰 <b>تسديد الدين عبر Binance</b>',
+        '',
+        `<b>${escapeHtml(creditor?.shopName || counterpartyShopId)}</b> يطلبك <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>.`,
+        'يجب تسديده بالدولار.',
+        '',
+        `قم بإرسال <b>${Number(request.amountUsd || 0).toFixed(2)} USDT</b> إلى Binance ID:`,
+        `<code>${escapeHtml(request.binancePayId || creditor?.binancePayId || '')}</code>`,
+        '',
+        'ثم ارسل Order ID هنا للتأكيد التلقائي:'
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
     } catch (error) {
-      return answerCallback(query.id, error.message === 'NO_DEBT_TO_PAY' ? 'ماكو دين مفتوح لهذا الطرف.' : error.message, true);
+      const message = error.message === 'NO_DEBT_TO_PAY'
+        ? 'ماكو دين مفتوح لهذا الطرف.'
+        : error.message === 'CREDITOR_BINANCE_NOT_CONFIGURED'
+          ? 'الطرف المقابل لازم يضيف Binance API + Binance ID حتى تقدر تسدد له تلقائياً.'
+          : error.message;
+      return answerCallback(query.id, message, true);
+    }
+  }
+
+  if (data.startsWith('adm:debt_retry:')) {
+    const requestId = data.slice('adm:debt_retry:'.length);
+    try {
+      const accountData = await localNetworkAccounts();
+      const request = (accountData.pendingOutgoing || []).find(row => String(row.id) === String(requestId));
+      if (!request) return answerCallback(query.id, 'طلب التسوية غير موجود.', true);
+      await setState(user.id, {
+        action: 'admin_debt_binance_order',
+        debtPaymentId: request.id,
+        creditorShopId: request.creditorShopId,
+        creditorName: request.creditorName || request.creditorShopId,
+        binancePayId: request.binancePayId,
+        amountUsd: Number(request.amountUsd || 0)
+      });
+      await answerCallback(query.id);
+      return bot.sendMessage(query.message.chat.id, [
+        '🔁 <b>إعادة التحقق من تسوية Binance</b>',
+        '',
+        `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+        `Binance ID: <code>${escapeHtml(request.binancePayId || '')}</code>`,
+        '',
+        'أرسل Order ID الصحيح هنا:'
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+    } catch (error) {
+      return answerCallback(query.id, error.message, true);
     }
   }
 
@@ -4122,14 +4746,13 @@ async function handleAdminCallback(query, user, data) {
     await answerCallback(query.id, `تم اختيار ${currency}.`);
     if (currency === 'USD') {
       dataState.ratePerUsd = 1;
-      const method = await createConfiguredPaymentMethod(dataState);
-      await clearState(user.id);
-      return bot.sendMessage(user.id, `✅ تمت إضافة <b>${escapeHtml(method.nameAr)}</b> بعملة USD.`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 إدارة طرق الدفع', callback_data: 'adm:payment_methods' }]] } });
+      await setState(user.id, { action: 'admin_new_payment_method', step: 'minimum', data: dataState });
+      return bot.sendMessage(user.id, `4/5 سعر الدولار ثابت: 1$ = 1 USD.\n\n5/5 كم الحد الأدنى للتحويل بالدولار؟ مثال: 0.50`, { reply_markup: cancelInlineKeyboard() });
     }
     await setState(user.id, { action: 'admin_new_payment_method', step: 'rate', data: dataState });
     return bot.sendMessage(user.id, currency === 'IQD'
-      ? '4/4 أرسل سعر 1$ بالدينار العراقي، مثال: 1500'
-      : '4/4 أرسل سعر 1$ بالجنيه المصري، مثال: 50', { reply_markup: cancelInlineKeyboard() });
+      ? '4/5 أرسل سعر 1$ بالدينار العراقي، مثال: 1500'
+      : '4/5 أرسل سعر 1$ بالجنيه المصري، مثال: 50', { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data === 'adm:add_payment_method') {
@@ -4138,7 +4761,7 @@ async function handleAdminCallback(query, user, data) {
     return bot.sendMessage(user.id, [
       '➕ <b>إضافة طريقة دفع</b>',
       '',
-      '1/4 أرسل اسم الخدمة بالعربي.',
+      '1/5 أرسل اسم الخدمة بالعربي.',
       'تقدر ترسل Custom Emoji Premium ويا الاسم، أو ID بين [] مثل:',
       '<code>[5184203496831846429] سوبركي</code>'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
@@ -4171,7 +4794,7 @@ async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:pmfield:')) {
     const [, , idRaw, field] = data.split(':');
     const id = Number(idRaw);
-    if (!['name', 'number'].includes(field)) return answerCallback(query.id, 'حقل غير صحيح.', true);
+    if (!['name', 'number', 'minimum'].includes(field)) return answerCallback(query.id, 'حقل غير صحيح.', true);
     const method = await PaymentMethod.findByPk(id);
     if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
     if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
@@ -4179,7 +4802,9 @@ async function handleAdminCallback(query, user, data) {
     await answerCallback(query.id);
     return bot.sendMessage(user.id, field === 'name'
       ? 'أرسل الاسم الجديد بالعربي. تقدر تستخدم Premium Emoji أو [ID] قبل الاسم.'
-      : 'أرسل رقم/معرّف الدفع الجديد.', { reply_markup: cancelInlineKeyboard() });
+      : field === 'number'
+        ? 'أرسل رقم/معرّف الدفع الجديد.'
+        : `أرسل الحد الأدنى الجديد بعملة ${paymentCurrencyLabel(method.settlementCurrency, 'ar')}.`, { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:pmtoggle:')) {
@@ -4189,8 +4814,50 @@ async function handleAdminCallback(query, user, data) {
     if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
     method.isActive = !method.isActive;
     await method.save({ fields: ['isActive'] });
-    await answerCallback(query.id, method.isActive ? 'تم تشغيل طريقة الدفع.' : 'تم إيقاف طريقة الدفع.');
+    try { await syncPaymentMethodToNetwork(method); } catch (error) { console.error('Payment method toggle sync:', error.message); }
+    await answerCallback(query.id, method.isActive ? 'تم تشغيل طريقة الدفع بكل البوتات.' : 'تم إيقاف طريقة الدفع بكل البوتات.');
     return showAdminPaymentMethod(query.message.chat.id, method.id);
+  }
+
+  if (data.startsWith('adm:pmdeleteconfirm:')) {
+    const id = Number(data.split(':')[2]);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع محذوفة مسبقاً.', true);
+    const [pendingOrderCount, pendingTopupCount] = await Promise.all([
+      PurchaseOrder.count({ where: { paymentMethod: `custom:${id}`, status: { [Op.in]: ['pending_payment', 'proof_pending'] } } }),
+      BalanceTransaction.count({ where: { paymentMethodId: id, status: { [Op.in]: ['awaiting_proof', 'proof_pending'] } } })
+    ]);
+    if (pendingOrderCount || pendingTopupCount) {
+      return answerCallback(query.id, 'ما تگدر تحذفها هسه لأن عليها عمليات دفع معلقة. أوقفها أولاً وانتظر معالجة العمليات.', true);
+    }
+    try {
+      method.isActive = false;
+      await method.save({ fields: ['isActive'] });
+      await syncPaymentMethodToNetwork(method);
+    } catch (error) {
+      console.error('Deactivate shared method before delete:', error.message);
+      return answerCallback(query.id, 'تعذر تحديث الشبكة. حاول مرة ثانية قبل الحذف.', true);
+    }
+    const name = method.nameAr;
+    await method.destroy();
+    await answerCallback(query.id, 'تم حذف طريقة الدفع.');
+    await bot.sendMessage(query.message.chat.id, `🗑 تم حذف <b>${escapeHtml(name)}</b> من هذا البوت ومن طرق الدفع المشتركة. السجلات القديمة تبقى محفوظة بالحسابات.`, { parse_mode: 'HTML' });
+    return showAdminPaymentMethods(query.message.chat.id);
+  }
+
+  if (data.startsWith('adm:pmdelete:')) {
+    const id = Number(data.split(':')[2]);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, `⚠️ حذف <b>${escapeHtml(method.nameAr)}</b>؟
+راح تختفي من كل البوتات، لكن سجلات العمليات القديمة تبقى محفوظة.`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        { text: '🗑 نعم، حذف', callback_data: `adm:pmdeleteconfirm:${id}`, style: 'danger' },
+        { text: 'إلغاء', callback_data: `adm:pm:${id}` }
+      ]] }
+    });
   }
 
   if (data.startsWith('adm:pm:')) {
@@ -4829,6 +5496,166 @@ async function fetchLocalNetworkAccountData() {
   return { accounts: [], pendingIncoming: [], pendingOutgoing: [], commerceStatus: { suspended: false, liabilityUsd: 0, thresholdUsd: Number(config.network.debtSuspendThresholdUsd || 40) } };
 }
 
+async function syncLocalSharedPaymentMethods() {
+  if (!network.isMaster() && !network.enabledClient()) return;
+  const methods = await PaymentMethod.findAll({ order: [['id', 'ASC']] });
+  for (const method of methods) {
+    try { await syncPaymentMethodToNetwork(method); }
+    catch (error) { console.error(`Shared payment method sync #${method.id}:`, error.message); }
+  }
+}
+
+async function processOwnedSharedPaymentRequests() {
+  if (!network.isMaster() && !network.enabledClient()) return;
+  const data = await network.ownedSharedPaymentRequests();
+  let seen = [];
+  try { seen = JSON.parse(await getSetting('shared_payment_owner_notified_ids_v117', '[]')); } catch { seen = []; }
+  const seenSet = new Set(Array.isArray(seen) ? seen.map(String) : []);
+  let changed = false;
+  for (const request of data.requests || []) {
+    if (seenSet.has(String(request.id))) continue;
+    const method = request.method || {};
+    const currency = normalizePaymentCurrency(request.paymentCurrency || method.settlementCurrency || 'USD');
+    const amountLocal = Number(request.paymentAmount || 0);
+    const methodName = method.nameAr || method.nameEn || 'طريقة دفع مشتركة';
+    const text = [
+      '💳 <b>تأكيد دفعة مشتركة</b>',
+      '',
+      `الطريقة: <b>${escapeHtml(methodName)}</b>`,
+      `المتجر الذي تمت فيه العملية: <b>${escapeHtml(request.sourceShopName || request.sourceShopId || '')}</b>`,
+      `الزبون: <b>${escapeHtml(request.customerName || String(request.customerId || ''))}</b>`,
+      `النوع: <b>${request.activity === 'topup' ? 'شحن محفظة' : 'شراء منتج'}</b>`,
+      `المبلغ: <b>${moneyUsd(request.amountUsd)}</b>`,
+      `المبلغ بعملتك: <b>${formatPaymentCurrencyAmount(amountLocal, currency, 'ar')}</b>`,
+      '',
+      'وافق فقط إذا المبلغ وصل فعلاً إلى طريقة الدفع الخاصة بك.'
+    ].join('\n');
+    for (const adminId of config.admins) {
+      await bot.sendMessage(adminId, text, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[
+          { text: '✅ وصل المبلغ', callback_data: `shpay:approve:${request.id}`, style: 'success' },
+          { text: '❌ ما وصل', callback_data: `shpay:reject:${request.id}`, style: 'danger' }
+        ]] }
+      }).catch(() => {});
+    }
+    seenSet.add(String(request.id));
+    changed = true;
+  }
+  if (changed) await setSetting('shared_payment_owner_notified_ids_v117', JSON.stringify([...seenSet].slice(-500)));
+}
+
+function telegramIdentityText({ username = null, id = null, name = null } = {}) {
+  const cleanUsername = String(username || '').trim().replace(/^@/, '');
+  if (cleanUsername) return `@${cleanUsername}`;
+  const cleanName = String(name || '').trim();
+  if (cleanName && id) return `${cleanName} — Telegram ID: ${id}`;
+  if (id) return `Telegram ID: ${id}`;
+  return cleanName || 'غير معروف';
+}
+
+async function notifySourceAdminsSharedApproval(request, userRow, activityLabel) {
+  const approver = telegramIdentityText({
+    username: request.approvedByUsername,
+    id: request.approvedByTelegramId,
+    name: request.approvedByDisplayName || request.paymentOwnerShopName
+  });
+  const customer = telegramIdentityText({
+    username: userRow?.username,
+    id: userRow?.id || request.customerId,
+    name: userRow?.firstName || request.customerName
+  });
+  const methodName = request.method?.nameAr || request.method?.nameEn || 'طريقة دفع مشتركة';
+  const amountLocal = formatPaymentCurrencyAmount(
+    Number(request.paymentAmount || 0),
+    request.paymentCurrency || request.method?.settlementCurrency || 'USD',
+    'ar'
+  );
+  const text = [
+    '✅ <b>عملية ناجحة</b>',
+    '',
+    `${activityLabel}: <b>${customer}</b>`,
+    `طريقة الدفع: <b>${escapeHtml(methodName)}</b>`,
+    `المبلغ: <b>${moneyUsd(request.amountUsd)}</b> — <b>${amountLocal}</b>`,
+    `تمت الموافقة بواسطة: <b>${escapeHtml(approver)}</b>`
+  ].join('\n');
+  for (const adminId of config.admins) {
+    await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+  }
+}
+
+async function processSharedPaymentResults() {
+  if (!network.isMaster() && !network.enabledClient()) return;
+  const data = await network.sourceSharedPaymentResults();
+  for (const request of data.requests || []) {
+    try {
+      if (request.activity === 'topup') {
+        const txId = Number(request.sourceEntityId || String(request.sourceRef || '').split(':')[1]);
+        const dbTx = await sequelize.transaction();
+        let targetUser = null;
+        let ledger = null;
+        try {
+          ledger = await BalanceTransaction.findByPk(txId, { transaction: dbTx, lock: dbTx.LOCK.UPDATE });
+          if (ledger && ledger.status === 'proof_pending') {
+            if (request.status === 'approved') {
+              targetUser = await User.findByPk(ledger.userId, { transaction: dbTx, lock: dbTx.LOCK.UPDATE });
+              targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount || 0);
+              await targetUser.save({ transaction: dbTx });
+              ledger.status = 'completed';
+            } else {
+              ledger.status = 'rejected';
+            }
+            await ledger.save({ transaction: dbTx });
+          }
+          await dbTx.commit();
+        } catch (error) {
+          await dbTx.rollback();
+          throw error;
+        }
+        if (ledger) {
+          const userRow = targetUser || await User.findByPk(ledger.userId);
+          if (request.status === 'approved' && userRow) {
+            const moneyContext = await shopMoneyContext();
+            const lang = userRow.lang === 'en' ? 'en' : 'ar';
+            await bot.sendMessage(userRow.id, lang === 'en'
+              ? `✅ Payment confirmed. Wallet credited ${moneyUsd(ledger.amount)}. New balance: ${moneyUsd(userRow.balance)}.`
+              : `✅ تم تأكيد الدفعة وشحن محفظتك بمبلغ <b>${moneyUsd(ledger.amount)}</b>.\nالرصيد الجديد: <b>${moneyUsd(userRow.balance)}</b>.`, { parse_mode: 'HTML' }).catch(() => {});
+            await notifySourceAdminsSharedApproval(request, userRow, 'تم شحن رصيد للمستخدم');
+          } else if (request.status === 'rejected') {
+            await bot.sendMessage(ledger.userId, '❌ صاحب طريقة الدفع لم يؤكد وصول المبلغ. إذا تعتقد أكو خطأ راجع الدعم.').catch(() => {});
+          }
+        }
+      } else {
+        const orderId = Number(request.sourceEntityId || String(request.sourceRef || '').split(':')[1]);
+        const order = await PurchaseOrder.findByPk(orderId);
+        if (order && order.status === 'proof_pending') {
+          if (request.status === 'approved') {
+            try {
+              const fulfillment = await completeExternalPayment(order.id, `shared:${request.id}`);
+              await sendDeliveryToUser(order.userId, fulfillment);
+              const orderUser = await User.findByPk(order.userId);
+              await notifySourceAdminsSharedApproval(request, orderUser, `تم تأكيد دفع الطلب #${order.id} للمستخدم`);
+            } catch (error) {
+              if (error.message === 'OUT_OF_STOCK') {
+                order.status = 'paid_waiting_stock';
+                await order.save({ fields: ['status'] });
+                await bot.sendMessage(order.userId, '✅ تم تأكيد الدفع، لكن المخزون غير متوفر بهذه اللحظة. تم تسجيل حقك، لا تدفع مرة ثانية وراجع الدعم.').catch(() => {});
+                await notifyAdmins(`⚠️ دفعة مشتركة مؤكدة للطلب <code>#${order.id}</code> لكن المخزون نفد. لازم متابعة الطلب يدوياً.`);
+              } else throw error;
+            }
+          } else {
+            await refundWalletReservation(order.id).catch(() => order.update({ status: 'rejected' }));
+            await bot.sendMessage(order.userId, `❌ تم رفض تأكيد الدفع للطلب #${order.id}. تم إرجاع أي رصيد محجوز من المحفظة.`).catch(() => {});
+          }
+        }
+      }
+      await network.acknowledgeSharedPaymentRequest(request.id);
+    } catch (error) {
+      console.error(`Shared payment result ${request.id}:`, error.message);
+    }
+  }
+}
+
 async function processNetworkNotificationEvents() {
   if (!network.isMaster() && !network.enabledClient()) return;
   const rawCursor = await getSetting('network_notification_cursor_v11', '');
@@ -4899,13 +5726,13 @@ async function processDebtRemindersAndStatus(data) {
       '⚠️ <b>تذكير تسوية دين</b>',
       '',
       `<b>${escapeHtml(account.counterpartyName || counterpartyId)}</b> يطلبك <b>$${amount.toFixed(2)}</b>.`,
-      'يرجى تسديد الدين، وبعدها اضغط «تم التسديد». الدين ما ينغلق إلا بعد موافقة الطرف الثاني.'
+      'التسوية تتم بالدولار عبر Binance. اضغط الزر حتى تحصل على Binance ID وترسل Order ID للتحقق التلقائي.'
     ].join('\n');
     for (const adminId of config.admins) {
       await bot.sendMessage(adminId, text, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[{
-          text: `✅ تم التسديد — $${amount.toFixed(2)}`,
+          text: `💰 تسديد عبر Binance — $${amount.toFixed(2)}`,
           callback_data: `adm:debt_paid:${counterpartyId}`,
           style: 'success'
         }]] }
@@ -4924,9 +5751,113 @@ async function processDebtRemindersAndStatus(data) {
   if (Boolean(status?.suspended) !== previous) {
     await setSetting('network_debt_suspended_v11', status?.suspended ? 'true' : 'false');
     const text = status?.suspended
-      ? `⛔ <b>تم إيقاف البيع مؤقتاً</b>\nالالتزامات الحالية: <b>$${Number(status.liabilityUsd || 0).toFixed(2)}</b>\nحد الإيقاف: <b>$${Number(status.thresholdUsd || 40).toFixed(2)}</b>\n\nيبقى البوت متوقف عن المبيعات إلى أن يتم تسجيل التسديد ويؤكد الطرف المقابل وصول المبلغ.`
-      : '✅ <b>تم فتح البيع تلقائياً</b> بعد تأكيد تسوية الدين. البوت رجع يشتغل بدون تدخل يدوي.';
+      ? `⛔ <b>تم إيقاف البيع مؤقتاً</b>\nالالتزامات الحالية: <b>$${Number(status.liabilityUsd || 0).toFixed(2)}</b>\nحد الإيقاف: <b>$${Number(status.thresholdUsd || 40).toFixed(2)}</b>\n\nيبقى البيع متوقفاً إلى أن تنجح تسوية Binance تلقائياً.`
+      : '✅ <b>تم فتح البيع تلقائياً</b> بعد نجاح تسوية Binance. البوت رجع يشتغل بدون تدخل يدوي.';
     for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+  }
+}
+
+async function processOwnedDebtBinanceVerifications() {
+  if (!network.isMaster() && !network.enabledClient()) return;
+  const data = await network.ownedDebtBinanceVerifications();
+  for (const request of data.requests || []) {
+    if (!request.submittedOrderId || request.status !== 'pending') continue;
+    try {
+      const result = await binancePay.verifyStandalone({
+        submittedOrderId: request.submittedOrderId,
+        expectedAmount: Number(request.amountUsd || 0),
+        createdAt: request.createdAt
+      });
+      if (result.success) {
+        const resolved = await network.finishDebtBinanceVerification(request.id, {
+          success: true,
+          transactionId: result.transactionId
+        });
+        const resolvedRequest = resolved?.request || resolved;
+        if (resolvedRequest?.status === 'confirmed') {
+          const text = [
+            '✅ <b>تم استلام تسوية دين عبر Binance</b>',
+            '',
+            `من: <b>${escapeHtml(request.debtorName || request.debtorShopId)}</b>`,
+            `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+            `Order ID: <code>${escapeHtml(request.submittedOrderId)}</code>`,
+            'تم التحقق تلقائياً.'
+          ].join('\n');
+          for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+        } else if (resolvedRequest?.verificationError === 'DUPLICATE_TRANSACTION') {
+          for (const adminId of config.admins) {
+            await bot.sendMessage(adminId, [
+              '⚠️ <b>رفض Order ID مكرر</b>',
+              `من: <b>${escapeHtml(request.debtorName || request.debtorShopId)}</b>`,
+              `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+              'رقم العملية مستخدم سابقاً، لذلك الدين لم يُغلق.'
+            ].join('\n'), { parse_mode: 'HTML' }).catch(() => {});
+          }
+        }
+      } else {
+        await network.finishDebtBinanceVerification(request.id, {
+          success: false,
+          reason: result.reason || 'NO_MATCH'
+        });
+        if (result.reason === 'REGION_RESTRICTED') {
+          for (const adminId of config.admins) {
+            await bot.sendMessage(adminId, [
+              '⚠️ <b>تعذر التحقق التلقائي من تسوية Binance بسبب موقع السيرفر</b>',
+              `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+              `من: <b>${escapeHtml(request.debtorName || request.debtorShopId)}</b>`,
+              'لا يتم إغلاق الدين. يمكن إعادة المحاولة بعد معالجة وصول Binance API.'
+            ].join('\n'), { parse_mode: 'HTML' }).catch(() => {});
+          }
+        }
+      }
+      invalidateCommerceStatus();
+    } catch (error) {
+      console.error(`Debt Binance verification ${request.id}:`, error.message);
+    }
+  }
+}
+
+async function processDebtPaymentResults() {
+  if (!network.isMaster() && !network.enabledClient()) return;
+  const data = await network.debtPaymentResults();
+  for (const request of data.requests || []) {
+    try {
+      if (request.status === 'confirmed') {
+        const text = [
+          '✅ <b>تم تسديد الدين تلقائياً عبر Binance</b>',
+          '',
+          `إلى: <b>${escapeHtml(request.creditorName || request.creditorShopId)}</b>`,
+          `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+          request.transactionId ? `رقم العملية: <code>${escapeHtml(request.transactionId)}</code>` : '',
+          'تم إغلاق مبلغ التسوية تلقائياً.'
+        ].filter(Boolean).join('\n');
+        for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+      } else if (request.verificationError) {
+        const text = [
+          '❌ <b>لم تنجح محاولة تسوية Binance</b>',
+          '',
+          `إلى: <b>${escapeHtml(request.creditorName || request.creditorShopId)}</b>`,
+          `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
+          `السبب: <code>${escapeHtml(request.verificationError)}</code>`,
+          '',
+          'الدين ما زال مفتوحاً. أرسل Order ID صحيح للمحاولة مرة ثانية.'
+        ].join('\n');
+        for (const adminId of config.admins) {
+          await bot.sendMessage(adminId, text, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{
+              text: '🔁 إرسال Order ID جديد',
+              callback_data: `adm:debt_retry:${request.id}`,
+              style: 'primary'
+            }]] }
+          }).catch(() => {});
+        }
+      }
+      await network.acknowledgeDebtPaymentResult(request.id);
+      invalidateCommerceStatus();
+    } catch (error) {
+      console.error(`Debt payment result ${request.id}:`, error.message);
+    }
   }
 }
 
@@ -4937,6 +5868,7 @@ async function processIncomingDebtConfirmations(data) {
   const seenSet = new Set(Array.isArray(seen) ? seen.map(String) : []);
   let changed = false;
   for (const request of incoming) {
+    if (request.binancePayId) continue; // v11.8 debt settlements are verified automatically through Binance.
     if (seenSet.has(String(request.id))) continue;
     changed = true;
     seenSet.add(String(request.id));
@@ -4965,6 +5897,12 @@ function startNetworkAccountWatcher() {
   networkAccountWatcherStarted = true;
   const poll = async () => {
     try {
+      await syncLocalSharedPaymentMethods();
+      await network.syncPublicPaymentProfile().catch(error => console.error('Payment profile sync:', error.message));
+      await processOwnedSharedPaymentRequests();
+      await processSharedPaymentResults();
+      await processOwnedDebtBinanceVerifications();
+      await processDebtPaymentResults();
       await processNetworkNotificationEvents();
       const data = await fetchLocalNetworkAccountData();
       await processIncomingDebtConfirmations(data);

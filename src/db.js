@@ -31,6 +31,7 @@ const User = sequelize.define('User', {
   blocked: { type: DataTypes.BOOLEAN, defaultValue: false },
   username: { type: DataTypes.STRING, allowNull: true },
   firstName: { type: DataTypes.STRING, allowNull: true },
+  paymentCurrency: { type: DataTypes.STRING(3), allowNull: true },
   referredBy: { type: DataTypes.BIGINT, allowNull: true },
   referralProcessed: { type: DataTypes.BOOLEAN, defaultValue: false },
   referralOfferShown: { type: DataTypes.BOOLEAN, defaultValue: false }
@@ -53,7 +54,8 @@ const PaymentMethod = sequelize.define('PaymentMethod', {
   isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
   settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
-  ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: true }
+  ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: true },
+  minimumTransferAmount: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 }
 });
 
 const Merchant = sequelize.define('Merchant', {
@@ -225,6 +227,9 @@ const NetworkClient = sequelize.define('NetworkClient', {
   ownerTelegramId: { type: DataTypes.BIGINT, allowNull: true },
   apiKeyHash: { type: DataTypes.STRING(64), allowNull: false, unique: true },
   settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  // Public settlement profile only. API secret/key remain inside each shop schema.
+  binancePayId: { type: DataTypes.STRING(120), allowNull: true },
+  binanceReady: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   capabilities: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
 });
@@ -286,11 +291,20 @@ const NetworkDebtPayment = sequelize.define('NetworkDebtPayment', {
   status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'pending' },
   requestedByShopId: { type: DataTypes.STRING(80), allowNull: false },
   confirmedByShopId: { type: DataTypes.STRING(80), allowNull: true },
+  // Network debt is settled only in USD/USDT via the creditor's Binance ID.
+  binancePayId: { type: DataTypes.STRING(120), allowNull: true },
+  submittedOrderId: { type: DataTypes.STRING(128), allowNull: true },
+  transactionId: { type: DataTypes.STRING(128), allowNull: true },
+  verificationError: { type: DataTypes.STRING(80), allowNull: true },
+  debtorNotified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  verifiedAt: { type: DataTypes.DATE, allowNull: true },
   rejectedAt: { type: DataTypes.DATE, allowNull: true },
   confirmedAt: { type: DataTypes.DATE, allowNull: true }
 }, { indexes: [
   { fields: ['debtorShopId', 'status'] },
-  { fields: ['creditorShopId', 'status'] }
+  { fields: ['creditorShopId', 'status'] },
+  { fields: ['creditorShopId', 'status', 'submittedOrderId'] },
+  { fields: ['transactionId'] }
 ] });
 
 const NetworkPaymentIntent = sequelize.define('NetworkPaymentIntent', {
@@ -320,6 +334,56 @@ const NetworkNotificationEvent = sequelize.define('NetworkNotificationEvent', {
 }, { indexes: [
   { fields: ['id'] },
   { fields: ['eventType', 'createdAt'] }
+] });
+
+
+// Custom payment methods shared across the network. Core methods such as
+// Binance and SuperQi are intentionally NOT stored here; they stay private
+// to the bot that configured them.
+const NetworkSharedPaymentMethod = sequelize.define('NetworkSharedPaymentMethod', {
+  id: { type: DataTypes.STRING(96), primaryKey: true },
+  ownerShopId: { type: DataTypes.STRING(80), allowNull: false },
+  ownerLocalMethodId: { type: DataTypes.INTEGER, allowNull: false },
+  nameAr: { type: DataTypes.STRING(120), allowNull: false },
+  nameEn: { type: DataTypes.STRING(120), allowNull: false },
+  paymentNumber: { type: DataTypes.STRING(255), allowNull: false },
+  iconCustomEmojiId: { type: DataTypes.STRING(32), allowNull: true },
+  iconAlt: { type: DataTypes.STRING(16), allowNull: false, defaultValue: '💳' },
+  settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 1 },
+  minimumTransferAmount: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 },
+  isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }
+}, { indexes: [
+  { unique: true, fields: ['ownerShopId', 'ownerLocalMethodId'] },
+  { fields: ['settlementCurrency', 'isActive'] }
+] });
+
+// A shared payment is approved by the owner of the payment rail, not by the
+// storefront that merely displayed it. The source bot completes the local
+// order/top-up only after the owner confirms that the money really arrived.
+const NetworkSharedPaymentRequest = sequelize.define('NetworkSharedPaymentRequest', {
+  id: { type: DataTypes.STRING(72), primaryKey: true },
+  sharedPaymentMethodId: { type: DataTypes.STRING(96), allowNull: false },
+  paymentOwnerShopId: { type: DataTypes.STRING(80), allowNull: false },
+  sourceShopId: { type: DataTypes.STRING(80), allowNull: false },
+  activity: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'purchase' },
+  sourceRef: { type: DataTypes.STRING(120), allowNull: false },
+  sourceEntityId: { type: DataTypes.STRING(80), allowNull: false },
+  customerId: { type: DataTypes.BIGINT, allowNull: true },
+  customerName: { type: DataTypes.STRING(160), allowNull: true },
+  amountUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: false },
+  paymentCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  paymentAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: false },
+  status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'waiting_owner' },
+  sourceHandled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  approvedByTelegramId: { type: DataTypes.BIGINT, allowNull: true },
+  approvedByUsername: { type: DataTypes.STRING(64), allowNull: true },
+  approvedByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
+  resolvedAt: { type: DataTypes.DATE, allowNull: true }
+}, { indexes: [
+  { unique: true, fields: ['sourceShopId', 'sourceRef'] },
+  { fields: ['paymentOwnerShopId', 'status'] },
+  { fields: ['sourceShopId', 'sourceHandled', 'status'] }
 ] });
 
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
@@ -551,6 +615,7 @@ async function initializeDatabase() {
   await addColumnIfMissing('Users', 'blocked', { type: DataTypes.BOOLEAN, defaultValue: false });
   await addColumnIfMissing('Users', 'username', { type: DataTypes.STRING, allowNull: true });
   await addColumnIfMissing('Users', 'firstName', { type: DataTypes.STRING, allowNull: true });
+  await addColumnIfMissing('Users', 'paymentCurrency', { type: DataTypes.STRING(3), allowNull: true });
   await addColumnIfMissing('Users', 'referredBy', { type: DataTypes.BIGINT, allowNull: true });
   await addColumnIfMissing('Users', 'referralProcessed', { type: DataTypes.BOOLEAN, defaultValue: false });
   await addColumnIfMissing('Users', 'referralOfferShown', { type: DataTypes.BOOLEAN, defaultValue: false });
@@ -578,9 +643,25 @@ async function initializeDatabase() {
 
   await addColumnIfMissing('PaymentMethods', 'settlementCurrency', { type: DataTypes.STRING(8), defaultValue: 'USD' });
   await addColumnIfMissing('PaymentMethods', 'ratePerUsd', { type: DataTypes.DECIMAL(18, 4), allowNull: true });
+  await addColumnIfMissing('PaymentMethods', 'minimumTransferAmount', { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 });
+  await addColumnIfMissing('NetworkSharedPaymentMethods', 'minimumTransferAmount', { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 });
 
   await addColumnIfMissing('NetworkPaymentIntents', 'customerName', { type: DataTypes.STRING(160), allowNull: true });
   await addColumnIfMissing('NetworkPaymentIntents', 'activity', { type: DataTypes.STRING(20), defaultValue: 'payment' });
+
+  await addColumnIfMissing('NetworkClients', 'binancePayId', { type: DataTypes.STRING(120), allowNull: true });
+  await addColumnIfMissing('NetworkClients', 'binanceReady', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+
+  await addColumnIfMissing('NetworkDebtPayments', 'binancePayId', { type: DataTypes.STRING(120), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'submittedOrderId', { type: DataTypes.STRING(128), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'transactionId', { type: DataTypes.STRING(128), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'verificationError', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'debtorNotified', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+  await addColumnIfMissing('NetworkDebtPayments', 'verifiedAt', { type: DataTypes.DATE, allowNull: true });
+
+  await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByTelegramId', { type: DataTypes.BIGINT, allowNull: true });
+  await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByUsername', { type: DataTypes.STRING(64), allowNull: true });
+  await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
 
   await addColumnIfMissing('Codes', 'maxUses', { type: DataTypes.INTEGER, defaultValue: 1 });
   await addColumnIfMissing('Codes', 'usedCount', { type: DataTypes.INTEGER, defaultValue: 0 });
@@ -617,6 +698,11 @@ async function initializeDatabase() {
     CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_remote_order_ref_unique"
     ON ${tableSql('PurchaseOrders')} ("remoteOrderRef")
     WHERE "remoteOrderRef" IS NOT NULL
+  `);
+  await sequelize.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "network_debt_payments_transaction_id_unique"
+    ON ${tableSql('NetworkDebtPayments')} ("transactionId")
+    WHERE "transactionId" IS NOT NULL
   `);
 
   await sequelize.query(`
@@ -730,6 +816,8 @@ module.exports = {
   NetworkDebtPayment,
   NetworkPaymentIntent,
   NetworkNotificationEvent,
+  NetworkSharedPaymentMethod,
+  NetworkSharedPaymentRequest,
   initializeDatabase,
   getSetting,
   setSetting,
