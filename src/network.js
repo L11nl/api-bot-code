@@ -26,6 +26,10 @@ function isMaster() { return role() === 'master'; }
 function enabledClient() { return isClient() && config.network.apiUrl && config.network.apiKey; }
 function hashKey(value) { return crypto.createHash('sha256').update(String(value || '')).digest('hex'); }
 function newApiKey() { return `net_${crypto.randomBytes(24).toString('hex')}`; }
+function clientDatabaseSchema(shopId) {
+  const suffix = String(shopId || '').replace(/^shop-/, '').replace(/[^A-Za-z0-9_]/g, '_').slice(0, 40) || crypto.randomBytes(6).toString('hex');
+  return `client_${suffix}`;
+}
 function newProductId() { return crypto.randomUUID(); }
 function newPaymentIntentId() { return `NPI-${crypto.randomBytes(12).toString('hex').toUpperCase()}`; }
 
@@ -85,7 +89,7 @@ async function createClient({ name, ownerTelegramId, settlementCurrency = 'USD' 
       apiControl: false
     }
   });
-  return { row, apiKey };
+  return { row, apiKey, databaseSchema: clientDatabaseSchema(shopId) };
 }
 
 async function catalogSnapshot() {
@@ -526,6 +530,7 @@ module.exports = {
   isMaster,
   enabledClient,
   createClient,
+  clientDatabaseSchema,
   syncCatalogToLocal,
   createRemoteProduct,
   updateRemoteProduct,

@@ -4,13 +4,22 @@ const config = require('./config');
 const { encryptPayload, decryptPayload, isEncrypted, legacyPayload } = require('./cryptoStore');
 const { inventoryFingerprint, inventoryPayloadIsValid, parseDescription } = require('./utils');
 
+function quoteIdent(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function tableSql(tableName) {
+  return `${quoteIdent(config.databaseSchema)}.${quoteIdent(tableName)}`;
+}
+
 const sequelize = new Sequelize(config.databaseUrl, {
   dialect: 'postgres',
   logging: false,
   dialectOptions: config.databaseUrl.includes('railway.internal')
     ? {}
     : { ssl: { require: true, rejectUnauthorized: false } },
-  pool: { max: 10, min: 0, acquire: 30000, idle: 10000 }
+  pool: { max: 10, min: 0, acquire: 30000, idle: 10000 },
+  define: { schema: config.databaseSchema }
 });
 
 const User = sequelize.define('User', {
@@ -254,9 +263,10 @@ SupportTicket.belongsTo(User, { foreignKey: 'userId' });
 
 async function addColumnIfMissing(tableName, columnName, definition) {
   const qi = sequelize.getQueryInterface();
+  const options = { schema: config.databaseSchema };
   let table;
-  try { table = await qi.describeTable(tableName); } catch { return; }
-  if (!table[columnName]) await qi.addColumn(tableName, columnName, definition);
+  try { table = await qi.describeTable(tableName, options); } catch { return; }
+  if (!table[columnName]) await qi.addColumn(tableName, columnName, definition, options);
 }
 
 async function migrateLegacySingleFileBotData() {
@@ -264,7 +274,7 @@ async function migrateLegacySingleFileBotData() {
   // email/password accounts. Convert those values before inventory cleanup,
   // otherwise the v4 parser would treat old codes as private accounts.
   await sequelize.query(`
-    UPDATE "Merchants"
+    UPDATE ${tableSql('Merchants')}
     SET "type" = CASE
       WHEN LOWER(COALESCE("type", '')) = 'single' THEN 'code'
       WHEN LOWER(COALESCE("type", '')) = 'bulk' THEN 'account'
@@ -292,7 +302,7 @@ async function migrateLegacySingleFileBotData() {
   try {
     const [sections] = await sequelize.query(`
       SELECT "id", "nameAr", "nameEn"
-      FROM "DigitalSections"
+      FROM ${tableSql('DigitalSections')}
     `);
     for (const section of sections || []) {
       const label = String(section.nameAr || section.nameEn || '').trim();
@@ -313,7 +323,7 @@ async function migrateLegacySingleFileBotData() {
     if (!existingNumber || !existingRate) {
       const [rows] = await sequelize.query(`
         SELECT "walletAddress", "rate", "methods"
-        FROM "DepositConfigs"
+        FROM ${tableSql('DepositConfigs')}
         WHERE UPPER("currency") = 'IQD'
         ORDER BY "id" ASC
         LIMIT 1
@@ -438,6 +448,7 @@ async function normalizeProductDescriptions() {
 
 async function initializeDatabase() {
   await sequelize.authenticate();
+  await sequelize.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(config.databaseSchema)}`);
   await sequelize.sync({ alter: false });
 
   await addColumnIfMissing('Users', 'blocked', { type: DataTypes.BOOLEAN, defaultValue: false });
@@ -485,25 +496,25 @@ async function initializeDatabase() {
   // to create the index before the column existed, crashing Railway startup.
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_merchant_id_fingerprint"
-    ON "Codes" ("merchantId", "fingerprint")
+    ON ${tableSql('Codes')} ("merchantId", "fingerprint")
   `);
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_merchant_id_is_used"
-    ON "Codes" ("merchantId", "isUsed")
+    ON ${tableSql('Codes')} ("merchantId", "isUsed")
   `);
   await sequelize.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS "merchants_network_product_id_unique"
-    ON "Merchants" ("networkProductId")
+    ON ${tableSql('Merchants')} ("networkProductId")
     WHERE "networkProductId" IS NOT NULL
   `);
   await sequelize.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_remote_order_ref_unique"
-    ON "PurchaseOrders" ("remoteOrderRef")
+    ON ${tableSql('PurchaseOrders')} ("remoteOrderRef")
     WHERE "remoteOrderRef" IS NOT NULL
   `);
 
   await sequelize.query(`
-    UPDATE "Codes"
+    UPDATE ${tableSql('Codes')}
     SET "maxUses" = COALESCE("maxUses", 1),
         "usedCount" = CASE WHEN "isUsed" = TRUE AND COALESCE("usedCount",0)=0 THEN 1 ELSE COALESCE("usedCount",0) END,
         "buyers" = COALESCE("buyers", '[]'::jsonb)

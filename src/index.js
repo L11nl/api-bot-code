@@ -87,7 +87,7 @@ async function main() {
   await setupTelegramCommands(bot);
 
   startupState = 'ready';
-  console.log('CD Store v8.0 is ready');
+  console.log('CD Store v9.0 is ready');
 }
 
 main().catch(error => {

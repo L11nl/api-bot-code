@@ -63,6 +63,7 @@ const network = require('./network');
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
 const memoryRate = new Map();
+const pendingPartnerBotTokens = new Map();
 let cachedBotUsername = '';
 
 const PREMIUM_EMOJI = Object.freeze({
@@ -165,6 +166,7 @@ async function setState(userId, state) {
 }
 
 async function clearState(userId) {
+  pendingPartnerBotTokens.delete(Number(userId));
   await setState(userId, null);
 }
 
@@ -2105,7 +2107,7 @@ async function handleStateMessage(msg, user, state) {
       }
       data.name = text;
       await setState(user.id, { action: 'admin_network_add', step: 'owner', data });
-      await bot.sendMessage(user.id, '2/3 أرسل Telegram ID الرقمي لصاحب البوت.');
+      await bot.sendMessage(user.id, '2/4 أرسل Telegram ID الرقمي لصاحب البوت.');
       return true;
     }
     if (state.step === 'owner') {
@@ -2114,8 +2116,23 @@ async function handleStateMessage(msg, user, state) {
         return true;
       }
       data.ownerTelegramId = text;
+      await setState(user.id, { action: 'admin_network_add', step: 'bot_token', data });
+      await bot.sendMessage(user.id, [
+        '3/4 أرسل <b>BOT TOKEN</b> مالالبوت الجديد من BotFather.',
+        '',
+        '🔐 راح أحذف رسالتك مباشرة بعد قراءتها، وما أخزن التوكن بقاعدة البيانات.'
+      ].join('\n'), { parse_mode: 'HTML' });
+      return true;
+    }
+    if (state.step === 'bot_token') {
+      if (!/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(text)) {
+        await bot.sendMessage(user.id, '❌ صيغة BOT TOKEN مو صحيحة. انسخ التوكن كامل من BotFather.');
+        return true;
+      }
+      pendingPartnerBotTokens.set(Number(user.id), text);
+      await bot.deleteMessage(user.id, msg.message_id).catch(() => {});
       await setState(user.id, { action: 'admin_network_add', step: 'currency', data });
-      await bot.sendMessage(user.id, '3/3 اختَر عملة الحساب الرئيسية لهذا الشريك:', {
+      await bot.sendMessage(user.id, '4/4 اختَر عملة الحساب الرئيسية لهذا الشريك:', {
         reply_markup: { inline_keyboard: [[
           { text: '🇮🇶 دينار عراقي', callback_data: 'adm:network_currency:IQD' },
           { text: '🇪🇬 جنيه مصري', callback_data: 'adm:network_currency:EGP' }
@@ -3171,7 +3188,7 @@ async function handleAdminCallback(query, user, data) {
     if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     await setState(user.id, { action: 'admin_network_add', step: 'name', data: {} });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, '1/3 أرسل اسم صاحب البوت أو اسم المتجر، مثال: أحمد', { reply_markup: cancelInlineKeyboard() });
+    return bot.sendMessage(user.id, '1/4 أرسل اسم صاحب البوت أو اسم المتجر، مثال: أحمد', { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:network_currency:')) {
@@ -3181,25 +3198,71 @@ async function handleAdminCallback(query, user, data) {
     const fresh = await User.findByPk(user.id);
     const state = parseState(fresh);
     if (!state || state.action !== 'admin_network_add' || state.step !== 'currency') return answerCallback(query.id, 'انتهت العملية.', true);
+    const partnerBotToken = pendingPartnerBotTokens.get(Number(user.id));
+    if (!partnerBotToken) {
+      await clearState(user.id);
+      await answerCallback(query.id, 'انتهت جلسة الإعداد. أعد إضافة البوت حتى أحمي التوكن.', true);
+      return;
+    }
     const created = await network.createClient({
       name: state.data.name,
       ownerTelegramId: state.data.ownerTelegramId,
       settlementCurrency: currency
     });
+    const rawVariablesPart1 = [
+      `BOT_TOKEN=${partnerBotToken}`,
+      `ADMIN_IDS=${state.data.ownerTelegramId}`,
+      'DATABASE_URL=${{Postgres.DATABASE_URL}}',
+      `DATABASE_SCHEMA=${created.databaseSchema}`,
+      'NETWORK_ROLE=client'
+    ].join('\n');
+    const rawVariablesPart2 = [
+      `NETWORK_API_URL=${config.network.publicUrl || 'https://YOUR-MASTER.up.railway.app'}`,
+      `NETWORK_API_KEY=${created.apiKey}`,
+      `NETWORK_SHOP_ID=${created.row.shopId}`,
+      `NETWORK_SHOP_NAME=${created.row.name}`,
+      `NETWORK_SETTLEMENT_CURRENCY=${currency}`
+    ].join('\n');
+    const rawVariables = `${rawVariablesPart1}\n${rawVariablesPart2}`;
+    const copyChunks = [];
+    let copyChunk = '';
+    for (const line of rawVariables.split('\n')) {
+      const candidate = copyChunk ? `${copyChunk}\n${line}` : line;
+      if (candidate.length > 240 && copyChunk) {
+        copyChunks.push(copyChunk);
+        copyChunk = line;
+      } else {
+        copyChunk = candidate;
+      }
+    }
+    if (copyChunk) copyChunks.push(copyChunk);
     await clearState(user.id);
-    await answerCallback(query.id, 'تم إنشاء مفتاح API.');
+    await answerCallback(query.id, 'جاهز للنسخ إلى Railway.');
     return bot.sendMessage(user.id, [
-      '✅ <b>تم تفعيل بوت الشريك</b>',
+      '✅ <b>بوت الشريك صار جاهز</b>',
       `الاسم: <b>${escapeHtml(created.row.name)}</b>`,
       `Shop ID: <code>${escapeHtml(created.row.shopId)}</code>`,
-      `العملة: <b>${currency}</b>`,
+      `قاعدة البيانات: <b>تتكوّن تلقائياً</b> داخل Schema منفصل <code>${escapeHtml(created.databaseSchema)}</code>`,
       '',
-      '🔑 <b>API KEY — يظهر مرة واحدة فقط:</b>',
-      `<code>${escapeHtml(created.apiKey)}</code>`,
+      '📌 <b>شنو تسوي هسه؟</b>',
+      '1) داخل <b>نفس مشروع Railway</b> مالالبوت الرئيسي، أنشئ Service جديد وارفع نفس ملفات البوت.',
+      '2) افتح <b>Variables → Raw Editor</b>.',
+      '3) انسخ البلوك كله أدناه والصقه كما هو.',
+      '4) Deploy. انتهى — لا تضيف PostgreSQL جديد ولا تنشئ جداول بيدك.',
       '',
-      'ضع عنده في Railway:',
-      '<pre>NETWORK_ROLE=client\nNETWORK_API_URL=' + escapeHtml(config.network.publicUrl || 'https://YOUR-MASTER.up.railway.app') + '\nNETWORK_API_KEY=' + escapeHtml(created.apiKey) + '\nNETWORK_SHOP_ID=' + escapeHtml(created.row.shopId) + '\nNETWORK_SHOP_NAME=' + escapeHtml(created.row.name) + '</pre>'
-    ].join('\n'), { parse_mode: 'HTML' });
+      '⚠️ لازم خدمة قاعدة البيانات داخل المشروع اسمها <b>Postgres</b> حتى يعمل السطر التلقائي <code>${{Postgres.DATABASE_URL}}</code>.',
+      '',
+      '📋 <b>اضغط مطولاً وانسخ:</b>',
+      `<pre>${escapeHtml(rawVariables)}</pre>`,
+      '',
+      '🔐 BOT TOKEN وAPI KEY أسرار. لا ترسل هذا البلوك لأي شخص غير صاحب البوت.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: copyChunks.map((chunk, index) => [{
+        text: `📋 نسخ الإعدادات ${index + 1}/${copyChunks.length}`,
+        copy_text: { text: chunk }
+      }]) }
+    });
   }
 
   if (data.startsWith('adm:network_client:')) {

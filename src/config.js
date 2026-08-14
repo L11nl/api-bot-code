@@ -19,6 +19,11 @@ function parseAdminIds() {
 
 const token = requireEnv('BOT_TOKEN');
 const databaseUrl = requireEnv('DATABASE_URL');
+const databaseSchemaRaw = String(process.env.DATABASE_SCHEMA || 'public').trim();
+if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(databaseSchemaRaw)) {
+  throw new Error('DATABASE_SCHEMA must start with a letter/underscore and contain only letters, numbers, or underscores');
+}
+const databaseSchema = databaseSchemaRaw;
 const configuredInventoryKey = String(process.env.INVENTORY_ENCRYPTION_KEY || '').trim();
 let inventoryKey = configuredInventoryKey;
 if (inventoryKey && !/^[0-9a-fA-F]{64}$/.test(inventoryKey)) {
@@ -35,6 +40,7 @@ if (!inventoryKey) {
 module.exports = {
   token,
   databaseUrl,
+  databaseSchema,
   admins: parseAdminIds(),
   port: Number(process.env.PORT || 3000),
   supportUsername: String(process.env.SUPPORT_USERNAME || '').replace(/^@/, ''),
@@ -48,8 +54,16 @@ module.exports = {
     role: ['master', 'client', 'standalone'].includes(String(process.env.NETWORK_ROLE || '').toLowerCase())
       ? String(process.env.NETWORK_ROLE).toLowerCase()
       : 'master',
-    apiUrl: String(process.env.NETWORK_API_URL || '').replace(/\/$/, ''),
-    publicUrl: String(process.env.NETWORK_PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/$/, ''),
+    apiUrl: (() => {
+      const raw = String(process.env.NETWORK_API_URL || '').trim().replace(/\/$/, '');
+      if (!raw) return '';
+      return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    })(),
+    publicUrl: (() => {
+      const raw = String(process.env.NETWORK_PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).trim().replace(/\/$/, '');
+      if (!raw) return '';
+      return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    })(),
     apiKey: String(process.env.NETWORK_API_KEY || '').trim(),
     shopId: String(process.env.NETWORK_SHOP_ID || '').trim() || `shop-${[...parseAdminIds()][0]}`,
     shopName: String(process.env.NETWORK_SHOP_NAME || 'متجري').trim(),
