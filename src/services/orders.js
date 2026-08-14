@@ -16,6 +16,7 @@ function sellerShopIdFromOptions(options = {}) {
 
 async function getProductStock(merchantId) {
   const product = await Merchant.findByPk(merchantId);
+  if (product?.type === 'service') return 999999;
   if (product?.networkManaged) return Number(product.networkStock || 0);
   const [rows] = await sequelize.query(`
     SELECT COALESCE(SUM(GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)),0)::int AS stock
@@ -45,8 +46,8 @@ async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
   if (!product || !product.isActive) throw new Error('PRODUCT_NOT_FOUND');
   const qty = Number(quantity);
   if (!Number.isInteger(qty) || qty < 1 || qty > 100) throw new Error('INVALID_QUANTITY');
-  const stock = await getProductStock(product.id);
-  if (stock < qty) throw new Error('OUT_OF_STOCK');
+  const stock = product.type === 'service' ? 999999 : await getProductStock(product.id);
+  if (product.type !== 'service' && stock < qty) throw new Error('OUT_OF_STOCK');
   return PurchaseOrder.create({
     userId,
     merchantId,
@@ -91,6 +92,31 @@ async function fulfillOrder(orderId, options = {}) {
     if (!['pending_payment','paid','proof_pending'].includes(order.status)) throw new Error('ORDER_ALREADY_PROCESSED');
 
     const product = await Merchant.findByPk(order.merchantId, { transaction, lock: transaction.LOCK.UPDATE });
+
+    if (product?.type === 'service') {
+      const description = parseDescription(product.description);
+      const inputMode = String(description.serviceInputMode || 'text');
+      const servicePayload = {
+        serviceRequest: true,
+        inputMode,
+        inputLabelAr: inputMode === 'email' ? 'الإيميل' : inputMode === 'phone' ? 'الرقم' : 'النص',
+        inputLabelEn: inputMode === 'email' ? 'Email' : inputMode === 'phone' ? 'Phone number' : 'Text',
+        promptAr: String(description.servicePromptAr || 'أرسل البيانات المطلوبة حتى نباشر تنفيذ الخدمة.'),
+        promptEn: String(description.servicePromptEn || 'Send the required details so we can start the service.'),
+        submitted: false,
+        needsAdminAction: true
+      };
+      order.status = 'service_pending_input';
+      order.delivery = [servicePayload];
+      order.paidAt = order.paidAt || new Date();
+      if (options.paymentRef) order.paymentRef = options.paymentRef;
+      await order.save({ transaction });
+      description.sold = Number(description.sold || 0) + Number(order.quantity || 0);
+      product.description = description;
+      await product.save({ transaction });
+      await transaction.commit();
+      return { order, deliveries: [servicePayload], product, servicePendingInput: true };
+    }
 
     if (product?.networkManaged) {
       await transaction.commit();
