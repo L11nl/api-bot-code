@@ -4483,6 +4483,7 @@ async function processNetworkNotificationEvents() {
 async function processDebtRemindersAndStatus(data) {
   const now = Date.now();
   const reminderMs = Math.max(5, Number(config.network.debtReminderMinutes || 30)) * 60 * 1000;
+  const reminderThresholdUsd = Math.max(0, Number(config.network.debtReminderThresholdUsd || 15));
   let reminderTimes = {};
   try { reminderTimes = JSON.parse(await getSetting('network_debt_reminder_times_v11', '{}')); } catch { reminderTimes = {}; }
   if (!reminderTimes || typeof reminderTimes !== 'object' || Array.isArray(reminderTimes)) reminderTimes = {};
@@ -4491,6 +4492,10 @@ async function processDebtRemindersAndStatus(data) {
   const activeKeys = new Set();
   for (const account of data.accounts || []) {
     if (account.direction !== 'owe' || Number(account.amountUsd || 0) <= 0) continue;
+    const amount = Number(account.amountUsd || 0);
+    // Do not bother admins with tiny balances. Debt reminders start only when
+    // the open amount reaches the configured threshold (default: $15).
+    if (amount + 1e-9 < reminderThresholdUsd) continue;
     const counterpartyId = String(account.counterpartyId || '');
     const key = `owe:${counterpartyId}`;
     activeKeys.add(key);
@@ -4500,7 +4505,6 @@ async function processDebtRemindersAndStatus(data) {
     const last = Number(reminderTimes[key] || 0);
     if (now - last < reminderMs) continue;
 
-    const amount = Number(account.amountUsd || 0);
     const text = [
       '⚠️ <b>تذكير تسوية دين</b>',
       '',

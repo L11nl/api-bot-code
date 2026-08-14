@@ -75,6 +75,7 @@ module.exports = {
     iqdRate: Number(process.env.IQD_RATE || 1500),
     sellerCommissionPercent: Math.min(50, Math.max(0, Number(process.env.NETWORK_SELLER_COMMISSION_PERCENT || 10))),
     debtReminderMinutes: Math.max(5, Number(process.env.NETWORK_DEBT_REMINDER_MINUTES || 30)),
+    debtReminderThresholdUsd: Math.max(0, Number(process.env.NETWORK_DEBT_REMINDER_THRESHOLD_USD || 15)),
     debtSuspendThresholdUsd: Math.max(1, Number(process.env.NETWORK_DEBT_SUSPEND_THRESHOLD_USD || 40))
   },
   binance: {
