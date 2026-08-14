@@ -335,10 +335,34 @@ SupportTicket.belongsTo(User, { foreignKey: 'userId' });
 
 async function addColumnIfMissing(tableName, columnName, definition) {
   const qi = sequelize.getQueryInterface();
-  const options = { schema: config.databaseSchema };
+
+  // IMPORTANT: QueryInterface methods do not consistently apply options.schema
+  // to schema-qualify ALTER TABLE statements. Passing a table reference object
+  // guarantees that both describeTable() and addColumn() target the exact
+  // DATABASE_SCHEMA for this bot (e.g. client_xxx instead of public).
+  const tableRef = { tableName, schema: config.databaseSchema };
+
   let table;
-  try { table = await qi.describeTable(tableName, options); } catch { return; }
-  if (!table[columnName]) await qi.addColumn(tableName, columnName, definition, options);
+  try {
+    table = await qi.describeTable(tableRef);
+  } catch (error) {
+    // The table may not exist yet on a brand-new schema; sequelize.sync() will
+    // normally create it before this helper is reached. Do not turn that into a
+    // second startup failure here.
+    return;
+  }
+
+  if (table[columnName]) return;
+
+  try {
+    await qi.addColumn(tableRef, columnName, definition);
+  } catch (error) {
+    // PostgreSQL 42701 = duplicate_column. This can happen when two Railway
+    // instances overlap during a deploy and race between describe/add. The end
+    // state is already correct, so it is safe to continue.
+    if (String(error?.original?.code || error?.parent?.code || error?.code || '') === '42701') return;
+    throw error;
+  }
 }
 
 async function migrateLegacySingleFileBotData() {
@@ -519,6 +543,7 @@ async function normalizeProductDescriptions() {
 }
 
 async function initializeDatabase() {
+  console.log(`[DB] role=${config.network.role} schema=${config.databaseSchema}`);
   await sequelize.authenticate();
   await sequelize.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(config.databaseSchema)}`);
   await sequelize.sync({ alter: false });
