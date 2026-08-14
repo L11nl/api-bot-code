@@ -72,7 +72,8 @@ async function main() {
   console.log('Database ready');
 
   startupState = 'telegram';
-  ({ bot } = require('./bot'));
+  const botModule = require('./bot');
+  ({ bot } = botModule);
 
   // Polling and webhooks cannot be active together. Clear any old webhook.
   try {
@@ -85,9 +86,10 @@ async function main() {
   await bot.startPolling({ restart: true });
   console.log('Telegram bot polling started');
   await setupTelegramCommands(bot);
+  if (typeof botModule.startNetworkAccountWatcher === 'function') botModule.startNetworkAccountWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v9.0 is ready');
+  console.log('CD Store v11.0 is ready');
 }
 
 main().catch(error => {

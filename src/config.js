@@ -72,7 +72,10 @@ module.exports = {
       ? String(process.env.NETWORK_SETTLEMENT_CURRENCY).toUpperCase()
       : 'USD',
     egpRate: Number(process.env.EGP_RATE_PER_USD || 50),
-    iqdRate: Number(process.env.IQD_RATE || 1500)
+    iqdRate: Number(process.env.IQD_RATE || 1500),
+    sellerCommissionPercent: Math.min(50, Math.max(0, Number(process.env.NETWORK_SELLER_COMMISSION_PERCENT || 10))),
+    debtReminderMinutes: Math.max(5, Number(process.env.NETWORK_DEBT_REMINDER_MINUTES || 30)),
+    debtSuspendThresholdUsd: Math.max(1, Number(process.env.NETWORK_DEBT_SUSPEND_THRESHOLD_USD || 40))
   },
   binance: {
     // Normal Binance account API keys with read permission only.

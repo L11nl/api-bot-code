@@ -19,6 +19,7 @@ const { encryptPayload } = require('./cryptoStore');
 const { inventoryFingerprint, escapeHtml } = require('./utils');
 const { getProductStock, fulfillOrder } = require('./services/orders');
 const binancePay = require('./payments/binancePay');
+const ledger = require('./services/networkLedger');
 
 function role() { return config.network.role; }
 function isClient() { return role() === 'client'; }
@@ -116,6 +117,25 @@ async function catalogSnapshot() {
   return output;
 }
 
+async function productStockProtection(merchantId, productOwnerShopId = 'master') {
+  const schema = `"${String(config.databaseSchema).replace(/"/g, '""')}"`;
+  const [rows] = await sequelize.query(`
+    SELECT
+      COALESCE(MAX(COALESCE("contributionPriceUsd",0)),0)::numeric AS "maxContributionPriceUsd",
+      COALESCE(SUM(CASE WHEN COALESCE(NULLIF("stockOwnerShopId", ''), 'master') <> :productOwnerShopId
+                        THEN GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0) ELSE 0 END),0)::int AS "externalAvailable"
+    FROM ${schema}."Codes"
+    WHERE "merchantId" = :merchantId
+      AND COALESCE("isUsed", FALSE) = FALSE
+      AND COALESCE("usedCount",0) < COALESCE("maxUses",1)
+      AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+  `, { replacements: { merchantId, productOwnerShopId: String(productOwnerShopId || 'master') } });
+  return {
+    maxContributionPriceUsd: Number(rows?.[0]?.maxContributionPriceUsd || 0),
+    externalAvailable: Number(rows?.[0]?.externalAvailable || 0)
+  };
+}
+
 async function syncCatalogToLocal() {
   if (!enabledClient()) return null;
   const data = await clientRequest('get', '/api/v1/catalog');
@@ -163,8 +183,11 @@ async function deleteRemoteProduct(networkProductId) {
   return clientRequest('delete', `/api/v1/products/${encodeURIComponent(networkProductId)}`);
 }
 
-async function addRemoteInventory(networkProductId, items) {
-  return clientRequest('post', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory`, { items });
+async function addRemoteInventory(networkProductId, items, options = {}) {
+  return clientRequest('post', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory`, {
+    items,
+    suppressNotification: Boolean(options.suppressNotification)
+  });
 }
 
 async function fulfillRemote({ networkProductId, quantity, localOrderId, customerId }) {
@@ -201,6 +224,54 @@ async function recordFallbackSettlement({ amountUsd, method, sourceRef, customer
 async function getMySettlementSummary() {
   if (!enabledClient()) return null;
   return clientRequest('get', '/api/v1/settlements/me');
+}
+
+async function getMyAccounts() {
+  if (!enabledClient()) return null;
+  return clientRequest('get', '/api/v1/accounts/me');
+}
+
+async function getMyCommerceStatus() {
+  if (!enabledClient()) return { suspended: false, liabilityUsd: 0, thresholdUsd: Number(config.network.debtSuspendThresholdUsd || 40) };
+  const data = await clientRequest('get', '/api/v1/status/me');
+  return data.status || { suspended: false, liabilityUsd: 0, thresholdUsd: Number(config.network.debtSuspendThresholdUsd || 40) };
+}
+
+async function getNotificationEvents(afterId = null) {
+  if (!enabledClient()) return { events: [], latestId: 0 };
+  const bootstrap = afterId == null;
+  const query = bootstrap ? '?bootstrap=1' : `?after=${encodeURIComponent(String(Math.max(0, Number(afterId || 0))))}`;
+  return clientRequest('get', `/api/v1/notifications/events${query}`);
+}
+
+async function publishNotificationEvent(event) {
+  if (!isMaster()) throw new Error('MASTER_ONLY');
+  return ledger.publishNotificationEvent(event);
+}
+
+async function localNotificationEventsAfter(afterId = 0) {
+  if (!isMaster()) return [];
+  return ledger.notificationEventsAfter(afterId);
+}
+
+async function latestLocalNotificationEventId() {
+  if (!isMaster()) return 0;
+  return ledger.latestNotificationEventId();
+}
+
+async function markDebtPaid(counterpartyShopId) {
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/accounts/pay', { counterpartyShopId });
+}
+
+async function resolveIncomingDebtPayment(requestId, approve) {
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/accounts/payments/${encodeURIComponent(requestId)}/resolve`, { approve: Boolean(approve) });
+}
+
+async function getProductContributors(networkProductId) {
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('get', `/api/v1/products/${encodeURIComponent(networkProductId)}/contributors`);
 }
 
 async function createSettlementForClient(client, payload) {
@@ -303,6 +374,18 @@ function installMasterRoutes(app, getBot) {
 
   app.get('/api/v1/catalog', (req, res) => route(req, res, async () => ({ products: await catalogSnapshot() })));
 
+  app.get('/api/v1/status/me', (req, res) => route(req, res, async client => ({
+    status: await ledger.commerceStatusForShop(client.shopId)
+  })));
+
+  app.get('/api/v1/notifications/events', (req, res) => route(req, res, async () => {
+    const latestId = await ledger.latestNotificationEventId();
+    if (String(req.query?.bootstrap || '') === '1') return { events: [], latestId };
+    const after = Math.max(0, Number(req.query?.after || 0));
+    const events = await ledger.notificationEventsAfter(after, 100);
+    return { events: events.map(row => row.toJSON()), latestId };
+  }));
+
   app.post('/api/v1/products', (req, res) => route(req, res, async client => {
     const body = req.body || {};
     const nameAr = String(body.nameAr || '').trim();
@@ -331,7 +414,14 @@ function installMasterRoutes(app, getBot) {
       }
     });
     if (!product.nameAr) throw new Error('INVALID_PRODUCT');
-    return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) } };
+    const event = await ledger.publishNotificationEvent({
+      eventType: 'new_product',
+      networkProductId: product.networkProductId,
+      actorShopId: client.shopId,
+      actorName: client.name,
+      payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+    });
+    return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) }, eventId: Number(event.id) };
   }));
 
   app.patch('/api/v1/products/:networkProductId', (req, res) => route(req, res, async client => {
@@ -342,6 +432,16 @@ function installMasterRoutes(app, getBot) {
     const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
+    const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
+    if (changes.price !== undefined && Number(changes.price) + 1e-9 < protection.maxContributionPriceUsd) {
+      throw new Error(`PRICE_BELOW_STOCK_VALUE:${protection.maxContributionPriceUsd.toFixed(2)}`);
+    }
+    if (changes.isActive === false && protection.externalAvailable > 0) {
+      throw new Error(`EXTERNAL_STOCK_EXISTS:${protection.externalAvailable}`);
+    }
+    if (protection.externalAvailable > 0 && ['type','sharedLimit','deliveryMode'].some(key => changes[key] !== undefined && changes[key] !== product[key])) {
+      throw new Error(`STRUCTURE_LOCKED_BY_EXTERNAL_STOCK:${protection.externalAvailable}`);
+    }
     await product.update(changes);
     return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) } };
   }));
@@ -350,6 +450,8 @@ function installMasterRoutes(app, getBot) {
     const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
+    const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
+    if (protection.externalAvailable > 0) throw new Error(`EXTERNAL_STOCK_EXISTS:${protection.externalAvailable}`);
     await product.update({ isActive: false });
     return { deleted: true };
   }));
@@ -357,13 +459,14 @@ function installMasterRoutes(app, getBot) {
   app.post('/api/v1/products/:networkProductId/inventory', (req, res) => route(req, res, async client => {
     const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
-    if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
+    // Any active partner can contribute stock to an existing shared product.
+    // Product metadata still belongs to the original product owner.
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     let added = 0;
     for (const payload of items.slice(0, 1000)) {
       const fingerprint = inventoryFingerprint(product.type, payload);
       const duplicate = await Code.findOne({
-        where: { merchantId: product.id, fingerprint, isUsed: false }
+        where: { merchantId: product.id, fingerprint }
       });
       if (duplicate) continue;
       await Code.create({
@@ -374,11 +477,31 @@ function installMasterRoutes(app, getBot) {
         usedCount: 0,
         maxUses: product.type === 'shared' ? Math.max(1, Number(product.sharedLimit || 1)) : 1,
         buyers: [],
-        fingerprint
+        fingerprint,
+        stockOwnerShopId: client.shopId,
+        contributionPriceUsd: Number(product.price || 0)
       });
       added += 1;
     }
-    return { added, stock: await getProductStock(product.id), sourceShopId: client.shopId };
+    let eventId = null;
+    if (added > 0 && !Boolean(req.body?.suppressNotification)) {
+      const event = await ledger.publishNotificationEvent({
+        eventType: 'stock_added',
+        networkProductId: product.networkProductId,
+        actorShopId: client.shopId,
+        actorName: client.name,
+        amount: added,
+        payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+      });
+      eventId = Number(event.id);
+    }
+    return { added, stock: await getProductStock(product.id), sourceShopId: client.shopId, eventId };
+  }));
+
+  app.get('/api/v1/products/:networkProductId/contributors', (req, res) => route(req, res, async () => {
+    const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    return { contributors: await ledger.salesStatsForProduct(product) };
   }));
 
   app.post('/api/v1/fulfill', (req, res) => route(req, res, async client => {
@@ -405,10 +528,17 @@ function installMasterRoutes(app, getBot) {
       }
     });
     const result = await fulfillOrder(order.id, { paymentRef: remoteRef, sourceShopId: client.shopId });
+    const deliveries = [];
+    for (const delivery of result.deliveries || []) {
+      deliveries.push({
+        ...delivery,
+        inventoryOwnerShopName: await ledger.getShopName(delivery.inventoryOwnerShopId || 'master')
+      });
+    }
     return {
       remoteOrderId: order.id,
       product: { networkProductId: product.networkProductId, nameAr: product.nameAr, nameEn: product.nameEn, type: product.type },
-      deliveries: result.deliveries || []
+      deliveries
     };
   }));
 
@@ -417,7 +547,9 @@ function installMasterRoutes(app, getBot) {
     const row = await DeliveryRecord.findByPk(req.params.deliveryId);
     if (!row || String(row.sourceShopId || '') !== String(client.shopId)) throw new Error('DELIVERY_NOT_FOUND');
     const product = await Merchant.findByPk(row.merchantId);
-    return { delivery: row.toJSON(), product: product ? { nameAr: product.nameAr, nameEn: product.nameEn, type: product.type } : null };
+    const delivery = row.toJSON();
+    delivery.inventoryOwnerShopName = await ledger.getShopName(delivery.inventoryOwnerShopId || 'master');
+    return { delivery, product: product ? { nameAr: product.nameAr, nameEn: product.nameEn, type: product.type } : null };
   }));
 
   app.get('/api/v1/payment-options', (req, res) => route(req, res, async () => {
@@ -443,6 +575,8 @@ function installMasterRoutes(app, getBot) {
   }));
 
   app.post('/api/v1/payments/binance/intents', (req, res) => route(req, res, async client => {
+    const status = await ledger.commerceStatusForShop(client.shopId);
+    if (status.suspended) throw new Error(`SHOP_DEBT_SUSPENDED:${status.liabilityUsd.toFixed(2)}`);
     if (!(await binancePay.configured())) throw new Error('BINANCE_NOT_CONFIGURED');
     const amount = Number(req.body?.amountUsd || 0);
     if (!Number.isFinite(amount) || amount < 0.01) throw new Error('INVALID_AMOUNT');
@@ -464,18 +598,15 @@ function installMasterRoutes(app, getBot) {
     const intent = await NetworkPaymentIntent.findOne({ where: { id: req.params.intentId, shopId: client.shopId } });
     if (!intent) throw new Error('INTENT_NOT_FOUND');
     if (intent.status === 'verified') {
-      const existing = await NetworkSettlement.findOne({
-        where: { debtorShopId: client.shopId, creditorShopId: 'master', sourceMethod: 'binance', sourceRef: intent.transactionId }
-      });
-      if (!existing && intent.transactionId) {
-        const settlement = await createSettlementForClient(client, {
+      if (intent.transactionId) {
+        await ledger.recordObligation({
+          debtorShopId: 'master',
+          creditorShopId: client.shopId,
           amountUsd: Number(intent.amountUsd),
-          method: 'binance',
-          sourceRef: intent.transactionId,
-          customerName: intent.customerName || intent.customerId || 'زبون',
-          activity: intent.activity || 'payment'
+          kind: 'fallback_payment_received',
+          sourceRef: `binance:${intent.transactionId}`,
+          metadata: { method: 'binance', activity: intent.activity || 'payment', customerName: intent.customerName || intent.customerId || 'زبون' }
         });
-        await notifySettlement(getBot?.(), client, settlement, await settlementSummary(client.shopId), intent.activity || 'payment');
       }
       return { verified: true, transactionId: intent.transactionId };
     }
@@ -490,38 +621,73 @@ function installMasterRoutes(app, getBot) {
     intent.submittedOrderId = String(req.body?.orderId || '');
     intent.transactionId = result.transactionId;
     await intent.save();
-    const before = await NetworkSettlement.findOne({
-      where: { debtorShopId: client.shopId, creditorShopId: 'master', sourceMethod: 'binance', sourceRef: result.transactionId }
-    });
-    const settlement = await createSettlementForClient(client, {
+    const recorded = await ledger.recordObligation({
+      debtorShopId: 'master',
+      creditorShopId: client.shopId,
       amountUsd: Number(intent.amountUsd),
-      method: 'binance',
-      sourceRef: result.transactionId,
-      customerName: intent.customerName || intent.customerId || 'زبون',
-      activity: intent.activity || 'payment'
+      kind: 'fallback_payment_received',
+      sourceRef: `binance:${result.transactionId}`,
+      metadata: { method: 'binance', activity: intent.activity || 'payment', customerName: intent.customerName || intent.customerId || 'زبون' }
     });
-    if (!before) await notifySettlement(getBot?.(), client, settlement, await settlementSummary(client.shopId), intent.activity || 'payment');
+    if (!recorded.duplicate) {
+      const bot = getBot?.();
+      if (bot) {
+        const text = `💰 تم استلام $${Number(intent.amountUsd).toFixed(2)} عبر Binance الرئيسي لصالح ${escapeHtml(client.name)}. تم تسجيلها تلقائياً في الحسابات.`;
+        for (const adminId of config.admins) bot.sendMessage(adminId, text).catch(() => {});
+      }
+    }
     return { verified: true, transactionId: result.transactionId };
   }));
 
   app.post('/api/v1/settlements', (req, res) => route(req, res, async client => {
-    const sourceMethod = String(req.body?.method || 'shared_payment');
-    const sourceRef = req.body?.sourceRef ? String(req.body.sourceRef) : null;
-    const existing = sourceRef ? await NetworkSettlement.findOne({
-      where: { debtorShopId: client.shopId, creditorShopId: 'master', sourceMethod, sourceRef }
-    }) : null;
-    const row = existing || await createSettlementForClient(client, req.body || {});
-    const summary = await settlementSummary(client.shopId);
-    if (!existing) await notifySettlement(getBot?.(), client, row, summary, String(req.body?.activity || 'payment'));
-    return { settlementId: row.id, summary, duplicate: Boolean(existing) };
+    const body = req.body || {};
+    const amountUsd = Number(body.amountUsd || 0);
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error('INVALID_AMOUNT');
+    const method = String(body.method || 'shared_payment');
+    const sourceRef = String(body.sourceRef || `${client.shopId}:${Date.now()}`);
+    const recorded = await ledger.recordObligation({
+      debtorShopId: 'master',
+      creditorShopId: client.shopId,
+      amountUsd,
+      kind: 'fallback_payment_received',
+      sourceRef: `${method}:${sourceRef}`,
+      metadata: { method, activity: body.activity || 'payment', customerName: body.customerName || 'زبون' }
+    });
+    return { duplicate: Boolean(recorded.duplicate), accounts: await ledger.accountsForShop(client.shopId) };
   }));
 
+  app.get('/api/v1/settlements/me', (req, res) => route(req, res, async client => {
+    const data = await ledger.accountsForShop(client.shopId);
+    const masterAccount = data.accounts.find(row => row.counterpartyId === 'master');
+    const amount = masterAccount && masterAccount.direction === 'owe' ? masterAccount.amountUsd : 0;
+    const values = await ledger.currencySnapshot(amount);
+    return {
+      shop: { shopId: client.shopId, name: client.name, settlementCurrency: client.settlementCurrency },
+      ownerName: config.network.ownerName,
+      summary: { amountUsd: values.usd, iqdAmount: values.iqd, egpAmount: values.egp }
+    };
+  }));
 
-  app.get('/api/v1/settlements/me', (req, res) => route(req, res, async client => ({
-    shop: { shopId: client.shopId, name: client.name, settlementCurrency: client.settlementCurrency },
-    ownerName: config.network.ownerName,
-    summary: await settlementSummary(client.shopId)
+  app.get('/api/v1/accounts/me', (req, res) => route(req, res, async client => ({
+    accounts: await ledger.accountsForShop(client.shopId)
   })));
+
+  app.post('/api/v1/accounts/pay', (req, res) => route(req, res, async client => {
+    const counterpartyShopId = String(req.body?.counterpartyShopId || '').trim();
+    if (!counterpartyShopId) throw new Error('COUNTERPARTY_REQUIRED');
+    const request = await ledger.createDebtPaymentRequest(client.shopId, counterpartyShopId);
+    const bot = getBot?.();
+    if (bot && counterpartyShopId === 'master') {
+      const text = `🤝 ${escapeHtml(client.name)} سجّل أنه سدّد ديناً بقيمة $${Number(request.amountUsd).toFixed(2)}. افتح الحسابات لتأكيد الاستلام أو رفضه.`;
+      for (const adminId of config.admins) bot.sendMessage(adminId, text).catch(() => {});
+    }
+    return { request: request.toJSON(), accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
+  app.post('/api/v1/accounts/payments/:id/resolve', (req, res) => route(req, res, async client => {
+    const request = await ledger.resolveDebtPaymentRequest(req.params.id, client.shopId, Boolean(req.body?.approve));
+    return { request: request.toJSON(), accounts: await ledger.accountsForShop(client.shopId) };
+  }));
 }
 
 module.exports = {
@@ -543,6 +709,16 @@ module.exports = {
   verifyFallbackBinanceIntent,
   recordFallbackSettlement,
   getMySettlementSummary,
+  getMyAccounts,
+  getMyCommerceStatus,
+  getNotificationEvents,
+  publishNotificationEvent,
+  localNotificationEventsAfter,
+  latestLocalNotificationEventId,
+  markDebtPaid,
+  resolveIncomingDebtPayment,
+  getProductContributors,
+  productStockProtection,
   settlementSummary,
   installMasterRoutes
 };
