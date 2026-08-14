@@ -3,13 +3,23 @@ const crypto = require('crypto');
 const { sequelize, User, Merchant, Code, PurchaseOrder, DeliveryRecord } = require('../db');
 const { parseDescription } = require('../utils');
 const { decryptPayload } = require('../cryptoStore');
+const config = require('../config');
+const networkLedger = require('./networkLedger');
+
+function quotedSchema() {
+  return `"${String(config.databaseSchema).replace(/"/g, '""')}"`;
+}
+
+function sellerShopIdFromOptions(options = {}) {
+  return String(options.sourceShopId || 'master');
+}
 
 async function getProductStock(merchantId) {
   const product = await Merchant.findByPk(merchantId);
   if (product?.networkManaged) return Number(product.networkStock || 0);
   const [rows] = await sequelize.query(`
     SELECT COALESCE(SUM(GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)),0)::int AS stock
-    FROM "Codes"
+    FROM ${quotedSchema()}."Codes"
     WHERE "merchantId" = :merchantId
       AND COALESCE("isUsed", FALSE) = FALSE
       AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
@@ -109,7 +119,10 @@ async function fulfillOrder(orderId, options = {}) {
             merchantId: fresh.merchantId,
             codeId: delivery.codeId || null,
             payload: delivery.payload || {},
-            sourceShopId: 'network-master'
+            sourceShopId: config.network.shopId,
+            inventoryOwnerShopId: delivery.inventoryOwnerShopId || null,
+            unitPriceUsd: Number(fresh.unitPrice || 0),
+            supplierValueUsd: Number(delivery.supplierValueUsd ?? delivery.contributionPriceUsd ?? fresh.unitPrice ?? 0)
           }
         });
       }
@@ -118,17 +131,34 @@ async function fulfillOrder(orderId, options = {}) {
 
     const deliveries = [];
     for (let i = 0; i < order.quantity; i++) {
+      const sellerShopId = sellerShopIdFromOptions(options);
       const inventoryRows = await sequelize.query(`
-        SELECT * FROM "Codes"
-        WHERE "merchantId" = :merchantId
-          AND COALESCE("isUsed", FALSE) = FALSE
-          AND COALESCE("usedCount",0) < COALESCE("maxUses",1)
-          AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
-        ORDER BY "id" ASC
-        FOR UPDATE SKIP LOCKED
+        WITH owner_stats AS (
+          SELECT COALESCE(NULLIF("stockOwnerShopId", ''), 'master') AS owner,
+                 SUM(COALESCE("maxUses",1))::numeric AS total_units,
+                 SUM(COALESCE("usedCount",0))::numeric AS sold_units
+          FROM ${quotedSchema()}."Codes"
+          WHERE "merchantId" = :merchantId
+          GROUP BY COALESCE(NULLIF("stockOwnerShopId", ''), 'master')
+        )
+        SELECT c.*
+        FROM ${quotedSchema()}."Codes" c
+        LEFT JOIN owner_stats os
+          ON os.owner = COALESCE(NULLIF(c."stockOwnerShopId", ''), 'master')
+        WHERE c."merchantId" = :merchantId
+          AND COALESCE(c."isUsed", FALSE) = FALSE
+          AND COALESCE(c."usedCount",0) < COALESCE(c."maxUses",1)
+          AND (c."expiresAt" IS NULL OR c."expiresAt" > NOW())
+        ORDER BY
+          CASE WHEN COALESCE(NULLIF(c."stockOwnerShopId", ''), 'master') = :sellerShopId THEN 0 ELSE 1 END ASC,
+          CASE WHEN COALESCE(NULLIF(c."stockOwnerShopId", ''), 'master') = :sellerShopId THEN 0
+               ELSE COALESCE(os.sold_units / NULLIF(os.total_units, 0), 0) END ASC,
+          c."createdAt" ASC,
+          c."id" ASC
+        FOR UPDATE OF c SKIP LOCKED
         LIMIT 1
       `, {
-        replacements: { merchantId: product.id },
+        replacements: { merchantId: product.id, sellerShopId },
         type: QueryTypes.SELECT,
         transaction
       });
@@ -157,6 +187,8 @@ async function fulfillOrder(orderId, options = {}) {
       deliveries.push({
         deliveryId,
         codeId: inventory.id,
+        inventoryOwnerShopId: String(inventory.stockOwnerShopId || 'master'),
+        contributionPriceUsd: Number(inventory.contributionPriceUsd ?? order.unitPrice ?? product.price ?? 0),
         payload,
         sharedPosition: maxUses > 1 ? { current: nextCount, max: maxUses } : null,
         waitingCode
@@ -164,6 +196,18 @@ async function fulfillOrder(orderId, options = {}) {
     }
 
     for (const delivery of deliveries) {
+      const sellerShopId = sellerShopIdFromOptions(options);
+      const inventoryOwnerShopId = String(delivery.inventoryOwnerShopId || 'master');
+      const retailUnitPriceUsd = Number(order.unitPrice || product.price || 0);
+      const externalStock = inventoryOwnerShopId !== sellerShopId;
+      const split = externalStock
+        ? networkLedger.sellerCommissionSplit(retailUnitPriceUsd)
+        : { retailUsd: retailUnitPriceUsd, supplierUsd: retailUnitPriceUsd, commissionUsd: 0, commissionPercent: 0 };
+
+      delivery.supplierValueUsd = Number(split.supplierUsd || 0);
+      delivery.sellerCommissionUsd = Number(split.commissionUsd || 0);
+      delivery.sellerCommissionPercent = Number(split.commissionPercent || 0);
+
       await DeliveryRecord.create({
         id: delivery.deliveryId,
         orderId: order.id,
@@ -171,8 +215,57 @@ async function fulfillOrder(orderId, options = {}) {
         merchantId: product.id,
         codeId: delivery.codeId || null,
         payload: delivery.payload || {},
-        sourceShopId: options.sourceShopId || null
+        sourceShopId: sellerShopId,
+        inventoryOwnerShopId,
+        unitPriceUsd: retailUnitPriceUsd,
+        supplierValueUsd: Number(split.supplierUsd || 0)
       }, { transaction });
+
+      // Cross-shop sale rule: the shop that brought the customer keeps a 10%
+      // sales commission (configurable by NETWORK_SELLER_COMMISSION_PERCENT),
+      // while the stock owner receives the remaining 90%. The commission is
+      // stored as an audit ledger entry but does not create a debt by itself.
+      if (Number(split.supplierUsd || 0) > 0) {
+        await networkLedger.recordObligation({
+          debtorShopId: sellerShopId,
+          creditorShopId: inventoryOwnerShopId,
+          amountUsd: Number(split.supplierUsd),
+          kind: 'inventory_sale',
+          sourceRef: delivery.deliveryId,
+          networkProductId: product.networkProductId,
+          deliveryId: delivery.deliveryId,
+          sellerShopId,
+          stockOwnerShopId: inventoryOwnerShopId,
+          metadata: {
+            orderId: order.id,
+            customerId: String(order.userId),
+            retailUnitPriceUsd,
+            supplierValueUsd: Number(split.supplierUsd),
+            sellerCommissionUsd: Number(split.commissionUsd || 0),
+            sellerCommissionPercent: Number(split.commissionPercent || 0)
+          },
+          transaction
+        });
+      }
+      if (externalStock && Number(split.commissionUsd || 0) > 0) {
+        await networkLedger.recordObligation({
+          debtorShopId: sellerShopId,
+          creditorShopId: sellerShopId,
+          amountUsd: Number(split.commissionUsd),
+          kind: 'sales_commission',
+          sourceRef: delivery.deliveryId,
+          networkProductId: product.networkProductId,
+          deliveryId: delivery.deliveryId,
+          sellerShopId,
+          stockOwnerShopId: inventoryOwnerShopId,
+          metadata: {
+            orderId: order.id,
+            retailUnitPriceUsd,
+            commissionPercent: Number(split.commissionPercent || 0)
+          },
+          transaction
+        });
+      }
     }
 
     const waitingCode = deliveries.some(d => d.waitingCode);
