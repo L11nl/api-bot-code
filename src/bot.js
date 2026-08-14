@@ -569,28 +569,145 @@ async function showWalletMenu(chatId, user) {
   });
 }
 
+async function adminDashboardText() {
+  const [open, notificationsEnabled] = await Promise.all([
+    isStoreOpen(),
+    automaticNotificationsEnabled()
+  ]);
+  const role = network.isMaster()
+    ? 'البوت الرئيسي — Master'
+    : network.enabledClient()
+      ? 'بوت شريك — Client'
+      : 'بوت مستقل';
+  const shopName = network.enabledClient()
+    ? String(config.network.shopName || 'متجري')
+    : network.isMaster()
+      ? String(config.network.ownerName || 'المتجر الرئيسي')
+      : 'متجري';
+  const currency = shopDisplayCurrency();
+
+  return [
+    '👑 <b>لوحة الإدارة</b>',
+    '',
+    `🏪 المتجر: <b>${escapeHtml(shopName)}</b>`,
+    `🔗 النوع: <b>${escapeHtml(role)}</b>`,
+    `🟢 الحالة: <b>${open ? 'مفتوح' : 'مغلق'}</b>`,
+    `${notificationsEnabled ? '🔔' : '🔕'} الإشعارات: <b>${notificationsEnabled ? 'تشغيل' : 'إيقاف'}</b>`,
+    `💱 العملة المحلية: <b>${escapeHtml(currency)}</b>`,
+    '',
+    'اختَر القسم اللي تريد تديره:'
+  ].join('\n');
+}
+
 async function adminMenu() {
-  const notificationsEnabled = await automaticNotificationsEnabled();
   const rows = [
-    [{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }],
-    [emojiButton('المنتجات وإدارتها', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' }), { text: '🔎 استرجاع منتج', callback_data: 'adm:delivery_lookup' }],
-    [{ text: '🧾 الطلبات', callback_data: 'adm:orders' }, emojiButton('دفعات سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:proofs' })],
-    [{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }, { text: '💳 طرق الدفع', callback_data: 'adm:payment_methods' }],
-    [{ text: '👤 إدارة مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
-    [emojiButton('الدعم', PREMIUM_EMOJI.support, { callback_data: 'adm:support' }), { text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
-    [{ text: notificationsEnabled ? '🔔 الإشعارات: تشغيل' : '🔕 الإشعارات: إيقاف', callback_data: 'adm:notifications_toggle', style: notificationsEnabled ? 'success' : 'danger' }],
-    [{ text: '🎁 الإحالات والهدايا', callback_data: 'adm:referrals' }, { text: '📢 القناة', callback_data: 'adm:channel' }]
+    [emojiButton('المنتجات والمخزون', PREMIUM_EMOJI.products, { callback_data: 'adm:menu:products', style: 'primary' })],
+    [{ text: '🧾 الطلبات والتسليم', callback_data: 'adm:menu:orders', style: 'primary' }],
+    [{ text: '💳 الدفع والمحفظة', callback_data: 'adm:menu:payments', style: 'primary' }],
+    [{ text: '👥 العملاء والتواصل', callback_data: 'adm:menu:users', style: 'primary' }],
+    [{ text: '🎁 التسويق والإشعارات', callback_data: 'adm:menu:marketing', style: 'primary' }]
   ];
 
-  if (network.isMaster()) {
-    rows.push([{ text: '🔗 API والشركاء', callback_data: 'adm:network', style: 'primary' }]);
-    rows.push([{ text: '🤝 الحسابات والديون', callback_data: 'adm:network_accounts', style: 'primary' }]);
-  } else if (network.enabledClient()) {
-    rows.push([{ text: '🤝 الحسابات والديون', callback_data: 'adm:network_accounts', style: 'primary' }]);
+  if (network.isMaster() || network.enabledClient()) {
+    rows.push([{ text: network.isMaster() ? '🤝 الشبكة والشركاء والحسابات' : '🤝 الشبكة والحسابات', callback_data: 'adm:menu:network', style: 'primary' }]);
   }
 
-  rows.push([{ text: '⚙️ إعدادات المتجر', callback_data: 'adm:settings', style: 'primary' }, { text: '🔐 فتح/إغلاق', callback_data: 'adm:store_toggle' }]);
+  rows.push([{ text: '⚙️ إعدادات المتجر', callback_data: 'adm:menu:settings', style: 'primary' }]);
   return { inline_keyboard: rows };
+}
+
+async function adminSectionMenu(section) {
+  const back = [{ text: '⬅️ رجوع للوحة الإدارة', callback_data: 'adm:home' }];
+
+  if (section === 'products') {
+    return {
+      title: '🛍️ <b>المنتجات والمخزون</b>\nإضافة المنتجات، تعديلها، تعبئة المخزون واسترجاع أي تسليم.',
+      keyboard: [
+        [{ text: '➕ إضافة منتج جديد', callback_data: 'adm:add_product', style: 'success' }],
+        [emojiButton('إدارة المنتجات', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' })],
+        [{ text: '📥 إضافة مخزون', callback_data: 'adm:stock', style: 'success' }],
+        [{ text: '🔎 استرجاع منتج / طلب', callback_data: 'adm:delivery_lookup' }],
+        back
+      ]
+    };
+  }
+
+  if (section === 'orders') {
+    return {
+      title: '🧾 <b>الطلبات والتسليم</b>\nمتابعة الطلبات والدفعات المعلقة واسترجاع محتوى أي عملية بيع.',
+      keyboard: [
+        [{ text: '🧾 آخر الطلبات', callback_data: 'adm:orders', style: 'primary' }],
+        [{ text: '⏳ الدفعات المعلقة والمراجعة', callback_data: 'adm:proofs' }],
+        [{ text: '🔎 البحث برقم الطلب أو DLV', callback_data: 'adm:delivery_lookup' }],
+        back
+      ]
+    };
+  }
+
+  if (section === 'payments') {
+    return {
+      title: '💳 <b>الدفع والمحفظة</b>\nطرق الدفع المحلية، الطرق الموروثة وBinance.',
+      keyboard: [
+        [{ text: '💳 إدارة طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }],
+        [{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }],
+        [emojiButton(network.enabledClient() ? 'تغيير API Binance' : 'إعداد API Binance', PREMIUM_EMOJI.binance, { callback_data: 'adm:binance_setup', style: 'primary' })],
+        [{ text: '🗑 حذف Binance المحلي', callback_data: 'adm:binance_clear', style: 'danger' }],
+        back
+      ]
+    };
+  }
+
+  if (section === 'users') {
+    return {
+      title: '👥 <b>العملاء والتواصل</b>\nإدارة حسابات الزبائن، الرصيد، الدعم والإعلانات.',
+      keyboard: [
+        [{ text: '👤 البحث عن مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
+        [emojiButton('الدعم', PREMIUM_EMOJI.support, { callback_data: 'adm:support', style: 'primary' })],
+        [{ text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
+        back
+      ]
+    };
+  }
+
+  if (section === 'marketing') {
+    const notificationsEnabled = await automaticNotificationsEnabled();
+    return {
+      title: '🎁 <b>التسويق والإشعارات</b>\nالإحالات، القناة والإشعارات التلقائية.',
+      keyboard: [
+        [{ text: '🎁 الإحالات والهدايا', callback_data: 'adm:referrals', style: 'primary' }],
+        [{ text: '📢 القناة الإجبارية', callback_data: 'adm:channel' }],
+        [{ text: notificationsEnabled ? '🔔 الإشعارات: تشغيل' : '🔕 الإشعارات: إيقاف', callback_data: 'adm:notifications_toggle', style: notificationsEnabled ? 'success' : 'danger' }],
+        back
+      ]
+    };
+  }
+
+  if (section === 'network') {
+    const keyboard = [];
+    if (network.isMaster()) keyboard.push([{ text: '🔗 API والشركاء', callback_data: 'adm:network', style: 'primary' }]);
+    keyboard.push([{ text: '🤝 الحسابات والديون', callback_data: 'adm:network_accounts', style: 'primary' }]);
+    keyboard.push(back);
+    return {
+      title: network.isMaster()
+        ? '🤝 <b>الشبكة والشركاء والحسابات</b>\nإدارة بوتات الأصدقاء، API والديون بين المتاجر.'
+        : '🤝 <b>الشبكة والحسابات</b>\nحساباتك وديونك مع باقي المتاجر.',
+      keyboard
+    };
+  }
+
+  if (section === 'settings') {
+    const open = await isStoreOpen();
+    return {
+      title: '⚙️ <b>إعدادات المتجر</b>\nالإعدادات العامة وحالة فتح المتجر.',
+      keyboard: [
+        [{ text: '⚙️ الإعدادات العامة', callback_data: 'adm:settings', style: 'primary' }],
+        [{ text: open ? '🔒 إغلاق المتجر' : '🔓 فتح المتجر', callback_data: 'adm:store_toggle', style: open ? 'danger' : 'success' }],
+        back
+      ]
+    };
+  }
+
+  return null;
 }
 
 function rateAllowed(userId) {
@@ -1304,7 +1421,7 @@ bot.on('message', async msg => {
 
     if (msg.text === '/admin') {
       if (!isAdmin(user.id)) return bot.sendMessage(msg.chat.id, t(user.lang, 'adminOnly'));
-      return bot.sendMessage(msg.chat.id, '👑 <b>لوحة إدارة المالك</b>\nهذه اللوحة لا تظهر للمستخدمين.', {
+      return bot.sendMessage(msg.chat.id, await adminDashboardText(), {
         parse_mode: 'HTML',
         reply_markup: await adminMenu()
       });
@@ -3621,6 +3738,8 @@ async function showAdminPaymentMethods(chatId) {
     inheritedLines.push('', 'تگدر تخفي Binance أو سوبركي أو أي طريقة دفع رئيسية في هذا البوت وحده. هذا ما يغيّر شي بباقي البوتات.');
   }
 
+  rows.push([{ text: '⬅️ رجوع لقسم الدفع', callback_data: 'adm:menu:payments' }]);
+
   return bot.sendMessage(chatId, [
     '💳 <b>طرق الدفع</b>',
     '',
@@ -3711,6 +3830,7 @@ async function showNetworkAccounts(chatId) {
     ]);
   }
   keyboard.push([{ text: '🔄 تحديث الحسابات', callback_data: 'adm:network_accounts' }]);
+  keyboard.push([{ text: '⬅️ رجوع لقسم الشبكة', callback_data: 'adm:menu:network' }]);
   return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
@@ -3750,6 +3870,25 @@ async function showProductContributors(chatId, product) {
 }
 
 async function handleAdminCallback(query, user, data) {
+  if (data === 'adm:home') {
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, await adminDashboardText(), {
+      parse_mode: 'HTML',
+      reply_markup: await adminMenu()
+    });
+  }
+
+  if (data.startsWith('adm:menu:')) {
+    const section = data.slice('adm:menu:'.length);
+    const menu = await adminSectionMenu(section);
+    if (!menu) return answerCallback(query.id, 'القسم غير موجود.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, menu.title, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: menu.keyboard }
+    });
+  }
+
   if (data === 'adm:delivery_lookup') {
     await setState(user.id, { action: 'admin_delivery_lookup' });
     await answerCallback(query.id);
@@ -3810,6 +3949,7 @@ async function handleAdminCallback(query, user, data) {
     }]);
     keyboard.push([{ text: '➕ تفعيل بوت صديق', callback_data: 'adm:network_add', style: 'success' }]);
     keyboard.push([{ text: apiEnabled ? '🔒 إغلاق API للجميع' : '🔓 فتح API للجميع', callback_data: 'adm:network_global_toggle', style: apiEnabled ? 'danger' : 'success' }]);
+    keyboard.push([{ text: '⬅️ رجوع لقسم الشبكة', callback_data: 'adm:menu:network' }]);
     return bot.sendMessage(query.message.chat.id, [
       '🔗 <b>API والشركاء</b>',
       '',
@@ -4096,7 +4236,8 @@ async function handleAdminCallback(query, user, data) {
         inline_keyboard: [
           [{ text: '➕ إضافة/تغيير القناة', callback_data: 'adm:set:required_channel' }],
           ...(url ? [[{ text: '👁 فتح القناة', url }]] : []),
-          [{ text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }]
+          [{ text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }],
+          [{ text: '⬅️ رجوع للتسويق والإشعارات', callback_data: 'adm:menu:marketing' }]
         ]
       }
     });
@@ -4107,26 +4248,24 @@ async function handleAdminCallback(query, user, data) {
     await setSetting('automatic_notifications_enabled', enabled ? 'false' : 'true');
     const nowEnabled = !enabled;
     await answerCallback(query.id, nowEnabled ? 'تم تشغيل الإشعارات التلقائية.' : 'تم إيقاف الإشعارات التلقائية.');
-    try {
-      await bot.editMessageReplyMarkup(await adminMenu(), {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id
-      });
-    } catch {
-      await bot.sendMessage(query.message.chat.id, nowEnabled ? '🔔 الإشعارات التلقائية شغالة.' : '🔕 الإشعارات التلقائية متوقفة.', {
-        reply_markup: await adminMenu()
-      });
-    }
-    return;
+    const menu = await adminSectionMenu('marketing');
+    return bot.sendMessage(query.message.chat.id, nowEnabled ? '🔔 <b>الإشعارات التلقائية شغالة الآن.</b>' : '🔕 <b>الإشعارات التلقائية متوقفة الآن.</b>', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: menu.keyboard }
+    });
   }
 
   if (data === 'adm:store_toggle') {
     const open = await isStoreOpen();
     await setSetting('store_open', open ? 'false' : 'true');
     await answerCallback(query.id, open ? 'تم إغلاق المتجر.' : 'تم فتح المتجر.');
+    const menu = await adminSectionMenu('settings');
     return bot.sendMessage(query.message.chat.id, open
-      ? '🔒 المتجر مغلق الآن. الدعم يبقى شغال.'
-      : '✅ المتجر مفتوح الآن للمستخدمين.');
+      ? '🔒 <b>المتجر مغلق الآن.</b> الدعم والطلبات القديمة تبقى متاحة.'
+      : '✅ <b>المتجر مفتوح الآن للمستخدمين.</b>', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: menu.keyboard }
+    });
   }
 
   if (data === 'adm:referrals') {
@@ -4236,7 +4375,10 @@ async function handleAdminCallback(query, user, data) {
       lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.binance)} <b>Binance — تحقق يدوي</b>`);
       lines.push(...binanceRows.map(row => `#${row.id} | مستخدم <code>${row.userId}</code> | ${moneyUsd(row.expectedAmount)} | <code>${escapeHtml(row.submittedOrderId || '')}</code>`));
     }
-    return bot.sendMessage(query.message.chat.id, lines.length ? lines.join('\n') : 'ماكو دفعات معلقة.', { parse_mode: 'HTML' });
+    return bot.sendMessage(query.message.chat.id, lines.length ? lines.join('\n') : 'ماكو دفعات معلقة.', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ رجوع للطلبات والتسليم', callback_data: 'adm:menu:orders' }]] }
+    });
   }
 
   if (data === 'adm:orders') {
@@ -4244,7 +4386,9 @@ async function handleAdminCallback(query, user, data) {
     const rows = await PurchaseOrder.findAll({ order: [['id', 'DESC']], limit: 30, include: [Merchant] });
     return bot.sendMessage(query.message.chat.id, rows.length
       ? rows.map(order => `#${order.id} | ${order.Merchant?.nameAr || ''} | ${order.status} | ${moneyUsd(order.totalAmount)}`).join('\n')
-      : 'ماكو طلبات.');
+      : 'ماكو طلبات.', {
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ رجوع للطلبات والتسليم', callback_data: 'adm:menu:orders' }]] }
+    });
   }
 
   if (data === 'adm:stats') {
@@ -4316,7 +4460,8 @@ async function handleAdminCallback(query, user, data) {
         [
           { text: '📢 القناة الإجبارية', callback_data: 'adm:set:required_channel' },
           { text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }
-        ]
+        ],
+        [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
       ] }
     });
   }
@@ -4511,7 +4656,8 @@ async function showReferralAdmin(chatId) {
       { text: '💵 تغيير مكافأة الشخص', callback_data: 'adm:set:referral_reward_amount' },
       { text: '🔢 تغيير العدد المطلوب', callback_data: 'adm:set:referral_gift_target' }
     ],
-    [{ text: '🎁 اختيار منتج الهدية', callback_data: 'adm:ref_product' }]
+    [{ text: '🎁 اختيار منتج الهدية', callback_data: 'adm:ref_product' }],
+    [{ text: '⬅️ رجوع للتسويق والإشعارات', callback_data: 'adm:menu:marketing' }]
   ];
 
   return bot.sendMessage(chatId, text, {
@@ -4587,6 +4733,7 @@ async function showAdminProducts(chatId, page = 0) {
   navigation.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
   if (safePage < pages - 1) navigation.push({ text: '➡️', callback_data: `adm:products:${safePage + 1}` });
   keyboard.push(navigation);
+  keyboard.push([{ text: '⬅️ رجوع للمنتجات والمخزون', callback_data: 'adm:menu:products' }]);
 
   await bot.sendMessage(chatId, '📦 <b>إدارة المنتجات</b>\n🟢 متوفر  •  🔴 فارغ/مخفي', {
     parse_mode: 'HTML',
@@ -4649,6 +4796,7 @@ async function showStockProductList(chatId) {
     }]);
   }
   if (!keyboard.length) keyboard.push([{ text: 'ماكو منتجات متاحة لإضافة مخزون', callback_data: 'adm:products:0' }]);
+  keyboard.push([{ text: '⬅️ رجوع للمنتجات والمخزون', callback_data: 'adm:menu:products' }]);
   await bot.sendMessage(chatId, 'اختَر المنتج لإضافة المخزون:', { reply_markup: { inline_keyboard: keyboard } });
 }
 
