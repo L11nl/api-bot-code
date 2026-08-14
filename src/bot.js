@@ -5562,6 +5562,31 @@ async function fetchLocalNetworkAccountData() {
 async function syncLocalSharedPaymentMethods() {
   if (!network.isMaster() && !network.enabledClient()) return;
   const methods = await PaymentMethod.findAll({ order: [['id', 'ASC']] });
+
+  // v12.0.2: publish the whole local wallet list as one authoritative snapshot.
+  // This makes newly-added Egyptian/Iraqi/USD wallets propagate to every bot
+  // and also removes deleted wallets from the shared registry. Older masters
+  // are still supported through the per-method fallback below.
+  if (typeof network.syncSharedPaymentMethodsSnapshot === 'function') {
+    try {
+      await network.syncSharedPaymentMethodsSnapshot(methods.map(method => ({
+        localMethodId: method.id,
+        nameAr: method.nameAr,
+        nameEn: method.nameEn,
+        paymentNumber: method.paymentNumber,
+        iconCustomEmojiId: method.iconCustomEmojiId,
+        iconAlt: method.iconAlt,
+        settlementCurrency: method.settlementCurrency,
+        ratePerUsd: Number(method.ratePerUsd || 1),
+        minimumTransferAmount: minimumTransferForMethod(method),
+        isActive: Boolean(method.isActive)
+      })));
+      return;
+    } catch (error) {
+      console.error('Shared payment snapshot sync:', error.message);
+    }
+  }
+
   for (const method of methods) {
     try { await syncPaymentMethodToNetwork(method); }
     catch (error) { console.error(`Shared payment method sync #${method.id}:`, error.message); }

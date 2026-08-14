@@ -11,6 +11,9 @@ const {
   NetworkClient,
   NetworkSettlement,
   NetworkPaymentIntent,
+  NetworkSharedPaymentMethod,
+  NetworkSharedPaymentRequest,
+  NetworkDebtPayment,
   getIqdRate,
   getSuperQiNumber,
   getSetting
@@ -33,6 +36,26 @@ function clientDatabaseSchema(shopId) {
 }
 function newProductId() { return crypto.randomUUID(); }
 function newPaymentIntentId() { return `NPI-${crypto.randomBytes(12).toString('hex').toUpperCase()}`; }
+function newSharedPaymentRequestId() { return `SPR-${crypto.randomBytes(12).toString('hex').toUpperCase()}`; }
+function localShopId() { return enabledClient() ? String(config.network.shopId) : 'master'; }
+function sharedPaymentMethodId(ownerShopId, ownerLocalMethodId) {
+  const digest = crypto.createHash('sha256').update(`${String(ownerShopId)}:${String(ownerLocalMethodId)}`).digest('hex').slice(0, 28);
+  return `spm_${digest}`;
+}
+function normalizePaymentCurrency(value) {
+  const code = String(value || 'USD').toUpperCase();
+  return ['USD', 'IQD', 'EGP'].includes(code) ? code : 'USD';
+}
+
+function normalizeMinimumTransferAmount(value, currency) {
+  const code = normalizePaymentCurrency(currency);
+  const numeric = Number(value);
+  const fallback = code === 'IQD' ? 1 : 0.01;
+  const amount = Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+  if (code === 'IQD') return Math.max(1, Math.ceil(amount));
+  return Math.max(0.01, Math.ceil((amount - 1e-9) * 100) / 100);
+}
+
 
 function clientHeaders() {
   return {
@@ -208,6 +231,362 @@ async function fallbackPayments() {
   return clientRequest('get', '/api/v1/payment-options');
 }
 
+async function localPublicBinanceProfile() {
+  const ready = await binancePay.configured();
+  if (!ready) return { binanceReady: false, binancePayId: null };
+  const runtime = await binancePay.getRuntimeConfig();
+  return { binanceReady: true, binancePayId: String(runtime.payId || '').trim() || null };
+}
+
+async function syncPublicPaymentProfile() {
+  const profile = await localPublicBinanceProfile();
+  if (isMaster()) return { shopId: 'master', ...profile };
+  if (!enabledClient()) return { shopId: localShopId(), ...profile };
+  return clientRequest('post', '/api/v1/shop-profile', profile);
+}
+
+async function paymentProfileForShop(shopIdRaw) {
+  const shopId = String(shopIdRaw || '').trim() || 'master';
+  if (shopId === 'master') {
+    const profile = await localPublicBinanceProfile();
+    return { shopId: 'master', shopName: config.network.ownerName || 'المالك الرئيسي', ...profile };
+  }
+  const client = await NetworkClient.findOne({ where: { shopId, isActive: true } });
+  if (!client) return { shopId, shopName: shopId, binanceReady: false, binancePayId: null };
+  return {
+    shopId: client.shopId,
+    shopName: client.name,
+    binanceReady: Boolean(client.binanceReady && client.binancePayId),
+    binancePayId: client.binancePayId || null
+  };
+}
+
+async function getCounterpartyPaymentProfile(shopId) {
+  if (isMaster()) return paymentProfileForShop(shopId);
+  if (!enabledClient()) return { shopId, binanceReady: false, binancePayId: null };
+  return clientRequest('get', `/api/v1/shops/${encodeURIComponent(String(shopId))}/payment-profile`);
+}
+
+async function startDebtBinancePayment(counterpartyShopId) {
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/accounts/pay/start', { counterpartyShopId });
+}
+
+async function submitDebtBinanceOrder(requestId, orderId) {
+  if (isMaster()) return { request: (await ledger.submitDebtBinanceOrder(requestId, 'master', orderId)).toJSON() };
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/accounts/payments/${encodeURIComponent(requestId)}/order-id`, { orderId });
+}
+
+async function ownedDebtBinanceVerifications() {
+  if (isMaster()) {
+    const rows = await ledger.debtBinanceVerificationsForCreditor('master');
+    return { requests: await Promise.all(rows.map(async row => ({
+      ...row.toJSON(),
+      debtorName: await ledger.getShopName(row.debtorShopId),
+      creditorName: await ledger.getShopName(row.creditorShopId)
+    }))) };
+  }
+  if (!enabledClient()) return { requests: [] };
+  return clientRequest('get', '/api/v1/accounts/payments/verify-owned');
+}
+
+async function finishDebtBinanceVerification(requestId, result) {
+  if (isMaster()) return { request: (await ledger.finishDebtBinanceVerification(requestId, 'master', result)).toJSON() };
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/accounts/payments/${encodeURIComponent(requestId)}/verify-result`, result || {});
+}
+
+async function debtPaymentResults() {
+  if (isMaster()) {
+    const rows = await ledger.debtPaymentResultsForDebtor('master');
+    return { requests: await Promise.all(rows.map(async row => ({
+      ...row.toJSON(),
+      debtorName: await ledger.getShopName(row.debtorShopId),
+      creditorName: await ledger.getShopName(row.creditorShopId)
+    }))) };
+  }
+  if (!enabledClient()) return { requests: [] };
+  return clientRequest('get', '/api/v1/accounts/payments/results');
+}
+
+async function acknowledgeDebtPaymentResult(requestId) {
+  if (isMaster()) return { request: (await ledger.acknowledgeDebtPaymentResult(requestId, 'master')).toJSON() };
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/accounts/payments/${encodeURIComponent(requestId)}/ack-result`, {});
+}
+
+async function upsertSharedPaymentMethod(payload) {
+  const localId = Number(payload?.localMethodId || payload?.id || 0);
+  if (!Number.isInteger(localId) || localId <= 0) throw new Error('INVALID_LOCAL_PAYMENT_METHOD_ID');
+  const body = {
+    localMethodId: localId,
+    nameAr: String(payload?.nameAr || '').trim(),
+    nameEn: String(payload?.nameEn || payload?.nameAr || '').trim(),
+    paymentNumber: String(payload?.paymentNumber || '').trim(),
+    iconCustomEmojiId: payload?.iconCustomEmojiId ? String(payload.iconCustomEmojiId) : null,
+    iconAlt: String(payload?.iconAlt || '💳'),
+    settlementCurrency: normalizePaymentCurrency(payload?.settlementCurrency),
+    ratePerUsd: Number(payload?.ratePerUsd || 1),
+    minimumTransferAmount: normalizeMinimumTransferAmount(payload?.minimumTransferAmount, payload?.settlementCurrency),
+    isActive: payload?.isActive !== false
+  };
+  if (!body.nameAr || !body.paymentNumber) throw new Error('INVALID_SHARED_PAYMENT_METHOD');
+  if (isMaster()) {
+    const ownerShopId = 'master';
+    const id = sharedPaymentMethodId(ownerShopId, localId);
+    const [row] = await NetworkSharedPaymentMethod.findOrCreate({
+      where: { id },
+      defaults: { id, ownerShopId, ownerLocalMethodId: localId, ...body }
+    });
+    await row.update({ ownerShopId, ownerLocalMethodId: localId, ...body });
+    return { method: row.toJSON() };
+  }
+  if (!enabledClient()) return { method: null };
+  return clientRequest('post', '/api/v1/shared-payment-methods', body);
+}
+
+async function syncSharedPaymentMethodsSnapshot(methods = []) {
+  const normalized = (Array.isArray(methods) ? methods : []).map(method => ({
+    localMethodId: Number(method?.localMethodId || method?.id || 0),
+    nameAr: String(method?.nameAr || '').trim(),
+    nameEn: String(method?.nameEn || method?.nameAr || '').trim(),
+    paymentNumber: String(method?.paymentNumber || '').trim(),
+    iconCustomEmojiId: method?.iconCustomEmojiId ? String(method.iconCustomEmojiId) : null,
+    iconAlt: String(method?.iconAlt || '💳'),
+    settlementCurrency: normalizePaymentCurrency(method?.settlementCurrency),
+    ratePerUsd: Number(method?.ratePerUsd || 1),
+    minimumTransferAmount: normalizeMinimumTransferAmount(method?.minimumTransferAmount, method?.settlementCurrency),
+    isActive: method?.isActive !== false
+  })).filter(method => Number.isInteger(method.localMethodId) && method.localMethodId > 0 && method.nameAr && method.paymentNumber);
+
+  if (isMaster()) {
+    const ownerShopId = 'master';
+    const seen = [];
+    for (const body of normalized) {
+      const id = sharedPaymentMethodId(ownerShopId, body.localMethodId);
+      seen.push(id);
+      const [row] = await NetworkSharedPaymentMethod.findOrCreate({
+        where: { id },
+        defaults: { id, ownerShopId, ownerLocalMethodId: body.localMethodId, ...body }
+      });
+      await row.update({ ownerShopId, ownerLocalMethodId: body.localMethodId, ...body });
+    }
+    const where = { ownerShopId };
+    if (seen.length) where.id = { [require('sequelize').Op.notIn]: seen };
+    await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
+    return { synced: normalized.length };
+  }
+  if (!enabledClient()) return { synced: 0 };
+  return clientRequest('post', '/api/v1/shared-payment-methods/sync', { methods: normalized });
+}
+
+async function discoverSharedPaymentMethodsFromClientSchemas() {
+  if (!isMaster()) return;
+  const clients = await NetworkClient.findAll({ where: { isActive: true }, attributes: ['shopId'] });
+  for (const client of clients) {
+    const ownerShopId = String(client.shopId);
+    const schema = clientDatabaseSchema(ownerShopId);
+    let rows;
+    try {
+      [rows] = await sequelize.query(`
+        SELECT *
+        FROM "${schema}"."PaymentMethods"
+        ORDER BY "id" ASC
+      `);
+    } catch (error) {
+      // Some partners may use another database/schema. In that case their
+      // normal API snapshot/per-method sync remains the source of truth.
+      continue;
+    }
+
+    const seenIds = [];
+    for (const method of rows || []) {
+      const localId = Number(method.id || 0);
+      if (!Number.isInteger(localId) || localId <= 0) continue;
+      const nameAr = String(method.nameAr || '').trim();
+      const paymentNumber = String(method.paymentNumber || '').trim();
+      if (!nameAr || !paymentNumber) continue;
+      const id = sharedPaymentMethodId(ownerShopId, localId);
+      seenIds.push(id);
+      const values = {
+        ownerShopId,
+        ownerLocalMethodId: localId,
+        nameAr,
+        nameEn: String(method.nameEn || method.nameAr || '').trim(),
+        paymentNumber,
+        iconCustomEmojiId: method.iconCustomEmojiId ? String(method.iconCustomEmojiId) : null,
+        iconAlt: String(method.iconAlt || '💳'),
+        settlementCurrency: normalizePaymentCurrency(method.settlementCurrency),
+        ratePerUsd: Number(method.ratePerUsd || 1),
+        minimumTransferAmount: normalizeMinimumTransferAmount(method.minimumTransferAmount, method.settlementCurrency),
+        isActive: method.isActive !== false
+      };
+      const [row] = await NetworkSharedPaymentMethod.findOrCreate({ where: { id }, defaults: { id, ...values } });
+      await row.update(values);
+    }
+
+    // Because this SELECT succeeded, this schema is authoritative for this
+    // partner. Deactivate registry rows that were deleted from that bot.
+    const where = { ownerShopId };
+    if (seenIds.length) where.id = { [require('sequelize').Op.notIn]: seenIds };
+    await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
+  }
+}
+
+async function listSharedPaymentMethods() {
+  if (isMaster()) {
+    await discoverSharedPaymentMethodsFromClientSchemas();
+    const rows = await NetworkSharedPaymentMethod.findAll({ where: { isActive: true }, order: [['settlementCurrency', 'ASC'], ['createdAt', 'ASC']] });
+    return { methods: await Promise.all(rows.map(async row => ({ ...row.toJSON(), ownerShopName: await ledger.getShopName(row.ownerShopId) }))) };
+  }
+  if (!enabledClient()) return { methods: [] };
+  return clientRequest('get', '/api/v1/shared-payment-methods');
+}
+
+async function createSharedPaymentRequest(payload) {
+  if (isMaster()) return createSharedPaymentRequestForSource('master', payload);
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/shared-payment-requests', payload);
+}
+
+async function createSharedPaymentRequestForSource(sourceShopIdRaw, payload) {
+  const sourceShopId = String(sourceShopIdRaw || 'master');
+  const method = await NetworkSharedPaymentMethod.findByPk(String(payload?.sharedPaymentMethodId || ''));
+  if (!method || !method.isActive) throw new Error('SHARED_PAYMENT_METHOD_NOT_FOUND');
+  const amountUsd = Number(payload?.amountUsd || 0);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error('INVALID_AMOUNT');
+  const sourceRef = String(payload?.sourceRef || '').trim();
+  const sourceEntityId = String(payload?.sourceEntityId || '').trim();
+  if (!sourceRef || !sourceEntityId) throw new Error('SOURCE_REF_REQUIRED');
+  const paymentCurrency = normalizePaymentCurrency(method.settlementCurrency);
+  const rate = Number(method.ratePerUsd || 1);
+  const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const calculatedPaymentAmount = amountUsd * safeRate;
+  const explicitPaymentAmount = Number(payload?.paymentAmount);
+  let paymentAmount = Number.isFinite(explicitPaymentAmount) && explicitPaymentAmount > 0 ? explicitPaymentAmount : calculatedPaymentAmount;
+  if (Number.isFinite(explicitPaymentAmount) && explicitPaymentAmount > 0) {
+    const explicitUsd = explicitPaymentAmount / safeRate;
+    if (Math.abs(explicitUsd - amountUsd) > 0.011) throw new Error('PAYMENT_AMOUNT_MISMATCH');
+  }
+  const minimumTransferAmount = normalizeMinimumTransferAmount(method.minimumTransferAmount, paymentCurrency);
+  if (paymentAmount + 1e-9 < minimumTransferAmount) {
+    const error = new Error('BELOW_MINIMUM_TRANSFER');
+    error.minimumTransferAmount = minimumTransferAmount;
+    error.paymentCurrency = paymentCurrency;
+    throw error;
+  }
+  const [row] = await NetworkSharedPaymentRequest.findOrCreate({
+    where: { sourceShopId, sourceRef },
+    defaults: {
+      id: newSharedPaymentRequestId(),
+      sharedPaymentMethodId: method.id,
+      paymentOwnerShopId: method.ownerShopId,
+      sourceShopId,
+      activity: ['purchase', 'topup'].includes(String(payload?.activity)) ? String(payload.activity) : 'purchase',
+      sourceRef,
+      sourceEntityId,
+      customerId: payload?.customerId ? String(payload.customerId) : null,
+      customerName: payload?.customerName ? String(payload.customerName).slice(0,160) : null,
+      amountUsd,
+      paymentCurrency,
+      paymentAmount,
+      status: 'waiting_owner',
+      sourceHandled: false
+    }
+  });
+  return { request: row.toJSON(), method: { ...method.toJSON(), ownerShopName: await ledger.getShopName(method.ownerShopId) } };
+}
+
+async function ownedSharedPaymentRequests() {
+  if (isMaster()) {
+    const rows = await NetworkSharedPaymentRequest.findAll({ where: { paymentOwnerShopId: 'master', status: 'waiting_owner' }, order: [['createdAt','ASC']], limit: 100 });
+    return decorateSharedPaymentRequests(rows);
+  }
+  if (!enabledClient()) return { requests: [] };
+  return clientRequest('get', '/api/v1/shared-payment-requests/owned');
+}
+
+async function sourceSharedPaymentResults() {
+  if (isMaster()) {
+    const rows = await NetworkSharedPaymentRequest.findAll({ where: { sourceShopId: 'master', sourceHandled: false, status: { [require('sequelize').Op.in]: ['approved','rejected'] } }, order: [['resolvedAt','ASC']], limit: 100 });
+    return decorateSharedPaymentRequests(rows);
+  }
+  if (!enabledClient()) return { requests: [] };
+  return clientRequest('get', '/api/v1/shared-payment-requests/results');
+}
+
+async function decorateSharedPaymentRequests(rows) {
+  const requests = [];
+  for (const row of rows || []) {
+    const method = await NetworkSharedPaymentMethod.findByPk(row.sharedPaymentMethodId);
+    requests.push({
+      ...row.toJSON(),
+      method: method ? method.toJSON() : null,
+      paymentOwnerShopName: await ledger.getShopName(row.paymentOwnerShopId),
+      sourceShopName: await ledger.getShopName(row.sourceShopId)
+    });
+  }
+  return { requests };
+}
+
+async function resolveSharedPaymentRequest(requestId, approve, actor = {}) {
+  if (isMaster()) return resolveSharedPaymentRequestForOwner('master', requestId, approve, actor);
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/shared-payment-requests/${encodeURIComponent(requestId)}/resolve`, { approve: Boolean(approve), actor });
+}
+
+async function resolveSharedPaymentRequestForOwner(ownerShopIdRaw, requestId, approve, actor = {}) {
+  const ownerShopId = String(ownerShopIdRaw || 'master');
+  const tx = await sequelize.transaction();
+  try {
+    const row = await NetworkSharedPaymentRequest.findByPk(String(requestId), { transaction: tx, lock: tx.LOCK.UPDATE });
+    if (!row || String(row.paymentOwnerShopId) !== ownerShopId) throw new Error('SHARED_PAYMENT_REQUEST_NOT_FOUND');
+    if (row.status !== 'waiting_owner') {
+      await tx.commit();
+      return { request: row.toJSON(), alreadyResolved: true };
+    }
+    row.status = approve ? 'approved' : 'rejected';
+    row.resolvedAt = new Date();
+    if (approve) {
+      row.approvedByTelegramId = actor?.telegramId ? String(actor.telegramId) : null;
+      row.approvedByUsername = actor?.username ? String(actor.username).replace(/^@/, '').slice(0, 64) : null;
+      row.approvedByDisplayName = actor?.displayName ? String(actor.displayName).slice(0, 160) : null;
+    }
+    await row.save({ transaction: tx });
+    await tx.commit();
+    if (approve && ownerShopId !== String(row.sourceShopId)) {
+      // Money physically landed in the payment-method owner's account. Therefore
+      // the owner owes the storefront the FULL captured amount. Product-owner
+      // 90/10 commissions are accounted separately by the inventory ledger.
+      await ledger.recordObligation({
+        debtorShopId: ownerShopId,
+        creditorShopId: row.sourceShopId,
+        amountUsd: Number(row.amountUsd),
+        kind: 'shared_payment_capture',
+        sourceRef: `sharedpay:${row.id}`,
+        metadata: { sharedPaymentMethodId: row.sharedPaymentMethodId, activity: row.activity, customerName: row.customerName || '' }
+      });
+    }
+    return { request: row.toJSON() };
+  } catch (error) {
+    await tx.rollback().catch(() => {});
+    throw error;
+  }
+}
+
+async function acknowledgeSharedPaymentRequest(requestId) {
+  if (isMaster()) {
+    const row = await NetworkSharedPaymentRequest.findOne({ where: { id: String(requestId), sourceShopId: 'master' } });
+    if (!row) throw new Error('SHARED_PAYMENT_REQUEST_NOT_FOUND');
+    row.sourceHandled = true;
+    await row.save({ fields: ['sourceHandled'] });
+    return { ok: true };
+  }
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/shared-payment-requests/${encodeURIComponent(requestId)}/ack`, {});
+}
+
 async function createFallbackBinanceIntent(amountUsd, customerId, activity = 'payment', customerName = '') {
   return clientRequest('post', '/api/v1/payments/binance/intents', { amountUsd, customerId, activity, customerName });
 }
@@ -289,22 +668,14 @@ async function createSettlementForClient(client, payload) {
   const egpRateRaw = Number(await getSetting('egp_rate_per_usd', String(config.network.egpRate || 50)));
   const egpRate = Number.isFinite(egpRateRaw) && egpRateRaw > 0 ? egpRateRaw : 50;
 
-  let currency = String(client.settlementCurrency || 'USD').toUpperCase();
-  let methodRate = currency === 'IQD' ? iqdRate : currency === 'EGP' ? egpRate : 1;
-  if (sourceMethod === 'binance') {
-    currency = 'USD';
-    methodRate = 1;
-  } else if (sourceMethod === 'superqi') {
-    currency = 'IQD';
-    methodRate = iqdRate;
-  } else if (sourceMethod.startsWith('custom:')) {
-    const methodId = Number(sourceMethod.split(':')[1]);
-    const method = await PaymentMethod.findByPk(methodId);
-    if (method) {
-      currency = String(method.settlementCurrency || 'USD').toUpperCase();
-      methodRate = Number(method.ratePerUsd || (currency === 'IQD' ? iqdRate : currency === 'EGP' ? egpRate : 1));
-    }
-  }
+  // Settlement is always shown and recorded in the CLIENT SHOP currency,
+  // regardless of which payment rail received the money. Binance/SuperQi/custom
+  // remain recorded in sourceMethod only. This keeps Ahmed(EGP), Iraqi(IQD), etc.
+  // consistent across customer screens and partner debts.
+  const currency = ['USD', 'IQD', 'EGP'].includes(String(client.settlementCurrency || '').toUpperCase())
+    ? String(client.settlementCurrency).toUpperCase()
+    : 'USD';
+  const methodRate = currency === 'IQD' ? iqdRate : currency === 'EGP' ? egpRate : 1;
 
   const iqdAmount = amountUsd * iqdRate;
   const egpAmount = amountUsd * egpRate;
@@ -346,15 +717,27 @@ async function notifySettlement(bot, client, row, summary, activity = 'payment')
   const headline = activity === 'topup'
     ? `💰 تم شحن رصيد عن طريق <b>${escapeHtml(methodName)}</b> الخاص بك من <b>${escapeHtml(client.name)}</b>`
     : `💰 تم دفع طلب عن طريق <b>${escapeHtml(methodName)}</b> الخاص بك من <b>${escapeHtml(client.name)}</b>`;
+  const shopCurrency = ['USD', 'IQD', 'EGP'].includes(String(client.settlementCurrency || '').toUpperCase())
+    ? String(client.settlementCurrency).toUpperCase()
+    : 'USD';
+  const localValue = shopCurrency === 'IQD'
+    ? `${Math.round(Number(row.iqdAmount || 0)).toLocaleString('en-US')} IQD`
+    : shopCurrency === 'EGP'
+      ? `${Number(row.egpAmount || 0).toFixed(2)} EGP`
+      : `$${Number(row.amountUsd || 0).toFixed(2)}`;
+  const summaryLocal = shopCurrency === 'IQD'
+    ? `${Math.round(Number(summary.iqdAmount || 0)).toLocaleString('en-US')} IQD`
+    : shopCurrency === 'EGP'
+      ? `${Number(summary.egpAmount || 0).toFixed(2)} EGP`
+      : `$${Number(summary.amountUsd || 0).toFixed(2)}`;
   const text = [
     headline,
     `الزبون: <b>${escapeHtml(customer)}</b>`,
     `المبلغ: <b>$${Number(row.amountUsd).toFixed(2)}</b>`,
-    `بالدينار العراقي: <b>${Math.round(Number(row.iqdAmount || 0)).toLocaleString('en-US')} IQD</b>`,
-    `بالجنيه المصري: <b>${Number(row.egpAmount || 0).toFixed(2)} EGP</b>`,
-    `حسب طريقة الدفع (${row.settlementCurrency}): <b>${Number(row.settlementAmount || 0).toFixed(row.settlementCurrency === 'IQD' ? 0 : 2)} ${row.settlementCurrency}</b>`,
+    ...(shopCurrency === 'USD' ? [] : [`بعملة ${escapeHtml(client.name)} (${shopCurrency}): <b>${localValue}</b>`]),
     '',
-    `<b>${escapeHtml(client.name)}</b> يطلبك الآن إجمالاً: <b>$${summary.amountUsd.toFixed(2)}</b>`
+    `<b>${escapeHtml(client.name)}</b> يطلبك الآن إجمالاً: <b>$${summary.amountUsd.toFixed(2)}</b>`,
+    ...(shopCurrency === 'USD' ? [] : [`الإجمالي بعملة المتجر: <b>${summaryLocal}</b>`])
   ].join('\n');
   for (const adminId of config.admins) bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
 }
@@ -552,6 +935,114 @@ function installMasterRoutes(app, getBot) {
     return { delivery, product: product ? { nameAr: product.nameAr, nameEn: product.nameEn, type: product.type } : null };
   }));
 
+  app.get('/api/v1/shared-payment-methods', (req, res) => route(req, res, async () => {
+    await discoverSharedPaymentMethodsFromClientSchemas();
+    const rows = await NetworkSharedPaymentMethod.findAll({ where: { isActive: true }, order: [['settlementCurrency','ASC'], ['createdAt','ASC']] });
+    return { methods: await Promise.all(rows.map(async row => ({ ...row.toJSON(), ownerShopName: await ledger.getShopName(row.ownerShopId) }))) };
+  }));
+
+  app.post('/api/v1/shared-payment-methods/sync', (req, res) => route(req, res, async client => {
+    const methods = Array.isArray(req.body?.methods) ? req.body.methods.slice(0, 200) : [];
+    const seenIds = [];
+    let synced = 0;
+
+    for (const body of methods) {
+      const localMethodId = Number(body?.localMethodId || 0);
+      if (!Number.isInteger(localMethodId) || localMethodId <= 0) continue;
+      const values = {
+        ownerShopId: client.shopId,
+        ownerLocalMethodId: localMethodId,
+        nameAr: String(body?.nameAr || '').trim(),
+        nameEn: String(body?.nameEn || body?.nameAr || '').trim(),
+        paymentNumber: String(body?.paymentNumber || '').trim(),
+        iconCustomEmojiId: body?.iconCustomEmojiId ? String(body.iconCustomEmojiId) : null,
+        iconAlt: String(body?.iconAlt || '💳'),
+        settlementCurrency: normalizePaymentCurrency(body?.settlementCurrency),
+        ratePerUsd: Number(body?.ratePerUsd || 1),
+        minimumTransferAmount: normalizeMinimumTransferAmount(body?.minimumTransferAmount, body?.settlementCurrency),
+        isActive: body?.isActive !== false
+      };
+      if (!values.nameAr || !values.paymentNumber) continue;
+      const id = sharedPaymentMethodId(client.shopId, localMethodId);
+      seenIds.push(id);
+      const [row] = await NetworkSharedPaymentMethod.findOrCreate({ where: { id }, defaults: { id, ...values } });
+      await row.update(values);
+      synced += 1;
+    }
+
+    const where = { ownerShopId: client.shopId };
+    if (seenIds.length) where.id = { [require('sequelize').Op.notIn]: seenIds };
+    await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
+
+    return { synced };
+  }));
+
+  app.post('/api/v1/shared-payment-methods', (req, res) => route(req, res, async client => {
+    const body = req.body || {};
+    const localMethodId = Number(body.localMethodId || 0);
+    if (!Number.isInteger(localMethodId) || localMethodId <= 0) throw new Error('INVALID_LOCAL_PAYMENT_METHOD_ID');
+    const id = sharedPaymentMethodId(client.shopId, localMethodId);
+    const values = {
+      ownerShopId: client.shopId,
+      ownerLocalMethodId: localMethodId,
+      nameAr: String(body.nameAr || '').trim(),
+      nameEn: String(body.nameEn || body.nameAr || '').trim(),
+      paymentNumber: String(body.paymentNumber || '').trim(),
+      iconCustomEmojiId: body.iconCustomEmojiId ? String(body.iconCustomEmojiId) : null,
+      iconAlt: String(body.iconAlt || '💳'),
+      settlementCurrency: normalizePaymentCurrency(body.settlementCurrency),
+      ratePerUsd: Number(body.ratePerUsd || 1),
+      minimumTransferAmount: normalizeMinimumTransferAmount(body.minimumTransferAmount, body.settlementCurrency),
+      isActive: body.isActive !== false
+    };
+    if (!values.nameAr || !values.paymentNumber) throw new Error('INVALID_SHARED_PAYMENT_METHOD');
+    const [row] = await NetworkSharedPaymentMethod.findOrCreate({ where: { id }, defaults: { id, ...values } });
+    await row.update(values);
+    return { method: { ...row.toJSON(), ownerShopName: client.name } };
+  }));
+
+  app.post('/api/v1/shared-payment-requests', (req, res) => route(req, res, async client => {
+    return createSharedPaymentRequestForSource(client.shopId, req.body || {});
+  }));
+
+  app.get('/api/v1/shared-payment-requests/owned', (req, res) => route(req, res, async client => {
+    const rows = await NetworkSharedPaymentRequest.findAll({ where: { paymentOwnerShopId: client.shopId, status: 'waiting_owner' }, order: [['createdAt','ASC']], limit: 100 });
+    return decorateSharedPaymentRequests(rows);
+  }));
+
+  app.get('/api/v1/shared-payment-requests/results', (req, res) => route(req, res, async client => {
+    const rows = await NetworkSharedPaymentRequest.findAll({
+      where: { sourceShopId: client.shopId, sourceHandled: false, status: { [require('sequelize').Op.in]: ['approved','rejected'] } },
+      order: [['resolvedAt','ASC']],
+      limit: 100
+    });
+    return decorateSharedPaymentRequests(rows);
+  }));
+
+  app.post('/api/v1/shared-payment-requests/:id/resolve', (req, res) => route(req, res, async client => {
+    return resolveSharedPaymentRequestForOwner(client.shopId, req.params.id, Boolean(req.body?.approve), req.body?.actor || {});
+  }));
+
+  app.post('/api/v1/shared-payment-requests/:id/ack', (req, res) => route(req, res, async client => {
+    const row = await NetworkSharedPaymentRequest.findOne({ where: { id: req.params.id, sourceShopId: client.shopId } });
+    if (!row) throw new Error('SHARED_PAYMENT_REQUEST_NOT_FOUND');
+    row.sourceHandled = true;
+    await row.save({ fields: ['sourceHandled'] });
+    return { ok: true };
+  }));
+
+  app.post('/api/v1/shop-profile', (req, res) => route(req, res, async client => {
+    const ready = Boolean(req.body?.binanceReady && String(req.body?.binancePayId || '').trim());
+    client.binanceReady = ready;
+    client.binancePayId = ready ? String(req.body.binancePayId).trim().slice(0, 120) : null;
+    await client.save({ fields: ['binanceReady', 'binancePayId'] });
+    return { shopId: client.shopId, binanceReady: client.binanceReady, binancePayId: client.binancePayId };
+  }));
+
+  app.get('/api/v1/shops/:shopId/payment-profile', (req, res) => route(req, res, async () => {
+    return paymentProfileForShop(req.params.shopId);
+  }));
+
   app.get('/api/v1/payment-options', (req, res) => route(req, res, async () => {
     const methods = [];
     if (await binancePay.configured()) {
@@ -560,17 +1051,6 @@ function installMasterRoutes(app, getBot) {
     }
     const superQi = await getSuperQiNumber();
     if (superQi) methods.push({ type: 'superqi', nameAr: 'سوبركي', nameEn: 'SuperQi', paymentNumber: superQi, iconCustomEmojiId: '5184203496831846429', settlementCurrency: 'IQD', ratePerUsd: await getIqdRate() });
-    const custom = await PaymentMethod.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-    for (const method of custom) methods.push({
-      type: `custom:${method.id}`,
-      nameAr: method.nameAr,
-      nameEn: method.nameEn,
-      paymentNumber: method.paymentNumber,
-      iconCustomEmojiId: method.iconCustomEmojiId,
-      iconAlt: method.iconAlt,
-      settlementCurrency: method.settlementCurrency,
-      ratePerUsd: method.ratePerUsd
-    });
     return { methods };
   }));
 
@@ -672,16 +1152,60 @@ function installMasterRoutes(app, getBot) {
     accounts: await ledger.accountsForShop(client.shopId)
   })));
 
+  app.post('/api/v1/accounts/pay/start', (req, res) => route(req, res, async client => {
+    const counterpartyShopId = String(req.body?.counterpartyShopId || '').trim();
+    if (!counterpartyShopId) throw new Error('COUNTERPARTY_REQUIRED');
+    const profile = await paymentProfileForShop(counterpartyShopId);
+    if (!profile.binanceReady || !profile.binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
+    const request = await ledger.createDebtPaymentRequest(client.shopId, counterpartyShopId, { binancePayId: profile.binancePayId });
+    return { request: request.toJSON(), creditor: profile, accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
+  // Legacy endpoint kept so old buttons still start the Binance settlement flow.
   app.post('/api/v1/accounts/pay', (req, res) => route(req, res, async client => {
     const counterpartyShopId = String(req.body?.counterpartyShopId || '').trim();
     if (!counterpartyShopId) throw new Error('COUNTERPARTY_REQUIRED');
-    const request = await ledger.createDebtPaymentRequest(client.shopId, counterpartyShopId);
-    const bot = getBot?.();
-    if (bot && counterpartyShopId === 'master') {
-      const text = `🤝 ${escapeHtml(client.name)} سجّل أنه سدّد ديناً بقيمة $${Number(request.amountUsd).toFixed(2)}. افتح الحسابات لتأكيد الاستلام أو رفضه.`;
-      for (const adminId of config.admins) bot.sendMessage(adminId, text).catch(() => {});
-    }
-    return { request: request.toJSON(), accounts: await ledger.accountsForShop(client.shopId) };
+    const profile = await paymentProfileForShop(counterpartyShopId);
+    if (!profile.binanceReady || !profile.binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
+    const request = await ledger.createDebtPaymentRequest(client.shopId, counterpartyShopId, { binancePayId: profile.binancePayId });
+    return { request: request.toJSON(), creditor: profile, accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
+  app.post('/api/v1/accounts/payments/:id/order-id', (req, res) => route(req, res, async client => {
+    const request = await ledger.submitDebtBinanceOrder(req.params.id, client.shopId, req.body?.orderId);
+    return { request: request.toJSON() };
+  }));
+
+  app.get('/api/v1/accounts/payments/verify-owned', (req, res) => route(req, res, async client => {
+    const rows = await ledger.debtBinanceVerificationsForCreditor(client.shopId);
+    return { requests: await Promise.all(rows.map(async row => ({
+      ...row.toJSON(),
+      debtorName: await ledger.getShopName(row.debtorShopId),
+      creditorName: client.name
+    }))) };
+  }));
+
+  app.post('/api/v1/accounts/payments/:id/verify-result', (req, res) => route(req, res, async client => {
+    const request = await ledger.finishDebtBinanceVerification(req.params.id, client.shopId, {
+      success: Boolean(req.body?.success),
+      transactionId: req.body?.transactionId,
+      reason: req.body?.reason
+    });
+    return { request: request.toJSON() };
+  }));
+
+  app.get('/api/v1/accounts/payments/results', (req, res) => route(req, res, async client => {
+    const rows = await ledger.debtPaymentResultsForDebtor(client.shopId);
+    return { requests: await Promise.all(rows.map(async row => ({
+      ...row.toJSON(),
+      debtorName: client.name,
+      creditorName: await ledger.getShopName(row.creditorShopId)
+    }))) };
+  }));
+
+  app.post('/api/v1/accounts/payments/:id/ack-result', (req, res) => route(req, res, async client => {
+    const request = await ledger.acknowledgeDebtPaymentResult(req.params.id, client.shopId);
+    return { request: request.toJSON() };
   }));
 
   app.post('/api/v1/accounts/payments/:id/resolve', (req, res) => route(req, res, async client => {
@@ -705,6 +1229,22 @@ module.exports = {
   fulfillRemote,
   lookupRemoteDelivery,
   fallbackPayments,
+  syncPublicPaymentProfile,
+  getCounterpartyPaymentProfile,
+  startDebtBinancePayment,
+  submitDebtBinanceOrder,
+  ownedDebtBinanceVerifications,
+  finishDebtBinanceVerification,
+  debtPaymentResults,
+  acknowledgeDebtPaymentResult,
+  upsertSharedPaymentMethod,
+  syncSharedPaymentMethodsSnapshot,
+  listSharedPaymentMethods,
+  createSharedPaymentRequest,
+  ownedSharedPaymentRequests,
+  sourceSharedPaymentResults,
+  resolveSharedPaymentRequest,
+  acknowledgeSharedPaymentRequest,
   createFallbackBinanceIntent,
   verifyFallbackBinanceIntent,
   recordFallbackSettlement,
