@@ -4,13 +4,22 @@ const config = require('./config');
 const { encryptPayload, decryptPayload, isEncrypted, legacyPayload } = require('./cryptoStore');
 const { inventoryFingerprint, inventoryPayloadIsValid, parseDescription } = require('./utils');
 
+function quoteIdent(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function tableSql(tableName) {
+  return `${quoteIdent(config.databaseSchema)}.${quoteIdent(tableName)}`;
+}
+
 const sequelize = new Sequelize(config.databaseUrl, {
   dialect: 'postgres',
   logging: false,
   dialectOptions: config.databaseUrl.includes('railway.internal')
     ? {}
     : { ssl: { require: true, rejectUnauthorized: false } },
-  pool: { max: 10, min: 0, acquire: 30000, idle: 10000 }
+  pool: { max: 10, min: 0, acquire: 30000, idle: 10000 },
+  define: { schema: config.databaseSchema }
 });
 
 const User = sequelize.define('User', {
@@ -80,7 +89,12 @@ const Code = sequelize.define('Code', {
   maxUses: { type: DataTypes.INTEGER, defaultValue: 1 },
   usedCount: { type: DataTypes.INTEGER, defaultValue: 0 },
   buyers: { type: DataTypes.JSONB, defaultValue: [] },
-  fingerprint: { type: DataTypes.STRING(64), allowNull: true }
+  fingerprint: { type: DataTypes.STRING(64), allowNull: true },
+  // Owner of this exact stock unit inside the shared network.
+  // 'master' means the main shop; clients use their NETWORK_SHOP_ID.
+  stockOwnerShopId: { type: DataTypes.STRING(80), allowNull: true, defaultValue: 'master' },
+  // Snapshot of the contributor's per-unit entitlement when this stock was added.
+  contributionPriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true }
 });
 
 const PurchaseOrder = sequelize.define('PurchaseOrder', {
@@ -198,7 +212,10 @@ const DeliveryRecord = sequelize.define('DeliveryRecord', {
   merchantId: { type: DataTypes.INTEGER, allowNull: false },
   codeId: { type: DataTypes.INTEGER, allowNull: true },
   payload: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
-  sourceShopId: { type: DataTypes.STRING(80), allowNull: true }
+  sourceShopId: { type: DataTypes.STRING(80), allowNull: true },
+  inventoryOwnerShopId: { type: DataTypes.STRING(80), allowNull: true },
+  unitPriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  supplierValueUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true }
 }, { indexes: [{ fields: ['orderId'] }, { fields: ['userId'] }] });
 
 const NetworkClient = sequelize.define('NetworkClient', {
@@ -228,6 +245,54 @@ const NetworkSettlement = sequelize.define('NetworkSettlement', {
 }, { indexes: [{ fields: ['debtorShopId', 'status'] }, { unique: true, fields: ['debtorShopId', 'sourceMethod', 'sourceRef'] }] });
 
 
+
+const NetworkLedgerEntry = sequelize.define('NetworkLedgerEntry', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  debtorShopId: { type: DataTypes.STRING(80), allowNull: false },
+  creditorShopId: { type: DataTypes.STRING(80), allowNull: false },
+  amountUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: false },
+  kind: { type: DataTypes.STRING(40), allowNull: false },
+  sourceRef: { type: DataTypes.STRING(180), allowNull: false },
+  networkProductId: { type: DataTypes.STRING(64), allowNull: true },
+  deliveryId: { type: DataTypes.STRING(40), allowNull: true },
+  sellerShopId: { type: DataTypes.STRING(80), allowNull: true },
+  stockOwnerShopId: { type: DataTypes.STRING(80), allowNull: true },
+  metadata: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
+}, { indexes: [
+  { unique: true, fields: ['kind', 'sourceRef'] },
+  { fields: ['debtorShopId', 'creditorShopId'] },
+  { fields: ['networkProductId', 'stockOwnerShopId'] }
+] });
+
+// One net balance per unordered shop pair. Positive means shopA owes shopB;
+// negative means shopB owes shopA. This lets opposite debts cancel cleanly
+// without losing the detailed ledger above.
+const NetworkDebtBalance = sequelize.define('NetworkDebtBalance', {
+  pairKey: { type: DataTypes.STRING(170), primaryKey: true },
+  shopAId: { type: DataTypes.STRING(80), allowNull: false },
+  shopBId: { type: DataTypes.STRING(80), allowNull: false },
+  amountSignedUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: false, defaultValue: 0 }
+});
+
+const NetworkDebtPayment = sequelize.define('NetworkDebtPayment', {
+  id: { type: DataTypes.STRING(64), primaryKey: true },
+  debtorShopId: { type: DataTypes.STRING(80), allowNull: false },
+  creditorShopId: { type: DataTypes.STRING(80), allowNull: false },
+  amountUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: false },
+  settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  settlementAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  iqdAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  egpAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'pending' },
+  requestedByShopId: { type: DataTypes.STRING(80), allowNull: false },
+  confirmedByShopId: { type: DataTypes.STRING(80), allowNull: true },
+  rejectedAt: { type: DataTypes.DATE, allowNull: true },
+  confirmedAt: { type: DataTypes.DATE, allowNull: true }
+}, { indexes: [
+  { fields: ['debtorShopId', 'status'] },
+  { fields: ['creditorShopId', 'status'] }
+] });
+
 const NetworkPaymentIntent = sequelize.define('NetworkPaymentIntent', {
   id: { type: DataTypes.STRING(64), primaryKey: true },
   shopId: { type: DataTypes.STRING(80), allowNull: false },
@@ -240,6 +305,22 @@ const NetworkPaymentIntent = sequelize.define('NetworkPaymentIntent', {
   transactionId: { type: DataTypes.STRING(128), allowNull: true, unique: true },
   expiresAt: { type: DataTypes.DATE, allowNull: false }
 }, { indexes: [{ fields: ['shopId', 'status'] }, { unique: true, fields: ['transactionId'] }] });
+
+// Shared notification stream. Every network bot keeps its own local cursor, so
+// notifications can be enabled/disabled independently without losing events for
+// other shops.
+const NetworkNotificationEvent = sequelize.define('NetworkNotificationEvent', {
+  id: { type: DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
+  eventType: { type: DataTypes.STRING(32), allowNull: false },
+  networkProductId: { type: DataTypes.STRING(64), allowNull: true },
+  actorShopId: { type: DataTypes.STRING(80), allowNull: false, defaultValue: 'master' },
+  actorName: { type: DataTypes.STRING(120), allowNull: true },
+  amount: { type: DataTypes.INTEGER, allowNull: true },
+  payload: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
+}, { indexes: [
+  { fields: ['id'] },
+  { fields: ['eventType', 'createdAt'] }
+] });
 
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant, { foreignKey: 'merchantId' });
@@ -254,9 +335,10 @@ SupportTicket.belongsTo(User, { foreignKey: 'userId' });
 
 async function addColumnIfMissing(tableName, columnName, definition) {
   const qi = sequelize.getQueryInterface();
+  const options = { schema: config.databaseSchema };
   let table;
-  try { table = await qi.describeTable(tableName); } catch { return; }
-  if (!table[columnName]) await qi.addColumn(tableName, columnName, definition);
+  try { table = await qi.describeTable(tableName, options); } catch { return; }
+  if (!table[columnName]) await qi.addColumn(tableName, columnName, definition, options);
 }
 
 async function migrateLegacySingleFileBotData() {
@@ -264,7 +346,7 @@ async function migrateLegacySingleFileBotData() {
   // email/password accounts. Convert those values before inventory cleanup,
   // otherwise the v4 parser would treat old codes as private accounts.
   await sequelize.query(`
-    UPDATE "Merchants"
+    UPDATE ${tableSql('Merchants')}
     SET "type" = CASE
       WHEN LOWER(COALESCE("type", '')) = 'single' THEN 'code'
       WHEN LOWER(COALESCE("type", '')) = 'bulk' THEN 'account'
@@ -292,7 +374,7 @@ async function migrateLegacySingleFileBotData() {
   try {
     const [sections] = await sequelize.query(`
       SELECT "id", "nameAr", "nameEn"
-      FROM "DigitalSections"
+      FROM ${tableSql('DigitalSections')}
     `);
     for (const section of sections || []) {
       const label = String(section.nameAr || section.nameEn || '').trim();
@@ -313,7 +395,7 @@ async function migrateLegacySingleFileBotData() {
     if (!existingNumber || !existingRate) {
       const [rows] = await sequelize.query(`
         SELECT "walletAddress", "rate", "methods"
-        FROM "DepositConfigs"
+        FROM ${tableSql('DepositConfigs')}
         WHERE UPPER("currency") = 'IQD'
         ORDER BY "id" ASC
         LIMIT 1
@@ -438,6 +520,7 @@ async function normalizeProductDescriptions() {
 
 async function initializeDatabase() {
   await sequelize.authenticate();
+  await sequelize.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(config.databaseSchema)}`);
   await sequelize.sync({ alter: false });
 
   await addColumnIfMissing('Users', 'blocked', { type: DataTypes.BOOLEAN, defaultValue: false });
@@ -464,6 +547,9 @@ async function initializeDatabase() {
   await addColumnIfMissing('PurchaseOrders', 'remoteOrderRef', { type: DataTypes.STRING(96), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'paymentOrigin', { type: DataTypes.STRING(24), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'networkMethod', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('DeliveryRecords', 'inventoryOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('DeliveryRecords', 'unitPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('DeliveryRecords', 'supplierValueUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
 
   await addColumnIfMissing('PaymentMethods', 'settlementCurrency', { type: DataTypes.STRING(8), defaultValue: 'USD' });
   await addColumnIfMissing('PaymentMethods', 'ratePerUsd', { type: DataTypes.DECIMAL(18, 4), allowNull: true });
@@ -475,6 +561,8 @@ async function initializeDatabase() {
   await addColumnIfMissing('Codes', 'usedCount', { type: DataTypes.INTEGER, defaultValue: 0 });
   await addColumnIfMissing('Codes', 'buyers', { type: DataTypes.JSONB, defaultValue: [] });
   await addColumnIfMissing('Codes', 'fingerprint', { type: DataTypes.STRING(64), allowNull: true });
+  await addColumnIfMissing('Codes', 'stockOwnerShopId', { type: DataTypes.STRING(80), allowNull: true, defaultValue: 'master' });
+  await addColumnIfMissing('Codes', 'contributionPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
 
   // Compatibility pass for the user's previous single-file bot. This runs
   // before encryption / validation so old products and stock stay sellable.
@@ -485,28 +573,43 @@ async function initializeDatabase() {
   // to create the index before the column existed, crashing Railway startup.
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_merchant_id_fingerprint"
-    ON "Codes" ("merchantId", "fingerprint")
+    ON ${tableSql('Codes')} ("merchantId", "fingerprint")
   `);
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_merchant_id_is_used"
-    ON "Codes" ("merchantId", "isUsed")
+    ON ${tableSql('Codes')} ("merchantId", "isUsed")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "codes_owner_product_available"
+    ON ${tableSql('Codes')} ("merchantId", "stockOwnerShopId", "isUsed")
   `);
   await sequelize.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS "merchants_network_product_id_unique"
-    ON "Merchants" ("networkProductId")
+    ON ${tableSql('Merchants')} ("networkProductId")
     WHERE "networkProductId" IS NOT NULL
   `);
   await sequelize.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_remote_order_ref_unique"
-    ON "PurchaseOrders" ("remoteOrderRef")
+    ON ${tableSql('PurchaseOrders')} ("remoteOrderRef")
     WHERE "remoteOrderRef" IS NOT NULL
   `);
 
   await sequelize.query(`
-    UPDATE "Codes"
+    UPDATE ${tableSql('Codes')}
     SET "maxUses" = COALESCE("maxUses", 1),
         "usedCount" = CASE WHEN "isUsed" = TRUE AND COALESCE("usedCount",0)=0 THEN 1 ELSE COALESCE("usedCount",0) END,
         "buyers" = COALESCE("buyers", '[]'::jsonb)
+  `).catch(() => {});
+
+  await sequelize.query(`
+    UPDATE ${tableSql('Codes')}
+    SET "stockOwnerShopId" = COALESCE(NULLIF("stockOwnerShopId", ''), 'master')
+  `).catch(() => {});
+  await sequelize.query(`
+    UPDATE ${tableSql('Codes')} c
+    SET "contributionPriceUsd" = COALESCE(c."contributionPriceUsd", m."price")
+    FROM ${tableSql('Merchants')} m
+    WHERE c."merchantId" = m."id"
   `).catch(() => {});
 
   while (true) {
@@ -597,7 +700,11 @@ module.exports = {
   DeliveryRecord,
   NetworkClient,
   NetworkSettlement,
+  NetworkLedgerEntry,
+  NetworkDebtBalance,
+  NetworkDebtPayment,
   NetworkPaymentIntent,
+  NetworkNotificationEvent,
   initializeDatabase,
   getSetting,
   setSetting,
