@@ -32,6 +32,18 @@ const Setting = sequelize.define('Setting', {
   value: { type: DataTypes.TEXT, allowNull: false }
 }, { indexes: [{ unique: true, fields: ['key', 'lang'] }] });
 
+
+const PaymentMethod = sequelize.define('PaymentMethod', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  nameAr: { type: DataTypes.STRING(120), allowNull: false },
+  nameEn: { type: DataTypes.STRING(120), allowNull: false },
+  paymentNumber: { type: DataTypes.STRING(255), allowNull: false },
+  iconCustomEmojiId: { type: DataTypes.STRING(32), allowNull: true },
+  iconAlt: { type: DataTypes.STRING(16), allowNull: false, defaultValue: '💳' },
+  isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+  sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
+});
+
 const Merchant = sequelize.define('Merchant', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   nameEn: { type: DataTypes.STRING, allowNull: false },
@@ -451,6 +463,7 @@ module.exports = {
   Op,
   User,
   Setting,
+  PaymentMethod,
   Merchant,
   Code,
   PurchaseOrder,

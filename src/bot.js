@@ -5,6 +5,7 @@ const {
   sequelize,
   Op,
   User,
+  PaymentMethod,
   Merchant,
   Code,
   PurchaseOrder,
@@ -53,6 +54,34 @@ const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
 const memoryRate = new Map();
 let cachedBotUsername = '';
+
+const PREMIUM_EMOJI = Object.freeze({
+  binance: { id: '5875443023873053217', alt: '🟡' },
+  superqi: { id: '5184203496831846429', alt: '🔵' },
+  support: { id: '5882260605850620296', alt: '💬' },
+  wallet: { id: '6325416826100519483', alt: '👛' },
+  orders: { id: '5882175861850903857', alt: '📦' },
+  products: { id: '5800639128961814362', alt: '🛍️' },
+  // No language Custom Emoji ID was supplied. Keep a normal globe until a verified ID is configured.
+  language: { id: '', alt: '🌐' }
+});
+
+function emojiButton(text, emoji, extra = {}) {
+  const button = { text, ...extra };
+  if (emoji?.id) button.icon_custom_emoji_id = String(emoji.id);
+  return button;
+}
+
+function premiumEmojiHtml(emoji) {
+  if (!emoji?.id) return escapeHtml(emoji?.alt || '');
+  return `<tg-emoji emoji-id="${escapeHtml(String(emoji.id))}">${escapeHtml(emoji.alt || '✨')}</tg-emoji>`;
+}
+
+function customPaymentEmoji(method) {
+  return method?.iconCustomEmojiId
+    ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
+    : null;
+}
 
 function isAdmin(id) {
   return config.admins.has(Number(id));
@@ -145,12 +174,18 @@ async function getOrCreateUser(from) {
 
 function mainKeyboard(lang, showReferrals = true, showChannel = false) {
   const keyboard = [
-    [{ text: t(lang, 'products') }, { text: t(lang, 'support') }],
-    [{ text: t(lang, 'wallet'), style: 'primary' }, { text: t(lang, 'orders') }]
+    [
+      emojiButton(t(lang, 'products'), PREMIUM_EMOJI.products),
+      emojiButton(t(lang, 'support'), PREMIUM_EMOJI.support)
+    ],
+    [
+      emojiButton(t(lang, 'wallet'), PREMIUM_EMOJI.wallet, { style: 'primary' }),
+      emojiButton(t(lang, 'orders'), PREMIUM_EMOJI.orders)
+    ]
   ];
   if (showReferrals) keyboard.push([{ text: lang === 'en' ? '🎁 Gifts & referrals' : '🎁 الهدايا والمشاركة' }]);
   if (showChannel) keyboard.push([{ text: lang === 'en' ? '📢 Our channel' : '📢 قناتنا' }]);
-  keyboard.push([{ text: t(lang, 'language') }]);
+  keyboard.push([emojiButton('عربي / English', PREMIUM_EMOJI.language)]);
   return {
     keyboard,
     resize_keyboard: true,
@@ -170,15 +205,63 @@ async function automaticNotificationsEnabled() {
   return String(await getSetting('automatic_notifications_enabled', 'true')).toLowerCase() !== 'false';
 }
 
+
+async function getActivePaymentMethods() {
+  return PaymentMethod.findAll({
+    where: { isActive: true },
+    order: [['sortOrder', 'ASC'], ['id', 'ASC']]
+  });
+}
+
+function localizedPaymentName(method, lang) {
+  return lang === 'en' ? (method.nameEn || method.nameAr) : (method.nameAr || method.nameEn);
+}
+
+async function externalPaymentButtons(lang, mode = 'pay') {
+  const rows = [];
+  if (binancePay.configured()) {
+    rows.push([emojiButton('Binance ID', PREMIUM_EMOJI.binance, {
+      callback_data: `${mode}:binance`,
+      style: 'primary'
+    })]);
+  }
+  rows.push([emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
+    callback_data: `${mode}:superqi`,
+    style: 'primary'
+  })]);
+
+  const customMethods = await getActivePaymentMethods();
+  for (const method of customMethods) {
+    rows.push([emojiButton(localizedPaymentName(method, lang), customPaymentEmoji(method), {
+      callback_data: `${mode}:custom:${method.id}`,
+      style: 'primary'
+    })]);
+  }
+  return rows;
+}
+
+async function showWalletMenu(chatId, user) {
+  const fresh = await User.findByPk(user.id);
+  const inline = await externalPaymentButtons(user.lang, 'topup');
+  if (isAdmin(user.id)) {
+    inline.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
+  }
+  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${moneyUsd(fresh.balance)}`, {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: inline }
+  });
+}
+
 async function adminMenu() {
   const notificationsEnabled = await automaticNotificationsEnabled();
   return {
     inline_keyboard: [
       [{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }],
-      [{ text: '📦 المنتجات وإدارتها', callback_data: 'adm:products:0', style: 'primary' }],
-      [{ text: '🧾 الطلبات', callback_data: 'adm:orders' }, { text: '💳 دفعات SuperQi', callback_data: 'adm:proofs' }],
+      [emojiButton('المنتجات وإدارتها', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' })],
+      [{ text: '🧾 الطلبات', callback_data: 'adm:orders' }, emojiButton('دفعات سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:proofs' })],
+      [{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }, { text: '💳 طرق الدفع', callback_data: 'adm:payment_methods' }],
       [{ text: '👤 إدارة مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
-      [{ text: '💬 الدعم', callback_data: 'adm:support' }, { text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
+      [emojiButton('الدعم', PREMIUM_EMOJI.support, { callback_data: 'adm:support' }), { text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
       [{ text: notificationsEnabled ? '🔔 الإشعارات: تشغيل' : '🔕 الإشعارات: إيقاف', callback_data: 'adm:notifications_toggle', style: notificationsEnabled ? 'success' : 'danger' }],
       [{ text: '🎁 الإحالات والهدايا', callback_data: 'adm:referrals' }, { text: '📢 القناة', callback_data: 'adm:channel' }],
       [{ text: '⚙️ إعدادات المتجر', callback_data: 'adm:settings', style: 'primary' }, { text: '🔐 فتح/إغلاق', callback_data: 'adm:store_toggle' }]
@@ -476,11 +559,10 @@ async function broadcastStockNotification(product, added) {
       await bot.sendMessage(target.id, message, {
         parse_mode: 'HTML',
         reply_markup: {
-          inline_keyboard: [[{
-            text: lang === 'en' ? '🛍️ View product' : '🛍️ عرض المنتج',
+          inline_keyboard: [[emojiButton(lang === 'en' ? 'View product' : 'عرض المنتج', PREMIUM_EMOJI.products, {
             callback_data: `prod:${product.id}`,
             style: 'success'
-          }]]
+          })]]
         }
       });
       sent += 1;
@@ -523,11 +605,10 @@ Price: <b>${moneyUsd(product.price)}</b>`
       await bot.sendMessage(target.id, message, {
         parse_mode: 'HTML',
         reply_markup: {
-          inline_keyboard: [[{
-            text: lang === 'en' ? '🛍️ View product' : '🛍️ عرض المنتج',
+          inline_keyboard: [[emojiButton(lang === 'en' ? 'View product' : 'عرض المنتج', PREMIUM_EMOJI.products, {
             callback_data: `prod:${product.id}`,
             style: stock > 0 ? 'success' : 'danger'
-          }]]
+          })]]
         }
       });
       sent += 1;
@@ -717,7 +798,7 @@ async function sendSupportMessageToAdmins(msg, user, ticket) {
   for (const adminId of config.admins) {
     try {
       const header = await bot.sendMessage(adminId, [
-        '💬 <b>رسالة دعم جديدة</b>',
+        `${premiumEmojiHtml(PREMIUM_EMOJI.support)} <b>رسالة دعم جديدة</b>`,
         `التذكرة: <code>#${ticket.id}</code>`,
         `المستخدم: ${escapeHtml(user.firstName || '—')} — <code>${user.id}</code>`,
         `المعرف: ${user.username ? `@${escapeHtml(user.username)}` : '—'}`
@@ -753,7 +834,8 @@ async function showSupportTickets(chatId) {
     text: `#${ticket.id} | ${ticket.User?.firstName || ticket.userId}`,
     callback_data: `support:reply:${ticket.id}`
   }]);
-  return bot.sendMessage(chatId, '💬 محادثات الدعم المفتوحة:', {
+  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.support)} <b>محادثات الدعم المفتوحة:</b>`, {
+    parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
   });
 }
@@ -839,7 +921,7 @@ async function queueBinanceManualReview(user, transferId, submittedOrderId) {
     ? `شراء من المتجر — الطلب <b>#${transfer.orderId}</b>`
     : `شحن محفظة — العملية <b>#${transfer.balanceTransactionId || transfer.id}</b>`;
   await notifyAdmins([
-    '🟡 <b>Binance يحتاج تحقق يدوي</b>',
+    `${premiumEmojiHtml(PREMIUM_EMOJI.binance)} <b>Binance يحتاج تحقق يدوي</b>`,
     '',
     `النوع: ${typeText}`,
     `المستخدم: <code>${transfer.userId}</code>`,
@@ -925,14 +1007,7 @@ bot.on('message', async msg => {
 
     if (msg.text === t('ar', 'wallet') || msg.text === t('en', 'wallet')) {
       if (!isAdmin(user.id) && !(await isStoreOpen())) return bot.sendMessage(msg.chat.id, '🔒 المتجر مغلق مؤقتاً.');
-      const fresh = await User.findByPk(user.id);
-      const inline = [];
-      if (binancePay.configured()) inline.push([{ text: '🟡 شحن Binance ID', callback_data: 'topup:binance', style: 'primary' }]);
-      inline.push([{ text: '🔵 شحن SuperQi', callback_data: 'topup:superqi', style: 'primary' }]);
-      return bot.sendMessage(msg.chat.id, `${t(user.lang, 'walletBalance')}: <b>${moneyUsd(fresh.balance)}</b>`, {
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: inline }
-      });
+      return showWalletMenu(msg.chat.id, user);
     }
 
     if (msg.text === t('ar', 'orders') || msg.text === t('en', 'orders')) return showOrders(msg.chat.id, user);
@@ -941,8 +1016,9 @@ bot.on('message', async msg => {
       const ticket = await getOrCreateSupportTicket(user.id);
       await setState(user.id, { action: 'support_chat', ticketId: ticket.id });
       return bot.sendMessage(msg.chat.id, user.lang === 'en'
-        ? '💬 Send your message, photo, or file here. Support will reply through this bot.\nSend /cancel to close.'
-        : '💬 أرسل رسالتك أو صورتك أو ملفك هنا، والدعم يرد عليك من نفس البوت.\nاكتب إغلاق أو /cancel لإنهاء المحادثة.', {
+        ? `${premiumEmojiHtml(PREMIUM_EMOJI.support)} Send your message, photo, or file here. Support will reply through this bot.\nSend /cancel to close.`
+        : `${premiumEmojiHtml(PREMIUM_EMOJI.support)} أرسل رسالتك أو صورتك أو ملفك هنا، والدعم يرد عليك من نفس البوت.\nاكتب إغلاق أو /cancel لإنهاء المحادثة.`, {
+        parse_mode: 'HTML',
         reply_markup: cancelInlineKeyboard()
       });
     }
@@ -1112,11 +1188,13 @@ bot.on('callback_query', async query => {
     }
     if (data.startsWith('qty:')) return handleQuantity(query, user, data);
     if (data.startsWith('pay:')) return handlePayment(query, user, data);
-    if (data.startsWith('topup:')) return handleTopupStart(query, user, data.split(':')[1]);
+    if (data.startsWith('topup:')) return handleTopupStart(query, user, data.slice('topup:'.length));
     if (data.startsWith('order:')) return showOrder(query.message.chat.id, user, Number(data.split(':')[1]), query.id);
 
     if (data.startsWith('sq:approve:') || data.startsWith('sq:reject:')) return handleSuperQiAdmin(query, data);
     if (data.startsWith('sqtop:approve:') || data.startsWith('sqtop:reject:')) return handleSuperQiTopupAdmin(query, data);
+    if (data.startsWith('cmtop:approve:') || data.startsWith('cmtop:reject:')) return handleCustomTopupAdmin(query, data);
+    if (data.startsWith('cm:approve:') || data.startsWith('cm:reject:')) return handleCustomPaymentAdmin(query, data);
     if (data.startsWith('binmanual:approve:') || data.startsWith('binmanual:reject:')) return handleBinanceManualAdmin(query, data);
 
     if (data.startsWith('adm:')) {
@@ -1147,6 +1225,42 @@ async function handleBuy(query, user, merchantId) {
   });
 }
 
+async function sendCheckoutOptions(chatId, user, product, quantity) {
+  const freshUser = await User.findByPk(user.id);
+  const total = Number(product.price) * Number(quantity);
+  const balance = Number(freshUser?.balance || 0);
+  const canUseWallet = balance + 1e-9 >= total;
+
+  await setState(user.id, { action: 'checkout', merchantId: product.id, quantity: Number(quantity) });
+
+  const buttons = [];
+  if (canUseWallet) {
+    buttons.push([emojiButton(t(user.lang, 'payWallet'), PREMIUM_EMOJI.wallet, {
+      callback_data: 'pay:wallet',
+      style: 'primary'
+    })]);
+  }
+  buttons.push(...await externalPaymentButtons(user.lang, 'pay'));
+
+  const lines = [];
+  if (!canUseWallet) {
+    lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${moneyUsd(balance)}`);
+    lines.push(`💰 <b>${user.lang === 'en' ? 'Product total' : 'سعر الطلب'}:</b> ${moneyUsd(total)}`);
+    lines.push('');
+    lines.push(user.lang === 'en'
+      ? 'Your wallet balance is not enough. Choose a payment method and pay the exact product total:'
+      : 'رصيد محفظتك ما يكفي. اختَر طريقة دفع وادفع سعر المنتج مباشرة:');
+  } else {
+    lines.push(`${t(user.lang, 'payment')}`);
+    lines.push(`💰 <b>${moneyUsd(total)}</b>`);
+  }
+
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
 async function handleQuantity(query, user, data) {
   const [, merchantIdRaw, quantityRaw] = data.split(':');
   const merchantId = Number(merchantIdRaw);
@@ -1154,23 +1268,33 @@ async function handleQuantity(query, user, data) {
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
   if (!product || stock < quantity) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
-  await setState(user.id, { action: 'checkout', merchantId, quantity });
-  const total = Number(product.price) * quantity;
-  const buttons = [[{ text: t(user.lang, 'payWallet'), callback_data: 'pay:wallet', style: 'primary' }]];
-  if (binancePay.configured()) buttons.push([{ text: '🟡 Binance ID', callback_data: 'pay:binance', style: 'primary' }]);
-  buttons.push([{ text: t(user.lang, 'paySuperQi'), callback_data: 'pay:superqi', style: 'primary' }]);
   await answerCallback(query.id);
-  return bot.sendMessage(query.message.chat.id, `${t(user.lang, 'payment')}\n💰 <b>${moneyUsd(total)}</b>`, {
-    parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: buttons }
-  });
+  return sendCheckoutOptions(query.message.chat.id, user, product, quantity);
 }
 
 async function handlePayment(query, user, data) {
-  const method = data.split(':')[1];
+  const methodToken = data.slice('pay:'.length);
   const freshUser = await User.findByPk(user.id);
   const state = parseState(freshUser);
   if (!state || state.action !== 'checkout') return answerCallback(query.id, t(user.lang, 'cancelled'), true);
+
+  const product = await Merchant.findByPk(state.merchantId);
+  if (!product) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+  const expectedTotal = Number(product.price) * Number(state.quantity);
+
+  let method = methodToken;
+  let customMethod = null;
+  if (methodToken.startsWith('custom:')) {
+    const customId = Number(methodToken.split(':')[1]);
+    customMethod = await PaymentMethod.findOne({ where: { id: customId, isActive: true } });
+    if (!customMethod) return answerCallback(query.id, user.lang === 'en' ? 'Payment method is unavailable.' : 'طريقة الدفع غير متاحة.', true);
+    method = `custom:${customMethod.id}`;
+  }
+
+  if (method === 'wallet' && Number(freshUser.balance || 0) + 1e-9 < expectedTotal) {
+    await answerCallback(query.id);
+    return sendCheckoutOptions(query.message.chat.id, user, product, state.quantity);
+  }
 
   const order = await createOrder({
     userId: user.id,
@@ -1186,7 +1310,10 @@ async function handlePayment(query, user, data) {
       const fulfillment = await payFromWallet(order.id);
       return sendDeliveryToUser(user.id, fulfillment);
     } catch (error) {
-      if (error.message === 'INSUFFICIENT_BALANCE') return bot.sendMessage(user.id, t(user.lang, 'insufficient'));
+      if (error.message === 'INSUFFICIENT_BALANCE') {
+        await order.update({ status: 'cancelled' }).catch(() => {});
+        return sendCheckoutOptions(user.id, user, product, state.quantity);
+      }
       if (error.message === 'OUT_OF_STOCK') return bot.sendMessage(user.id, t(user.lang, 'outOfStock'));
       throw error;
     }
@@ -1202,20 +1329,41 @@ async function handlePayment(query, user, data) {
   }
 
   const rate = await getIqdRate();
-  const number = await getSuperQiNumber();
   const iqd = Number(order.totalAmount) * rate;
-  await setState(user.id, { action: 'superqi_proof', orderId: order.id });
-  return bot.sendMessage(user.id, [
-    '🔵 <b>دفع SuperQi</b>',
-    '',
-    `المبلغ: <b>${moneyUsd(order.totalAmount)}</b>`,
-    `بالدينار: <b>${moneyIqd(iqd)}</b>`,
-    `حوّل إلى: <code>${escapeHtml(number)}</code>`,
-    '',
-    t(user.lang, 'proofPrompt'),
-    '',
-    'اكتب إغلاق إذا تريد إلغاء العملية.'
-  ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+
+  if (method === 'superqi') {
+    const number = await getSuperQiNumber();
+    await setState(user.id, { action: 'superqi_proof', orderId: order.id });
+    const title = user.lang === 'en' ? 'Pay with SuperQi' : 'الدفع عبر سوبركي';
+    return bot.sendMessage(user.id, [
+      `${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} <b>${title}</b>`,
+      '',
+      `${user.lang === 'en' ? 'Amount' : 'المبلغ'}: <b>${moneyUsd(order.totalAmount)}</b>`,
+      `${user.lang === 'en' ? 'IQD' : 'بالدينار'}: <b>${moneyIqd(iqd)}</b>`,
+      `${user.lang === 'en' ? 'Send to' : 'حوّل إلى'}: <code>${escapeHtml(number)}</code>`,
+      '',
+      t(user.lang, 'proofPrompt'),
+      '',
+      user.lang === 'en' ? 'Send /cancel to cancel.' : 'اكتب إغلاق إذا تريد إلغاء العملية.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (customMethod) {
+    await setState(user.id, { action: 'custom_payment_proof', orderId: order.id, paymentMethodId: customMethod.id });
+    const name = localizedPaymentName(customMethod, user.lang);
+    const icon = customPaymentEmoji(customMethod);
+    return bot.sendMessage(user.id, [
+      `${icon ? premiumEmojiHtml(icon) : '💳'} <b>${user.lang === 'en' ? `Pay with ${escapeHtml(name)}` : `الدفع عبر ${escapeHtml(name)}`}</b>`,
+      '',
+      `${user.lang === 'en' ? 'Amount' : 'المبلغ'}: <b>${moneyUsd(order.totalAmount)}</b>`,
+      `${user.lang === 'en' ? 'IQD' : 'بالدينار'}: <b>${moneyIqd(iqd)}</b>`,
+      `${user.lang === 'en' ? 'Send to' : 'حوّل إلى'}: <code>${escapeHtml(customMethod.paymentNumber)}</code>`,
+      '',
+      t(user.lang, 'proofPrompt'),
+      '',
+      user.lang === 'en' ? 'Send /cancel to cancel.' : 'اكتب إغلاق إذا تريد إلغاء العملية.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
 }
 
 async function sendBinanceInstructions(user, transfer) {
@@ -1225,14 +1373,21 @@ async function sendBinanceInstructions(user, transfer) {
   });
 }
 
-async function handleTopupStart(query, user, method) {
-  if (method === 'binance' && !binancePay.configured()) {
+async function handleTopupStart(query, user, methodToken) {
+  if (methodToken === 'binance' && !binancePay.configured()) {
     return answerCallback(query.id, 'Binance غير مهيأ.', true);
   }
-  await setState(user.id, { action: 'wallet_topup_amount', method });
+  if (methodToken.startsWith('custom:')) {
+    const id = Number(methodToken.split(':')[1]);
+    const customMethod = await PaymentMethod.findOne({ where: { id, isActive: true } });
+    if (!customMethod) return answerCallback(query.id, user.lang === 'en' ? 'Payment method is unavailable.' : 'طريقة الدفع غير متاحة.', true);
+  }
+  await setState(user.id, { action: 'wallet_topup_amount', method: methodToken });
   await answerCallback(query.id);
-  const minimum = method === 'binance' ? config.binance.minAmount : 0.01;
-  return bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${minimum}):`, { reply_markup: cancelInlineKeyboard() });
+  const minimum = methodToken === 'binance' ? config.binance.minAmount : 0.01;
+  return bot.sendMessage(user.id, user.lang === 'en'
+    ? `Send the top-up amount in USD (minimum $${minimum}):`
+    : `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${minimum}):`, { reply_markup: cancelInlineKeyboard() });
 }
 
 async function handleStateMessage(msg, user, state) {
@@ -1257,8 +1412,8 @@ async function handleStateMessage(msg, user, state) {
     const targetUser = await User.findByPk(ticket.userId);
     const targetLang = targetUser?.lang === 'en' ? 'en' : 'ar';
     await bot.sendMessage(ticket.userId, targetLang === 'en'
-      ? `💬 <b>Support reply — ticket #${ticket.id}</b>`
-      : `💬 <b>رد الدعم — التذكرة #${ticket.id}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+      ? `${premiumEmojiHtml(PREMIUM_EMOJI.support)} <b>Support reply — ticket #${ticket.id}</b>`
+      : `${premiumEmojiHtml(PREMIUM_EMOJI.support)} <b>رد الدعم — التذكرة #${ticket.id}</b>`, { parse_mode: 'HTML' }).catch(() => {});
     await sendLocalizedAdminMessage(ticket.userId, msg, targetLang).catch(async () => {
       if (msg.text) await bot.sendMessage(ticket.userId, targetLang === 'en' ? await translateArToEn(msg.text) : msg.text);
     });
@@ -1274,7 +1429,7 @@ async function handleStateMessage(msg, user, state) {
     const amount = Number(String(msg.text || '').trim());
     const minimumAmount = state.method === 'binance' ? config.binance.minAmount : 0.01;
     if (!Number.isFinite(amount) || amount < minimumAmount || amount > 100000) {
-      await bot.sendMessage(user.id, '❌ المبلغ غير صحيح.');
+      await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Invalid amount.' : '❌ المبلغ غير صحيح.');
       return true;
     }
 
@@ -1290,31 +1445,55 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
 
+    let paymentMethod = null;
+    let methodName = user.lang === 'en' ? 'SuperQi' : 'سوبركي';
+    let number = await getSuperQiNumber();
+    let icon = PREMIUM_EMOJI.superqi;
+    let stateAction = 'superqi_topup_proof';
+    let txPrefix = 'SUPERQI';
+    let paymentMethodId = null;
+
+    if (String(state.method || '').startsWith('custom:')) {
+      const paymentMethodIdRaw = Number(String(state.method).split(':')[1]);
+      paymentMethod = await PaymentMethod.findOne({ where: { id: paymentMethodIdRaw, isActive: true } });
+      if (!paymentMethod) {
+        await clearState(user.id);
+        await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Payment method is unavailable.' : '❌ طريقة الدفع غير متاحة.');
+        return true;
+      }
+      methodName = localizedPaymentName(paymentMethod, user.lang);
+      number = paymentMethod.paymentNumber;
+      icon = customPaymentEmoji(paymentMethod);
+      stateAction = 'custom_topup_proof';
+      txPrefix = `CUSTOM-${paymentMethod.id}`;
+      paymentMethodId = paymentMethod.id;
+    }
+
     const rate = await getIqdRate();
-    const number = await getSuperQiNumber();
     const transaction = await BalanceTransaction.create({
       userId: user.id,
       amount,
       type: 'deposit',
-      txid: `SUPERQI-${Date.now()}-${user.id}`,
-      caption: 'SuperQi manual wallet topup',
+      paymentMethodId,
+      txid: `${txPrefix}-${Date.now()}-${user.id}`,
+      caption: `${methodName} manual wallet topup`,
       status: 'awaiting_proof',
       lastReminderAt: new Date()
     });
-    await setState(user.id, { action: 'superqi_topup_proof', transactionId: transaction.id });
+    await setState(user.id, { action: stateAction, transactionId: transaction.id, paymentMethodId });
     await bot.sendMessage(user.id, [
-      '🔵 <b>شحن المحفظة عبر SuperQi</b>',
+      `${icon ? premiumEmojiHtml(icon) : '💳'} <b>${user.lang === 'en' ? `Top up via ${escapeHtml(methodName)}` : `شحن المحفظة عبر ${escapeHtml(methodName)}`}</b>`,
       '',
-      `المبلغ بالدولار: <b>${moneyUsd(amount)}</b>`,
-      `سعر الصرف: <b>${moneyIqd(rate)} لكل 1$</b>`,
-      `المبلغ المطلوب: <b>${moneyIqd(amount * rate)}</b>`,
+      `${user.lang === 'en' ? 'Amount in USD' : 'المبلغ بالدولار'}: <b>${moneyUsd(amount)}</b>`,
+      `${user.lang === 'en' ? 'Exchange rate' : 'سعر الصرف'}: <b>${moneyIqd(rate)} ${user.lang === 'en' ? 'per $1' : 'لكل 1$'}</b>`,
+      `${user.lang === 'en' ? 'Amount to send' : 'المبلغ المطلوب'}: <b>${moneyIqd(amount * rate)}</b>`,
       '',
-      'حوّل إلى الرقم:',
+      `${user.lang === 'en' ? 'Send to' : 'حوّل إلى الرقم'}:`,
       `<code>${escapeHtml(number)}</code>`,
       '',
       t(user.lang, 'proofPrompt'),
       '',
-      'اكتب إغلاق إذا تريد إلغاء العملية.'
+      user.lang === 'en' ? 'Send /cancel to cancel.' : 'اكتب إغلاق إذا تريد إلغاء العملية.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
     return true;
   }
@@ -1375,7 +1554,7 @@ async function handleStateMessage(msg, user, state) {
       try {
         await bot.sendPhoto(adminId, fileId, {
           caption: [
-            '🔵 <b>إيصال شحن SuperQi</b>',
+            `${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} <b>إيصال شحن سوبركي</b>`,
             `العملية: <code>#${transaction.id}</code>`,
             `المستخدم: ${escapeHtml(user.firstName || '')} — <code>${user.id}</code>`,
             `المبلغ: ${moneyUsd(transaction.amount)} = ${moneyIqd(Number(transaction.amount) * rate)}`
@@ -1413,7 +1592,7 @@ async function handleStateMessage(msg, user, state) {
       try {
         const sent = await bot.sendPhoto(adminId, fileId, {
           caption: [
-            '🔵 <b>إيصال SuperQi</b>',
+            `${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} <b>إيصال سوبركي</b>`,
             `الطلب: <code>#${order.id}</code>`,
             `الزبون: ${escapeHtml(user.firstName || '')} — <code>${user.id}</code>`,
             `المنتج: ${escapeHtml(product?.nameAr || '')}`,
@@ -1435,6 +1614,90 @@ async function handleStateMessage(msg, user, state) {
     return true;
   }
 
+  if (state.action === 'custom_topup_proof') {
+    if (!msg.photo?.length) {
+      await bot.sendMessage(user.id, t(user.lang, 'proofPrompt'));
+      return true;
+    }
+    const transaction = await BalanceTransaction.findByPk(state.transactionId);
+    const paymentMethod = await PaymentMethod.findByPk(state.paymentMethodId || transaction?.paymentMethodId);
+    if (!transaction || !paymentMethod || String(transaction.userId) !== String(user.id) || transaction.status !== 'awaiting_proof') {
+      await clearState(user.id);
+      return true;
+    }
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    await transaction.update({ imageFileId: fileId, status: 'proof_pending' });
+    await clearState(user.id);
+    const rate = await getIqdRate();
+    const icon = customPaymentEmoji(paymentMethod);
+    for (const adminId of config.admins) {
+      try {
+        await bot.sendPhoto(adminId, fileId, {
+          caption: [
+            `${icon ? premiumEmojiHtml(icon) : '💳'} <b>إيصال شحن ${escapeHtml(paymentMethod.nameAr)}</b>`,
+            `العملية: <code>#${transaction.id}</code>`,
+            `المستخدم: ${escapeHtml(user.firstName || '')} — <code>${user.id}</code>`,
+            `المبلغ: ${moneyUsd(transaction.amount)} = ${moneyIqd(Number(transaction.amount) * rate)}`,
+            `رقم الدفع: <code>${escapeHtml(paymentMethod.paymentNumber)}</code>`
+          ].join('\n'),
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[
+            { text: '✅ موافقة وشحن', callback_data: `cmtop:approve:${transaction.id}` },
+            { text: '❌ رفض', callback_data: `cmtop:reject:${transaction.id}` }
+          ]] }
+        });
+      } catch (error) {
+        console.error('Custom topup admin:', error.message);
+      }
+    }
+    await bot.sendMessage(user.id, t(user.lang, 'proofSent'));
+    return true;
+  }
+
+  if (state.action === 'custom_payment_proof') {
+    if (!msg.photo?.length) {
+      await bot.sendMessage(user.id, t(user.lang, 'proofPrompt'));
+      return true;
+    }
+    const order = await PurchaseOrder.findByPk(state.orderId);
+    const paymentMethod = await PaymentMethod.findByPk(state.paymentMethodId);
+    if (!order || !paymentMethod || String(order.userId) !== String(user.id) || order.status !== 'pending_payment') {
+      await clearState(user.id);
+      return true;
+    }
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    await order.update({ proofFileId: fileId, status: 'proof_pending' });
+    await clearState(user.id);
+    const product = await Merchant.findByPk(order.merchantId);
+    const rate = await getIqdRate();
+    const icon = customPaymentEmoji(paymentMethod);
+    for (const adminId of config.admins) {
+      try {
+        const sent = await bot.sendPhoto(adminId, fileId, {
+          caption: [
+            `${icon ? premiumEmojiHtml(icon) : '💳'} <b>إيصال ${escapeHtml(paymentMethod.nameAr)}</b>`,
+            `الطلب: <code>#${order.id}</code>`,
+            `الزبون: ${escapeHtml(user.firstName || '')} — <code>${user.id}</code>`,
+            `المنتج: ${escapeHtml(product?.nameAr || '')}`,
+            `الكمية: ${order.quantity}`,
+            `المبلغ: ${moneyUsd(order.totalAmount)} = ${moneyIqd(Number(order.totalAmount) * rate)}`,
+            `رقم الدفع: <code>${escapeHtml(paymentMethod.paymentNumber)}</code>`
+          ].join('\n'),
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[
+            { text: '✅ موافقة وتسليم', callback_data: `cm:approve:${order.id}` },
+            { text: '❌ رفض', callback_data: `cm:reject:${order.id}` }
+          ]] }
+        });
+        if (!order.adminMessageId) await order.update({ adminMessageId: sent.message_id });
+      } catch (error) {
+        console.error('Custom payment admin:', error.message);
+      }
+    }
+    await bot.sendMessage(user.id, t(user.lang, 'proofSent'));
+    return true;
+  }
+
   if (!isAdmin(user.id)) return false;
 
   if (state.action === 'admin_broadcast') {
@@ -1446,6 +1709,92 @@ async function handleStateMessage(msg, user, state) {
       `وصل إلى: ${result.sent}`,
       `تعذر الإرسال إلى: ${result.failed}`
     ].join('\n'));
+    return true;
+  }
+
+  if (state.action === 'admin_new_payment_method') {
+    const data = state.data || {};
+    const text = String(msg.text || '').trim();
+    if (!text) return true;
+
+    if (state.step === 'nameAr') {
+      const rich = extractProductNameRichText(text, msg.entities);
+      if (!rich.plain) {
+        await bot.sendMessage(user.id, '❌ اكتب اسم طريقة الدفع أيضاً، مو فقط ID الإيموجي.');
+        return true;
+      }
+      const cleanName = rich.firstCustomEmojiAlt ? rich.plain.replace(rich.firstCustomEmojiAlt, '').trim() : rich.plain;
+      data.nameAr = cleanName || rich.plain;
+      data.nameEn = await translateArToEn(data.nameAr);
+      data.iconCustomEmojiId = rich.firstCustomEmojiId || '';
+      data.iconAlt = rich.firstCustomEmojiAlt || '💳';
+      await setState(user.id, { action: 'admin_new_payment_method', step: 'number', data });
+      await bot.sendMessage(user.id, '2/2 أرسل رقم/معرّف الدفع الذي راح يظهر للزبون.\nمثال: 0770xxxxxxx أو Wallet-ID-123', { reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+
+    if (state.step === 'number') {
+      if (text.length < 2 || text.length > 255) {
+        await bot.sendMessage(user.id, '❌ رقم/معرّف الدفع غير صحيح.');
+        return true;
+      }
+      const method = await PaymentMethod.create({
+        nameAr: data.nameAr,
+        nameEn: data.nameEn || data.nameAr,
+        paymentNumber: text,
+        iconCustomEmojiId: data.iconCustomEmojiId || null,
+        iconAlt: data.iconAlt || '💳',
+        isActive: true,
+        sortOrder: 0
+      });
+      await clearState(user.id);
+      const icon = customPaymentEmoji(method);
+      await bot.sendMessage(user.id, [
+        '✅ <b>تمت إضافة طريقة الدفع</b>',
+        `${icon ? premiumEmojiHtml(icon) : '💳'} الاسم: <b>${escapeHtml(method.nameAr)}</b>`,
+        `الرقم: <code>${escapeHtml(method.paymentNumber)}</code>`,
+        '',
+        'ظهرت تلقائياً في شراء المنتجات وشحن المحفظة.'
+      ].join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '💳 إدارة طرق الدفع', callback_data: 'adm:payment_methods' }]] }
+      });
+      return true;
+    }
+  }
+
+  if (state.action === 'admin_edit_payment_method') {
+    const method = await PaymentMethod.findByPk(state.paymentMethodId);
+    if (!method) {
+      await clearState(user.id);
+      return true;
+    }
+    const text = String(msg.text || '').trim();
+    if (!text) return true;
+
+    if (state.field === 'name') {
+      const rich = extractProductNameRichText(text, msg.entities);
+      if (!rich.plain) {
+        await bot.sendMessage(user.id, '❌ اكتب اسم طريقة الدفع أيضاً.');
+        return true;
+      }
+      const cleanName = rich.firstCustomEmojiAlt ? rich.plain.replace(rich.firstCustomEmojiAlt, '').trim() : rich.plain;
+      method.nameAr = cleanName || rich.plain;
+      method.nameEn = await translateArToEn(method.nameAr);
+      method.iconCustomEmojiId = rich.firstCustomEmojiId || null;
+      method.iconAlt = rich.firstCustomEmojiAlt || '💳';
+    } else if (state.field === 'number') {
+      if (text.length < 2 || text.length > 255) {
+        await bot.sendMessage(user.id, '❌ رقم/معرّف الدفع غير صحيح.');
+        return true;
+      }
+      method.paymentNumber = text;
+    }
+    await method.save();
+    await clearState(user.id);
+    await bot.sendMessage(user.id, '✅ تم تحديث طريقة الدفع.', {
+      reply_markup: { inline_keyboard: [[{ text: 'رجوع لطريقة الدفع', callback_data: `adm:pm:${method.id}` }]] }
+    });
     return true;
   }
 
@@ -1934,7 +2283,7 @@ async function handleSuperQiTopupAdmin(query, data) {
     await ledger.save({ transaction: dbTransaction });
     await dbTransaction.commit();
     await answerCallback(query.id, 'تم الشحن.');
-    await bot.sendMessage(targetUser.id, `✅ تم شحن محفظتك عبر SuperQi.\nالمبلغ: <b>${moneyUsd(ledger.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' });
+    await bot.sendMessage(targetUser.id, `✅ ${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} تم شحن محفظتك عبر سوبركي.\nالمبلغ: <b>${moneyUsd(ledger.amount)}</b>\nالرصيد الجديد: <b>${moneyUsd(targetUser.balance)}</b>`, { parse_mode: 'HTML' });
   } catch (error) {
     await dbTransaction.rollback();
     throw error;
@@ -1961,6 +2310,84 @@ async function handleSuperQiAdmin(query, data) {
   }
 }
 
+async function handleCustomTopupAdmin(query, data) {
+  if (!isAdmin(query.from.id)) return answerCallback(query.id, 'Admins only', true);
+  const [, action, transactionIdRaw] = data.split(':');
+  const transactionId = Number(transactionIdRaw);
+  const dbTransaction = await sequelize.transaction();
+  try {
+    const ledger = await BalanceTransaction.findByPk(transactionId, { transaction: dbTransaction, lock: dbTransaction.LOCK.UPDATE });
+    if (!ledger || ledger.status !== 'proof_pending' || !ledger.paymentMethodId) {
+      await dbTransaction.rollback();
+      return answerCallback(query.id, 'تمت معالجة العملية سابقاً.', true);
+    }
+    const method = await PaymentMethod.findByPk(ledger.paymentMethodId, { transaction: dbTransaction });
+    if (!method) {
+      await dbTransaction.rollback();
+      return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    }
+    if (action === 'reject') {
+      ledger.status = 'rejected';
+      await ledger.save({ transaction: dbTransaction });
+      await dbTransaction.commit();
+      await answerCallback(query.id, 'تم الرفض.');
+      await bot.sendMessage(ledger.userId, `❌ تم رفض إيصال شحن ${escapeHtml(method.nameAr)} #${ledger.id}.`, { parse_mode: 'HTML' });
+      if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+      return;
+    }
+    const targetUser = await User.findByPk(ledger.userId, { transaction: dbTransaction, lock: dbTransaction.LOCK.UPDATE });
+    targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount);
+    await targetUser.save({ transaction: dbTransaction });
+    ledger.status = 'completed';
+    await ledger.save({ transaction: dbTransaction });
+    await dbTransaction.commit();
+    await answerCallback(query.id, 'تم الشحن.');
+    if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+    const targetLang = targetUser.lang === 'en' ? 'en' : 'ar';
+    const methodName = localizedPaymentName(method, targetLang);
+    const icon = customPaymentEmoji(method);
+    await bot.sendMessage(targetUser.id, [
+      `✅ ${icon ? premiumEmojiHtml(icon) : '💳'} <b>${targetLang === 'en' ? `Wallet topped up via ${escapeHtml(methodName)}` : `تم شحن محفظتك عبر ${escapeHtml(methodName)}`}</b>`,
+      `${targetLang === 'en' ? 'Amount' : 'المبلغ'}: <b>${moneyUsd(ledger.amount)}</b>`,
+      `${targetLang === 'en' ? 'New balance' : 'الرصيد الجديد'}: <b>${moneyUsd(targetUser.balance)}</b>`
+    ].join('\n'), { parse_mode: 'HTML' });
+  } catch (error) {
+    await dbTransaction.rollback();
+    throw error;
+  }
+}
+
+async function handleCustomPaymentAdmin(query, data) {
+  if (!isAdmin(query.from.id)) return answerCallback(query.id, 'Admins only', true);
+  const [, action, orderIdRaw] = data.split(':');
+  const order = await PurchaseOrder.findByPk(Number(orderIdRaw));
+  if (!order || order.status !== 'proof_pending' || !String(order.paymentMethod || '').startsWith('custom:')) {
+    return answerCallback(query.id, 'تمت معالجة الطلب سابقاً.', true);
+  }
+  const methodId = Number(String(order.paymentMethod).split(':')[1]);
+  const method = await PaymentMethod.findByPk(methodId);
+  if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+  if (action === 'reject') {
+    await order.update({ status: 'rejected' });
+    await answerCallback(query.id, 'تم الرفض.');
+    if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+    const targetUser = await User.findByPk(order.userId);
+    const lang = targetUser?.lang === 'en' ? 'en' : 'ar';
+    await bot.sendMessage(order.userId, lang === 'en'
+      ? `❌ Payment receipt for order #${order.id} was rejected. Contact support if needed.`
+      : `❌ تم رفض إيصال الطلب #${order.id}. راجع الدعم إذا تحتاج.`);
+    return;
+  }
+  try {
+    const fulfillment = await fulfillOrder(order.id, { paymentRef: `custom:${method.id}:${order.id}` });
+    await answerCallback(query.id, 'تمت الموافقة والتسليم.');
+    if (query.message) await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+    await sendDeliveryToUser(order.userId, fulfillment);
+  } catch (error) {
+    await answerCallback(query.id, error.message === 'OUT_OF_STOCK' ? 'المخزون غير كافي.' : error.message, true);
+  }
+}
+
 async function showOrders(chatId, user) {
   const orders = await PurchaseOrder.findAll({
     where: { userId: user.id },
@@ -1973,7 +2400,7 @@ async function showOrders(chatId, user) {
     text: `#${order.id} | ${user.lang === 'en' ? (order.Merchant?.nameEn || order.Merchant?.nameAr) : (order.Merchant?.nameAr || '')} | ${order.status}`,
     callback_data: `order:${order.id}`
   }]);
-  return bot.sendMessage(chatId, t(user.lang, 'orders'), { reply_markup: { inline_keyboard: keyboard } });
+  return bot.sendMessage(chatId, `${premiumEmojiHtml(PREMIUM_EMOJI.orders)} <b>${escapeHtml(t(user.lang, 'orders'))}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function showOrder(chatId, user, orderId, callbackId = null) {
@@ -1992,7 +2419,94 @@ async function showOrder(chatId, user, orderId, callbackId = null) {
   await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 }
 
+async function showAdminPaymentMethods(chatId) {
+  const methods = await PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
+  const rows = methods.map(method => [emojiButton(
+    `${method.isActive ? '✅' : '⛔'} ${method.nameAr}`,
+    customPaymentEmoji(method),
+    { callback_data: `adm:pm:${method.id}`, style: method.isActive ? 'success' : 'danger' }
+  )]);
+  rows.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
+  return bot.sendMessage(chatId, [
+    '💳 <b>طرق الدفع الإضافية</b>',
+    '',
+    'هاي الطرق تظهر تلقائياً عند شراء منتج أو شحن المحفظة.'
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: rows }
+  });
+}
+
+async function showAdminPaymentMethod(chatId, id) {
+  const method = await PaymentMethod.findByPk(id);
+  if (!method) return bot.sendMessage(chatId, '❌ طريقة الدفع غير موجودة.');
+  const icon = customPaymentEmoji(method);
+  return bot.sendMessage(chatId, [
+    `${icon ? premiumEmojiHtml(icon) : '💳'} <b>${escapeHtml(method.nameAr)}</b>`,
+    `English: <b>${escapeHtml(method.nameEn)}</b>`,
+    `رقم الدفع: <code>${escapeHtml(method.paymentNumber)}</code>`,
+    `الحالة: <b>${method.isActive ? 'مفعلة' : 'متوقفة'}</b>`,
+    `Custom Emoji ID: <code>${escapeHtml(method.iconCustomEmojiId || 'بدون')}</code>`
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [
+        { text: '✏️ تغيير الاسم', callback_data: `adm:pmfield:${method.id}:name` },
+        { text: '🔢 تغيير الرقم', callback_data: `adm:pmfield:${method.id}:number` }
+      ],
+      [{ text: method.isActive ? '⛔ إيقاف الطريقة' : '✅ تشغيل الطريقة', callback_data: `adm:pmtoggle:${method.id}`, style: method.isActive ? 'danger' : 'success' }],
+      [{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]
+    ] }
+  });
+}
+
 async function handleAdminCallback(query, user, data) {
+  if (data === 'adm:add_payment_method') {
+    await setState(user.id, { action: 'admin_new_payment_method', step: 'nameAr', data: {} });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      '➕ <b>إضافة طريقة دفع</b>',
+      '',
+      '1/2 أرسل اسم الخدمة بالعربي.',
+      'تقدر ترسل Custom Emoji Premium ويا الاسم، أو ID بين [] مثل:',
+      '<code>[5184203496831846429] سوبركي</code>'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data === 'adm:payment_methods') {
+    await answerCallback(query.id);
+    return showAdminPaymentMethods(query.message.chat.id);
+  }
+
+  if (data.startsWith('adm:pmfield:')) {
+    const [, , idRaw, field] = data.split(':');
+    const id = Number(idRaw);
+    if (!['name', 'number'].includes(field)) return answerCallback(query.id, 'حقل غير صحيح.', true);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    await setState(user.id, { action: 'admin_edit_payment_method', paymentMethodId: id, field });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, field === 'name'
+      ? 'أرسل الاسم الجديد بالعربي. تقدر تستخدم Premium Emoji أو [ID] قبل الاسم.'
+      : 'أرسل رقم/معرّف الدفع الجديد.', { reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:pmtoggle:')) {
+    const id = Number(data.split(':')[2]);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    method.isActive = !method.isActive;
+    await method.save({ fields: ['isActive'] });
+    await answerCallback(query.id, method.isActive ? 'تم تشغيل طريقة الدفع.' : 'تم إيقاف طريقة الدفع.');
+    return showAdminPaymentMethod(query.message.chat.id, method.id);
+  }
+
+  if (data.startsWith('adm:pm:')) {
+    const id = Number(data.split(':')[2]);
+    await answerCallback(query.id);
+    return showAdminPaymentMethod(query.message.chat.id, id);
+  }
+
   if (data === 'adm:stock') {
     await answerCallback(query.id);
     return showStockProductList(query.message.chat.id);
@@ -2162,12 +2676,12 @@ async function handleAdminCallback(query, user, data) {
     ]);
     const lines = [];
     if (rows.length) {
-      lines.push('🔵 <b>SuperQi</b>');
+      lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.superqi)} <b>سوبركي</b>`);
       lines.push(...rows.map(order => `#${order.id} | ${escapeHtml(order.Merchant?.nameAr || '')} | ${moneyUsd(order.totalAmount)}`));
     }
     if (binanceRows.length) {
       if (lines.length) lines.push('');
-      lines.push('🟡 <b>Binance — تحقق يدوي</b>');
+      lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.binance)} <b>Binance — تحقق يدوي</b>`);
       lines.push(...binanceRows.map(row => `#${row.id} | مستخدم <code>${row.userId}</code> | ${moneyUsd(row.expectedAmount)} | <code>${escapeHtml(row.submittedOrderId || '')}</code>`));
     }
     return bot.sendMessage(query.message.chat.id, lines.length ? lines.join('\n') : 'ماكو دفعات معلقة.', { parse_mode: 'HTML' });
@@ -2198,12 +2712,12 @@ async function handleAdminCallback(query, user, data) {
     return bot.sendMessage(query.message.chat.id, [
       `📊 المستخدمون: ${users}`,
       `⛔ المحظورون: ${blocked}`,
-      `📦 المنتجات: ${products}`,
+      `${premiumEmojiHtml(PREMIUM_EMOJI.products)} المنتجات: ${products}`,
       `🧾 الطلبات: ${orders}`,
-      `🟡 دفعات Binance المؤكدة: ${verifiedBinance}`,
+      `${premiumEmojiHtml(PREMIUM_EMOJI.binance)} دفعات Binance المؤكدة: ${verifiedBinance}`,
       `🎁 الإحالات المقبولة: ${referrals}`,
       `🎉 الهدايا المسلّمة: ${giftClaims}`,
-      `💬 تذاكر الدعم المفتوحة: ${openTickets}`,
+      `${premiumEmojiHtml(PREMIUM_EMOJI.support)} تذاكر الدعم المفتوحة: ${openTickets}`,
       `🔐 المخزون المتاح: ${stock}`
     ].join('\n'));
   }
@@ -2230,7 +2744,7 @@ async function handleAdminCallback(query, user, data) {
       reply_markup: { inline_keyboard: [
         [
           { text: '💱 سعر الدولار', callback_data: 'adm:set:iqd_rate' },
-          { text: '🔵 رقم SuperQi', callback_data: 'adm:set:superqi_number' }
+          emojiButton('رقم سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:set:superqi_number' })
         ],
         [
           { text: '📢 القناة الإجبارية', callback_data: 'adm:set:required_channel' },
