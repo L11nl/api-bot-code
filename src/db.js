@@ -1,4 +1,5 @@
 const { Sequelize, DataTypes, Op } = require('sequelize');
+const crypto = require('crypto');
 const config = require('./config');
 const { encryptPayload, decryptPayload, isEncrypted, legacyPayload } = require('./cryptoStore');
 const { inventoryFingerprint, inventoryPayloadIsValid, parseDescription } = require('./utils');
@@ -41,7 +42,9 @@ const PaymentMethod = sequelize.define('PaymentMethod', {
   iconCustomEmojiId: { type: DataTypes.STRING(32), allowNull: true },
   iconAlt: { type: DataTypes.STRING(16), allowNull: false, defaultValue: '💳' },
   isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
-  sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
+  sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: true }
 });
 
 const Merchant = sequelize.define('Merchant', {
@@ -58,7 +61,11 @@ const Merchant = sequelize.define('Merchant', {
   deliveryMode: { type: DataTypes.STRING, defaultValue: 'instant' },
   sortOrder: { type: DataTypes.INTEGER, defaultValue: 0 },
   // Secret admin-only field. Never rendered to customers.
-  ownerNote: { type: DataTypes.TEXT, allowNull: true }
+  ownerNote: { type: DataTypes.TEXT, allowNull: true },
+  networkProductId: { type: DataTypes.STRING(64), allowNull: true, unique: true },
+  networkManaged: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  networkOwnerShopId: { type: DataTypes.STRING(80), allowNull: true },
+  networkStock: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
 });
 
 const Code = sequelize.define('Code', {
@@ -91,7 +98,11 @@ const PurchaseOrder = sequelize.define('PurchaseOrder', {
   adminMessageId: { type: DataTypes.BIGINT, allowNull: true },
   delivery: { type: DataTypes.JSONB, defaultValue: [] },
   paidAt: { type: DataTypes.DATE, allowNull: true },
-  completedAt: { type: DataTypes.DATE, allowNull: true }
+  completedAt: { type: DataTypes.DATE, allowNull: true },
+  walletApplied: { type: DataTypes.DECIMAL(18, 2), allowNull: false, defaultValue: 0 },
+  externalAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: false, defaultValue: 0 },
+  paymentOrigin: { type: DataTypes.STRING(24), allowNull: true },
+  remoteOrderRef: { type: DataTypes.STRING(96), allowNull: true, unique: true }
 });
 
 const BalanceTransaction = sequelize.define('BalanceTransaction', {
@@ -105,7 +116,9 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   caption: { type: DataTypes.TEXT, allowNull: true },
   status: { type: DataTypes.STRING, defaultValue: 'pending' },
   adminMessageId: { type: DataTypes.BIGINT, allowNull: true },
-  lastReminderAt: { type: DataTypes.DATE, allowNull: true }
+  lastReminderAt: { type: DataTypes.DATE, allowNull: true },
+  paymentOrigin: { type: DataTypes.STRING(24), allowNull: true },
+  networkMethod: { type: DataTypes.STRING(80), allowNull: true }
 });
 
 const BinanceTransfer = sequelize.define('BinanceTransfer', {
@@ -171,6 +184,62 @@ const GiftClaim = sequelize.define('GiftClaim', {
     { fields: ['status'] }
   ]
 });
+
+
+const SecureSetting = sequelize.define('SecureSetting', {
+  key: { type: DataTypes.STRING(80), primaryKey: true },
+  value: { type: DataTypes.TEXT, allowNull: false }
+});
+
+const DeliveryRecord = sequelize.define('DeliveryRecord', {
+  id: { type: DataTypes.STRING(40), primaryKey: true },
+  orderId: { type: DataTypes.INTEGER, allowNull: false },
+  userId: { type: DataTypes.BIGINT, allowNull: false },
+  merchantId: { type: DataTypes.INTEGER, allowNull: false },
+  codeId: { type: DataTypes.INTEGER, allowNull: true },
+  payload: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+  sourceShopId: { type: DataTypes.STRING(80), allowNull: true }
+}, { indexes: [{ fields: ['orderId'] }, { fields: ['userId'] }] });
+
+const NetworkClient = sequelize.define('NetworkClient', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  shopId: { type: DataTypes.STRING(80), allowNull: false, unique: true },
+  name: { type: DataTypes.STRING(120), allowNull: false },
+  ownerTelegramId: { type: DataTypes.BIGINT, allowNull: true },
+  apiKeyHash: { type: DataTypes.STRING(64), allowNull: false, unique: true },
+  settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+  capabilities: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
+});
+
+const NetworkSettlement = sequelize.define('NetworkSettlement', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  debtorShopId: { type: DataTypes.STRING(80), allowNull: false },
+  creditorShopId: { type: DataTypes.STRING(80), allowNull: false, defaultValue: 'master' },
+  amountUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: false },
+  iqdAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  egpAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
+  settlementAmount: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  sourceMethod: { type: DataTypes.STRING(80), allowNull: false },
+  sourceRef: { type: DataTypes.STRING(160), allowNull: true },
+  customerName: { type: DataTypes.STRING(160), allowNull: true },
+  status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'open' }
+}, { indexes: [{ fields: ['debtorShopId', 'status'] }, { unique: true, fields: ['debtorShopId', 'sourceMethod', 'sourceRef'] }] });
+
+
+const NetworkPaymentIntent = sequelize.define('NetworkPaymentIntent', {
+  id: { type: DataTypes.STRING(64), primaryKey: true },
+  shopId: { type: DataTypes.STRING(80), allowNull: false },
+  customerId: { type: DataTypes.BIGINT, allowNull: true },
+  customerName: { type: DataTypes.STRING(160), allowNull: true },
+  activity: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'payment' },
+  amountUsd: { type: DataTypes.DECIMAL(18, 8), allowNull: false },
+  status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'waiting' },
+  submittedOrderId: { type: DataTypes.STRING(128), allowNull: true },
+  transactionId: { type: DataTypes.STRING(128), allowNull: true, unique: true },
+  expiresAt: { type: DataTypes.DATE, allowNull: false }
+}, { indexes: [{ fields: ['shopId', 'status'] }, { unique: true, fields: ['transactionId'] }] });
 
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant, { foreignKey: 'merchantId' });
@@ -384,6 +453,23 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'deliveryMode', { type: DataTypes.STRING, defaultValue: 'instant' });
   await addColumnIfMissing('Merchants', 'sortOrder', { type: DataTypes.INTEGER, defaultValue: 0 });
   await addColumnIfMissing('Merchants', 'ownerNote', { type: DataTypes.TEXT, allowNull: true });
+  await addColumnIfMissing('Merchants', 'networkProductId', { type: DataTypes.STRING(64), allowNull: true });
+  await addColumnIfMissing('Merchants', 'networkManaged', { type: DataTypes.BOOLEAN, defaultValue: false });
+  await addColumnIfMissing('Merchants', 'networkOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('Merchants', 'networkStock', { type: DataTypes.INTEGER, defaultValue: 0 });
+
+  await addColumnIfMissing('PurchaseOrders', 'walletApplied', { type: DataTypes.DECIMAL(18, 2), defaultValue: 0 });
+  await addColumnIfMissing('PurchaseOrders', 'externalAmount', { type: DataTypes.DECIMAL(18, 2), defaultValue: 0 });
+  await addColumnIfMissing('PurchaseOrders', 'paymentOrigin', { type: DataTypes.STRING(24), allowNull: true });
+  await addColumnIfMissing('PurchaseOrders', 'remoteOrderRef', { type: DataTypes.STRING(96), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'paymentOrigin', { type: DataTypes.STRING(24), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'networkMethod', { type: DataTypes.STRING(80), allowNull: true });
+
+  await addColumnIfMissing('PaymentMethods', 'settlementCurrency', { type: DataTypes.STRING(8), defaultValue: 'USD' });
+  await addColumnIfMissing('PaymentMethods', 'ratePerUsd', { type: DataTypes.DECIMAL(18, 4), allowNull: true });
+
+  await addColumnIfMissing('NetworkPaymentIntents', 'customerName', { type: DataTypes.STRING(160), allowNull: true });
+  await addColumnIfMissing('NetworkPaymentIntents', 'activity', { type: DataTypes.STRING(20), defaultValue: 'payment' });
 
   await addColumnIfMissing('Codes', 'maxUses', { type: DataTypes.INTEGER, defaultValue: 1 });
   await addColumnIfMissing('Codes', 'usedCount', { type: DataTypes.INTEGER, defaultValue: 0 });
@@ -404,6 +490,16 @@ async function initializeDatabase() {
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_merchant_id_is_used"
     ON "Codes" ("merchantId", "isUsed")
+  `);
+  await sequelize.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "merchants_network_product_id_unique"
+    ON "Merchants" ("networkProductId")
+    WHERE "networkProductId" IS NOT NULL
+  `);
+  await sequelize.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_remote_order_ref_unique"
+    ON "PurchaseOrders" ("remoteOrderRef")
+    WHERE "remoteOrderRef" IS NOT NULL
   `);
 
   await sequelize.query(`
@@ -432,6 +528,14 @@ async function initializeDatabase() {
 
   await populateFingerprintsAndRemoveUnusedDuplicates();
   await normalizeProductDescriptions();
+
+  const withoutNetworkId = await Merchant.findAll({ where: { networkProductId: null } });
+  for (const product of withoutNetworkId) {
+    product.networkProductId = crypto.randomUUID();
+    product.networkOwnerShopId = product.networkOwnerShopId || 'master';
+    await product.save({ fields: ['networkProductId', 'networkOwnerShopId'] });
+  }
+  await Merchant.update({ networkOwnerShopId: 'master' }, { where: { networkManaged: false, networkOwnerShopId: null } }).catch(() => {});
 }
 
 async function getSetting(key, fallback = '') {
@@ -458,6 +562,23 @@ async function getSuperQiNumber() {
   return getSetting('superqi_number', config.superQiNumber);
 }
 
+
+async function getSecureSetting(key, fallback = '') {
+  const row = await SecureSetting.findByPk(key);
+  if (!row) return fallback;
+  try {
+    const payload = decryptPayload(row.value, null);
+    return String(payload?.value ?? fallback);
+  } catch { return fallback; }
+}
+
+async function setSecureSetting(key, value) {
+  const encrypted = encryptPayload({ value: String(value || '') });
+  const [row] = await SecureSetting.findOrCreate({ where: { key }, defaults: { value: encrypted } });
+  if (row.value !== encrypted) await row.update({ value: encrypted });
+  return row;
+}
+
 module.exports = {
   sequelize,
   Op,
@@ -472,9 +593,16 @@ module.exports = {
   SupportTicket,
   Referral,
   GiftClaim,
+  SecureSetting,
+  DeliveryRecord,
+  NetworkClient,
+  NetworkSettlement,
+  NetworkPaymentIntent,
   initializeDatabase,
   getSetting,
   setSetting,
   getIqdRate,
-  getSuperQiNumber
+  getSuperQiNumber,
+  getSecureSetting,
+  setSecureSetting
 };

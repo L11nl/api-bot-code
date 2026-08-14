@@ -43,6 +43,23 @@ module.exports = {
   inventoryKey,
   superQiNumber: String(process.env.SUPERQI_NUMBER || '917392710336').trim(),
   iqdRate: Number(process.env.IQD_RATE || 1500),
+
+  network: {
+    role: ['master', 'client', 'standalone'].includes(String(process.env.NETWORK_ROLE || '').toLowerCase())
+      ? String(process.env.NETWORK_ROLE).toLowerCase()
+      : 'master',
+    apiUrl: String(process.env.NETWORK_API_URL || '').replace(/\/$/, ''),
+    publicUrl: String(process.env.NETWORK_PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/$/, ''),
+    apiKey: String(process.env.NETWORK_API_KEY || '').trim(),
+    shopId: String(process.env.NETWORK_SHOP_ID || '').trim() || `shop-${[...parseAdminIds()][0]}`,
+    shopName: String(process.env.NETWORK_SHOP_NAME || 'متجري').trim(),
+    ownerName: String(process.env.NETWORK_OWNER_NAME || 'نبيل').trim(),
+    settlementCurrency: ['IQD', 'EGP', 'USD'].includes(String(process.env.NETWORK_SETTLEMENT_CURRENCY || '').toUpperCase())
+      ? String(process.env.NETWORK_SETTLEMENT_CURRENCY).toUpperCase()
+      : 'USD',
+    egpRate: Number(process.env.EGP_RATE_PER_USD || 50),
+    iqdRate: Number(process.env.IQD_RATE || 1500)
+  },
   binance: {
     // Normal Binance account API keys with read permission only.
     // Legacy BINANCE_PAY_* names are accepted so the current Railway setup keeps working.

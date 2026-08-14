@@ -2,6 +2,7 @@ const express = require('express');
 const config = require('./config');
 const { initializeDatabase, sequelize } = require('./db');
 const binancePay = require('./payments/binancePay');
+const network = require('./network');
 
 let startupState = 'starting';
 let startupError = '';
@@ -22,6 +23,8 @@ app.get('/health', (_req, res) => {
   // may still be migrating old inventory; readiness is available at /ready.
   return res.json({ ok: true, state: startupState, bot: 'CD Store' });
 });
+if (network.isMaster()) network.installMasterRoutes(app, () => bot);
+
 app.get('/ready', async (_req, res) => {
   if (startupState !== 'ready') {
     return res.status(503).json({ ok: false, state: startupState, error: startupError || undefined });
@@ -32,7 +35,8 @@ app.get('/ready', async (_req, res) => {
       ok: true,
       state: startupState,
       bot: 'CD Store',
-      binanceTransferVerification: binancePay.configured()
+      binanceTransferVerification: await binancePay.configured(),
+      networkRole: network.role()
     });
   } catch (error) {
     return res.status(503).json({ ok: false, state: startupState, error: error.message });
@@ -83,7 +87,7 @@ async function main() {
   await setupTelegramCommands(bot);
 
   startupState = 'ready';
-  console.log('CD Store v4.1 is ready');
+  console.log('CD Store v8.0 is ready');
 }
 
 main().catch(error => {
