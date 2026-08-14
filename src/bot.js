@@ -322,9 +322,9 @@ async function showCustomerCurrencySelector(chatId, user, after = 'main') {
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [
-        [{ text: '💵 دولار', callback_data: `currency:set:USD:${after}`, style: current === 'USD' ? 'success' : 'primary' }],
-        [{ text: '🇮🇶 دينار عراقي', callback_data: `currency:set:IQD:${after}`, style: current === 'IQD' ? 'success' : 'primary' }],
-        [{ text: '🇪🇬 جنيه مصري', callback_data: `currency:set:EGP:${after}`, style: current === 'EGP' ? 'success' : 'primary' }]
+        [{ text: user.lang === 'en' ? '💵 US dollar' : '💵 دولار', callback_data: `currency:set:USD:${after}`, style: current === 'USD' ? 'success' : 'primary' }],
+        [{ text: user.lang === 'en' ? '🇮🇶 Iraqi dinar' : '🇮🇶 دينار عراقي', callback_data: `currency:set:IQD:${after}`, style: current === 'IQD' ? 'success' : 'primary' }],
+        [{ text: user.lang === 'en' ? '🇪🇬 Egyptian pound' : '🇪🇬 جنيه مصري', callback_data: `currency:set:EGP:${after}`, style: current === 'EGP' ? 'success' : 'primary' }]
       ]
     }
   });
@@ -444,6 +444,46 @@ function paymentCurrencyLabel(currency, lang = 'ar') {
   return 'USD';
 }
 
+function currencyFlag(code) {
+  const normalized = String(code || 'USD').toUpperCase();
+  if (normalized === 'IQD') return '🇮🇶';
+  if (normalized === 'EGP') return '🇪🇬';
+  return '💵';
+}
+
+function serviceInputModeLabel(mode, lang = 'ar') {
+  const value = String(mode || 'text');
+  if (value === 'email') return lang === 'en' ? 'Email' : 'إيميل';
+  if (value === 'phone') return lang === 'en' ? 'Phone number' : 'رقم';
+  return lang === 'en' ? 'Text' : 'نص';
+}
+
+function servicePromptMeta(product) {
+  const description = parseDescription(product?.description);
+  const inputMode = String(description.serviceInputMode || 'text');
+  return {
+    inputMode,
+    promptAr: String(description.servicePromptAr || 'أرسل البيانات المطلوبة حتى نباشر تنفيذ الخدمة.'),
+    promptEn: String(description.servicePromptEn || 'Send the required details so we can start the service.'),
+    inputLabelAr: inputMode === 'email' ? 'الإيميل' : inputMode === 'phone' ? 'الرقم' : 'النص',
+    inputLabelEn: inputMode === 'email' ? 'Email' : inputMode === 'phone' ? 'Phone number' : 'Text'
+  };
+}
+
+async function askServiceOrderInput(userId, order, product = null) {
+  const user = await User.findByPk(userId);
+  if (!user || !order) return;
+  const merch = product || await Merchant.findByPk(order.merchantId);
+  const meta = servicePromptMeta(merch);
+  await setState(userId, { action: 'service_input', orderId: order.id, inputMode: meta.inputMode });
+  const intro = user.lang === 'en'
+    ? `✅ Payment confirmed for order #${order.id}.`
+    : `✅ تم تأكيد الدفع للطلب #${order.id}.`;
+  const ask = user.lang === 'en'
+    ? `${meta.promptEn}\n\nRequired field: <b>${escapeHtml(meta.inputLabelEn)}</b>`
+    : `${meta.promptAr}\n\nالحقل المطلوب: <b>${escapeHtml(meta.inputLabelAr)}</b>`;
+  return bot.sendMessage(userId, [intro, ask].join('\n\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+}
 function paymentLocalAmount(amountUsd, method) {
   const currency = String(method?.settlementCurrency || 'USD').toUpperCase();
   const rate = Number(method?.ratePerUsd || (currency === 'IQD' ? config.iqdRate : currency === 'EGP' ? config.network.egpRate : 1));
@@ -729,8 +769,7 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
       const labelBase = lang === 'en'
         ? (method.nameEn || method.nameAr)
         : (method.nameAr || method.nameEn);
-      const owner = String(method.ownerShopName || method.ownerShopId || '').trim();
-      const label = owner ? `${labelBase} • ${owner}` : labelBase;
+      const label = `${currencyFlag(method.settlementCurrency)} ${labelBase}`.trim();
       const emoji = method.iconCustomEmojiId
         ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
         : null;
@@ -746,12 +785,12 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
 
   const groupLabels = lang === 'en'
     ? {
-        USD: selectedCurrency === 'USD' ? '💵 Pay in US dollars' : '💵 Binance — USDT',
+        USD: '💵 Pay in US dollars',
         IQD: '🇮🇶 Pay in Iraqi dinar',
         EGP: '🇪🇬 Pay in Egyptian pound'
       }
     : {
-        USD: selectedCurrency === 'USD' ? '💵 دفع بالدولار' : '💵 Binance — USDT',
+        USD: '💵 دفع بالدولار',
         IQD: '🇮🇶 دفع بالدينار العراقي',
         EGP: '🇪🇬 دفع بالجنيه المصري'
       };
@@ -761,7 +800,9 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
   for (const currency of currencies) {
     const group = entries.filter(entry => entry.currency === currency);
     if (!group.length) continue;
-    rows.push([{ text: groupLabels[currency], callback_data: `noop:payment_group:${currency}` }]);
+    if (!(currency === 'USD' && selectedCurrency !== 'USD')) {
+      rows.push([{ text: groupLabels[currency], callback_data: `noop:payment_group:${currency}` }]);
+    }
     for (const entry of group) rows.push([entry.button]);
   }
   return rows;
@@ -1044,10 +1085,13 @@ function productCaption(product, stock, lang, moneyContext) {
     ? descriptionData.warrantyArHtml
     : escapeHtml(warranty);
 
+  const stockText = product.type === 'service'
+    ? (lang === 'en' ? 'On demand' : 'حسب الطلب')
+    : String(stock);
   return [
     `<b>${richName}</b>`,
     `💵 <b>${t(lang, 'price')}:</b> ${customerMoney(product.price, moneyContext, lang)}`,
-    `📦 <b>${t(lang, 'stock')}:</b> ${stock}`,
+    `📦 <b>${t(lang, 'stock')}:</b> ${stockText}`,
     `📈 <b>${t(lang, 'sold')}:</b> ${Number(descriptionData.sold || 0)}`,
     `🛡 <b>${t(lang, 'warranty')}:</b> ${richWarranty}`,
     '',
@@ -1062,10 +1106,11 @@ function productButton(product, stock, lang, moneyContext) {
   const displayName = descriptionData.nameEmojiId && descriptionData.nameEmojiAlt
     ? String(name).replace(descriptionData.nameEmojiAlt, '').trim() || name
     : name;
+  const stockBadge = product.type === 'service' ? (lang === 'en' ? '⚙️ service' : '⚙️ خدمة') : `📦 ${stock}`;
   const button = {
-    text: `${displayName} | ${customerMoneyCompact(product.price, moneyContext)} | 📦 ${stock}`,
+    text: `${displayName} | ${customerMoneyCompact(product.price, moneyContext)} | ${stockBadge}`,
     callback_data: `prod:${product.id}`,
-    style: stock > 0 ? 'success' : 'danger'
+    style: product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger')
   };
   if (descriptionData.nameEmojiId) button.icon_custom_emoji_id = descriptionData.nameEmojiId;
   return button;
@@ -1106,7 +1151,8 @@ async function showProduct(chatId, user, merchantId) {
   if (!product || !product.isActive) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
   const [stock, moneyContext] = await Promise.all([getProductStock(product.id), customerMoneyContext(user)]);
   const caption = productCaption(product, stock, user.lang, moneyContext);
-  const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}`, style: stock > 0 ? 'success' : 'danger' }]] };
+  const canBuy = product.type === 'service' ? true : stock > 0;
+  const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}`, style: canBuy ? 'success' : 'danger' }]] };
   if (product.image) {
     try {
       await bot.sendPhoto(chatId, product.image, { caption, parse_mode: 'HTML', reply_markup: markup });
@@ -1513,6 +1559,57 @@ async function sendSupportMessageToAdmins(msg, user, ticket) {
   }
 }
 
+async function handleServiceAdminAction(query, user, data) {
+  if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
+  const [, action, orderIdRaw] = data.split(':');
+  const order = await PurchaseOrder.findByPk(Number(orderIdRaw));
+  if (!order) return answerCallback(query.id, 'الطلب غير موجود.', true);
+  const customer = await User.findByPk(order.userId);
+  if (action === 'done') {
+    order.status = 'completed';
+    order.completedAt = new Date();
+    await order.save({ fields: ['status', 'completedAt'] });
+    await answerCallback(query.id, 'تمت العملية.');
+    await bot.sendMessage(order.userId, customer?.lang === 'en'
+      ? `✅ Your service order #${order.id} has been activated successfully.`
+      : `✅ تم تفعيل طلب الخدمة #${order.id} بنجاح.`).catch(() => {});
+    return bot.sendMessage(query.message.chat.id, `✅ تم إنهاء طلب الخدمة #${order.id}.`);
+  }
+  if (action === 'delay') {
+    await answerCallback(query.id, 'تم إرسال التأجيل.');
+    await bot.sendMessage(order.userId, customer?.lang === 'en'
+      ? '⏳ Your service activation was postponed for 30 minutes.'
+      : '⏳ تم تأجيل التفعيل لمدة 30 دقيقة.').catch(() => {});
+    return bot.sendMessage(query.message.chat.id, `⏳ تم تأجيل الطلب #${order.id} لمدة 30 دقيقة.`);
+  }
+  if (action === 'refund') {
+    const credited = Number(order.totalAmount || 0);
+    if (!order.status.startsWith('refunded')) {
+      await User.increment({ balance: credited }, { where: { id: order.userId } });
+    }
+    order.status = 'refunded_service';
+    order.paymentRef = 'service_refund_wallet';
+    await order.save({ fields: ['status', 'paymentRef'] });
+    await answerCallback(query.id, 'تم رد الأموال.');
+    await bot.sendMessage(order.userId, customer?.lang === 'en'
+      ? `↩️ Your service order #${order.id} was cancelled and ${moneyUsd(credited)} was returned to your wallet.`
+      : `↩️ تم إلغاء طلب الخدمة #${order.id} وإرجاع ${moneyUsd(credited)} إلى محفظتك.`).catch(() => {});
+    return bot.sendMessage(query.message.chat.id, `↩️ تم إلغاء الطلب #${order.id} وإرجاع الرصيد للمستخدم.`);
+  }
+  if (action === 'chat') {
+    let ticket = await SupportTicket.findOne({ where: { userId: order.userId, status: 'open' }, order: [['id', 'DESC']] });
+    if (!ticket) ticket = await getOrCreateSupportTicket(order.userId);
+    await setState(order.userId, { action: 'support_chat', ticketId: ticket.id });
+    await setState(user.id, { action: 'admin_support_reply', ticketId: ticket.id, targetId: order.userId });
+    await answerCallback(query.id, 'تم فتح المحادثة.');
+    await bot.sendMessage(order.userId, customer?.lang === 'en'
+      ? '💬 A service chat has been opened. Send your message here. When done, send /cancel to close the chat.'
+      : '💬 تم فتح محادثة بخصوص الخدمة. أرسل رسالتك هنا، وللإغلاق اكتب /cancel.').catch(() => {});
+    return bot.sendMessage(query.message.chat.id, '💬 ارسل الآن رسالتك التالية وسيتم إرسالها للزبون مباشرة.', { reply_markup: cancelInlineKeyboard() });
+  }
+  return answerCallback(query.id);
+}
+
 async function showSupportTickets(chatId) {
   const tickets = await SupportTicket.findAll({
     where: { status: 'open' },
@@ -1545,6 +1642,9 @@ async function sendDeliveryToUser(userId, fulfillment) {
   const user = await User.findByPk(userId);
   const lang = user?.lang || 'ar';
   const order = fulfillment.order;
+  if (fulfillment?.servicePendingInput || String(order?.status || '') === 'service_pending_input') {
+    return askServiceOrderInput(userId, order, fulfillment.product);
+  }
   await bot.sendMessage(userId, `${t(lang, 'delivered')} — <b>#${order.id}</b>`, { parse_mode: 'HTML' });
   for (const delivery of fulfillment.deliveries || []) {
     // Do not reveal shared-use position or limits to customers.
@@ -1964,6 +2064,7 @@ bot.on('callback_query', async query => {
     if (data.startsWith('netord:approve:') || data.startsWith('netord:reject:')) return handleNetworkOrderAdmin(query, data);
     if (data.startsWith('nettop:approve:') || data.startsWith('nettop:reject:')) return handleNetworkTopupAdmin(query, data);
     if (data.startsWith('shpay:approve:') || data.startsWith('shpay:reject:')) return handleSharedPaymentOwnerAdmin(query, data);
+    if (data.startsWith('service:')) return handleServiceAdminAction(query, user, data);
 
     if (data.startsWith('adm:')) {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
@@ -1978,8 +2079,8 @@ bot.on('callback_query', async query => {
 async function handleBuy(query, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
-  if (!product || !product.isActive || stock < 1) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
-  const max = Math.min(stock, 100);
+  if (!product || !product.isActive || (product.type !== 'service' && stock < 1)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+  const max = product?.type === 'service' ? 1 : Math.min(stock, 100);
   const presets = [...new Set([1, 2, 3, 5, 10, max].filter(q => q >= 1 && q <= max))].sort((a, b) => a - b);
   const rows = [];
   for (let i = 0; i < presets.length; i += 3) {
@@ -2045,7 +2146,7 @@ async function handleQuantity(query, user, data) {
   const quantity = Number(quantityRaw);
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
-  if (!product || stock < quantity) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+  if (!product || (product.type !== 'service' && stock < quantity)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
   await answerCallback(query.id);
   return sendCheckoutOptions(query.message.chat.id, user, product, quantity);
 }
@@ -2367,7 +2468,149 @@ async function handleTopupStart(query, user, methodToken) {
   return bot.sendMessage(user.id, topupAmountPrompt(inputContext, user.lang), { reply_markup: cancelInlineKeyboard() });
 }
 
+async function finalizeNewProduct(user, data) {
+  const imageValue = data.imageValue || '-';
+  const productPayload = {
+    nameAr: data.nameAr,
+    nameEn: data.nameEn || data.nameAr,
+    price: data.price,
+    category: 'عام',
+    type: data.type || 'free',
+    description: {
+      ar: data.descriptionAr || '',
+      en: data.descriptionEn || '',
+      warrantyAr: data.warrantyAr || '',
+      warrantyEn: data.warrantyEn || '',
+      sold: 0,
+      nameArHtml: data.nameArHtml || '',
+      nameEmojiId: data.nameEmojiId || '',
+      nameEmojiAlt: data.nameEmojiAlt || '',
+      descriptionArHtml: data.descriptionArHtml || '',
+      warrantyArHtml: data.warrantyArHtml || '',
+      serviceInputMode: data.serviceInputMode || '',
+      servicePromptAr: data.servicePromptAr || '',
+      servicePromptEn: data.servicePromptEn || ''
+    },
+    image: imageValue === '-' ? null : (/^https?:\/\//i.test(imageValue) ? imageValue : null),
+    isActive: true,
+    sharedLimit: 1,
+    deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant'
+  };
+
+  let product;
+  if (network.enabledClient()) {
+    const remote = await network.createRemoteProduct(productPayload);
+    const rp = remote.product;
+    product = await Merchant.create({
+      ...productPayload,
+      image: productPayload.image || (imageValue === '-' ? null : imageValue),
+      networkProductId: rp.networkProductId,
+      networkManaged: true,
+      networkOwnerShopId: rp.networkOwnerShopId || config.network.shopId,
+      networkStock: Number(rp.stock || 0),
+      ownerNote: 'Network product'
+    });
+  } else {
+    product = await Merchant.create({
+      ...productPayload,
+      image: imageValue === '-' ? null : imageValue,
+      networkProductId: crypto.randomUUID(),
+      networkManaged: false,
+      networkOwnerShopId: network.isMaster() ? 'master' : config.network.shopId,
+      networkStock: 0,
+      ownerNote: null
+    });
+  }
+
+  if (network.isMaster()) {
+    await network.publishNotificationEvent({
+      eventType: 'new_product',
+      networkProductId: product.networkProductId,
+      actorShopId: 'master',
+      actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي',
+      payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+    }).catch(error => console.error('Publish product notification:', error.message));
+  }
+
+  if (product.type === 'service') {
+    await clearState(user.id);
+    await bot.sendMessage(user.id, '✅ تم إنشاء خدمة جديدة ونشرها. هذا النوع يطلب بيانات من الزبون ويعطيك أزرار: تم التفعيل / تأجيل / استرداد / فتح محادثة.', {
+      reply_markup: { inline_keyboard: [[{ text: 'فتح المنتج', callback_data: `adm:edit:${product.id}` }]] }
+    });
+    return true;
+  }
+
+  await setState(user.id, { action: 'admin_add_stock', productId: product.id, afterCreate: true });
+  await bot.sendMessage(user.id, '✅ تم إنشاء المنتج ونشره. حالياً مخزونه صفر لذلك يظهر بالأحمر.\n\n' + stockPrompt(product), {
+    parse_mode: 'HTML',
+    reply_markup: cancelInlineKeyboard()
+  });
+  return true;
+}
+
 async function handleStateMessage(msg, user, state) {
+  if (state.action === 'service_input') {
+    const order = await PurchaseOrder.findByPk(state.orderId);
+    if (!order || String(order.userId) !== String(user.id) || String(order.status) !== 'service_pending_input') {
+      await clearState(user.id);
+      return true;
+    }
+    const product = await Merchant.findByPk(order.merchantId);
+    const meta = servicePromptMeta(product);
+    const text = String(msg.text || '').trim();
+    let value = text;
+    if (meta.inputMode === 'email') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+        await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Send a valid email address.' : '❌ أرسل إيميل صحيح.');
+        return true;
+      }
+    } else if (meta.inputMode === 'phone') {
+      const digits = text.replace(/[^\d+]/g, '');
+      if (!digits || digits.length < 7) {
+        await bot.sendMessage(user.id, user.lang === 'en' ? '❌ Send a valid phone number.' : '❌ أرسل رقم صحيح.');
+        return true;
+      }
+      value = digits;
+    } else if (!text) {
+      return true;
+    }
+
+    order.delivery = [{
+      serviceRequest: true,
+      inputMode: meta.inputMode,
+      submitted: true,
+      customerValue: value,
+      submittedAt: new Date().toISOString(),
+      needsAdminAction: true
+    }];
+    order.status = 'service_pending_admin';
+    await order.save({ fields: ['delivery', 'status'] });
+    await clearState(user.id);
+    await bot.sendMessage(user.id, user.lang === 'en'
+      ? '✅ Your details were received. Please wait while the admin completes the service.'
+      : '✅ تم استلام بياناتك. انتظر حتى يقوم الأدمن بتنفيذ الخدمة.');
+    const label = user.username ? `@${user.username}` : `<code>${user.id}</code>`;
+    for (const adminId of config.admins) {
+      await bot.sendMessage(adminId, [
+        '🛠 <b>طلب تنفيذ خدمة جديد</b>',
+        `الطلب: <b>#${order.id}</b>`,
+        `المنتج: <b>${escapeHtml(product?.nameAr || product?.nameEn || '')}</b>`,
+        `المستخدم: ${label}`,
+        `نوع الحقل: <b>${escapeHtml(serviceInputModeLabel(meta.inputMode, 'ar'))}</b>`,
+        `البيانات: <code>${escapeHtml(value)}</code>`
+      ].join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: '✅ تم التفعيل', callback_data: `service:done:${order.id}`, style: 'success' }],
+          [{ text: '⏳ تأجيل 30 دقيقة', callback_data: `service:delay:${order.id}` }],
+          [{ text: '💬 فتح محادثة مع الزبون', callback_data: `service:chat:${order.id}` }],
+          [{ text: '↩️ إلغاء العملية واسترداد الأموال', callback_data: `service:refund:${order.id}`, style: 'danger' }]
+        ] }
+      }).catch(() => {});
+    }
+    return true;
+  }
+
   if (state.action === 'support_chat') {
     const ticket = await SupportTicket.findByPk(state.ticketId);
     if (!ticket || ticket.status !== 'open' || String(ticket.userId) !== String(user.id)) {
@@ -2411,8 +2654,9 @@ async function handleStateMessage(msg, user, state) {
     const quantity = Number(String(msg.text || '').trim());
     const product = await Merchant.findByPk(state.merchantId);
     const stock = product ? await getProductStock(product.id) : 0;
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > Math.min(stock, 100)) {
-      await bot.sendMessage(user.id, user.lang === 'en' ? `❌ Send a whole number from 1 to ${Math.min(stock, 100)}.` : `❌ أرسل رقم صحيح من 1 إلى ${Math.min(stock, 100)}.`);
+    const maxAllowed = product?.type === 'service' ? 1 : Math.min(stock, 100);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > maxAllowed) {
+      await bot.sendMessage(user.id, user.lang === 'en' ? `❌ Send a whole number from 1 to ${maxAllowed}.` : `❌ أرسل رقم صحيح من 1 إلى ${maxAllowed}.`);
       return true;
     }
     await clearState(user.id);
@@ -4885,20 +5129,12 @@ async function handleAdminCallback(query, user, data) {
     const id = Number(data.split(':')[2]);
     const method = await PaymentMethod.findByPk(id);
     if (!method) return answerCallback(query.id, 'طريقة الدفع محذوفة مسبقاً.', true);
-    const [pendingOrderCount, pendingTopupCount] = await Promise.all([
-      PurchaseOrder.count({ where: { paymentMethod: `custom:${id}`, status: { [Op.in]: ['pending_payment', 'proof_pending'] } } }),
-      BalanceTransaction.count({ where: { paymentMethodId: id, status: { [Op.in]: ['awaiting_proof', 'proof_pending'] } } })
-    ]);
-    if (pendingOrderCount || pendingTopupCount) {
-      return answerCallback(query.id, 'ما تگدر تحذفها هسه لأن عليها عمليات دفع معلقة. أوقفها أولاً وانتظر معالجة العمليات.', true);
-    }
     try {
       method.isActive = false;
       await method.save({ fields: ['isActive'] });
-      await syncPaymentMethodToNetwork(method);
+      await syncPaymentMethodToNetwork(method).catch(error => console.error('Deactivate shared method before delete:', error.message));
     } catch (error) {
       console.error('Deactivate shared method before delete:', error.message);
-      return answerCallback(query.id, 'تعذر تحديث الشبكة. حاول مرة ثانية قبل الحذف.', true);
     }
     const name = method.nameAr;
     await method.destroy();
@@ -5233,6 +5469,7 @@ async function handleAdminCallback(query, user, data) {
         [{ text: '🔑 كود', callback_data: 'adm:newtype:code', style: 'primary' }],
         [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
         [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
+        [{ text: '🛠 تنفيذ خدمة', callback_data: 'adm:newtype:service', style: 'primary' }],
         [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
       ] }
     });
@@ -5240,7 +5477,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:newtype:')) {
     const type = data.split(':')[2];
-    if (!['code', 'account', 'free'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
+    if (!['code', 'account', 'free', 'service'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const fresh = await User.findByPk(user.id);
     const state = parseState(fresh);
     if (!state || state.action !== 'admin_new_product' || state.step !== 'type') {
@@ -5252,6 +5489,20 @@ async function handleAdminCallback(query, user, data) {
     return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nتقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة مثل: [5221980268230882832] اسم المنتج.', {
       reply_markup: cancelInlineKeyboard()
     });
+  }
+
+  if (data.startsWith('adm:svcinputmode:')) {
+    const mode = data.split(':')[2];
+    if (!['email', 'phone', 'text'].includes(mode)) return answerCallback(query.id, 'نوع غير صحيح.', true);
+    const fresh = await User.findByPk(user.id);
+    const state = parseState(fresh);
+    if (!state || state.action !== 'admin_new_product' || state.step !== 'serviceInputMode') {
+      return answerCallback(query.id, 'عملية إضافة الخدمة غير فعالة.', true);
+    }
+    state.data.serviceInputMode = mode;
+    await setState(user.id, { action: 'admin_new_product', step: 'servicePromptAr', data: state.data });
+    await answerCallback(query.id, 'تم اختيار نوع البيانات.');
+    return bot.sendMessage(user.id, '7/7 اكتب الرسالة التي ستظهر للزبون ليرسل البيانات المطلوبة.\nمثال: ارسل ايميلك فقط', { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:edit:')) {
@@ -5280,7 +5531,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:type:')) {
     const [, , idRaw, type] = data.split(':');
-    if (!['code', 'account', 'free'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
+    if (!['code', 'account', 'free', 'service'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product) return;
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
@@ -5427,6 +5678,7 @@ function productTypeLabel(type) {
   if (type === 'code') return 'كود';
   if (type === 'account') return 'إيميل وباسورد';
   if (type === 'free') return 'منتج حر';
+  if (type === 'service') return 'تنفيذ خدمة';
   return String(type || 'منتج حر');
 }
 
@@ -5491,6 +5743,8 @@ async function showAdminProductEditor(chatId, productId) {
     `الوصف: ${escapeHtml(description.ar || '—')}`,
     `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
     `الصورة: ${product.image ? 'موجودة' : 'بدون'}`,
+    product.type === 'service' ? `بيانات الزبون المطلوبة: ${escapeHtml(serviceInputModeLabel(description.serviceInputMode || 'text', 'ar'))}` : '',
+    product.type === 'service' ? `رسالة الطلب: ${escapeHtml(description.servicePromptAr || '—')}` : '',
     description.nameEmojiId ? '✨ Custom Emoji: محفوظة تلقائياً' : '✨ Custom Emoji: لا توجد'
   ].filter(Boolean).join('\n');
 
