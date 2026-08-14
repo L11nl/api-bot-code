@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "6.0.0",
+  "version": "7.0.0",
   "private": true,
-  "description": "Easy Telegram digital store v6 with admin-controlled notifications, direct Binance Order ID verification, sub-$1 topups, colored stock buttons, translation, and Premium custom emoji ID support",
+  "description": "Easy Telegram digital store v7 with direct checkout on low balance, dynamic admin payment methods, and fixed Telegram Premium custom emoji icons",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
