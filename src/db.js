@@ -351,10 +351,11 @@ const NetworkSharedPaymentMethod = sequelize.define('NetworkSharedPaymentMethod'
   ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 1 },
   minimumTransferAmount: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 },
   isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }
-}, { indexes: [
-  { unique: true, fields: ['ownerShopId', 'ownerLocalMethodId'] },
-  { fields: ['settlementCurrency', 'isActive'] }
-] });
+});
+
+// Indexes for this table are created manually in initializeDatabase().
+// This avoids PostgreSQL's 63-character identifier truncation causing
+// Sequelize to recreate the same auto-named index on every Railway boot.
 
 // A shared payment is approved by the owner of the payment rail, not by the
 // storefront that merely displayed it. The source bot completes the local
@@ -378,11 +379,9 @@ const NetworkSharedPaymentRequest = sequelize.define('NetworkSharedPaymentReques
   approvedByUsername: { type: DataTypes.STRING(64), allowNull: true },
   approvedByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
   resolvedAt: { type: DataTypes.DATE, allowNull: true }
-}, { indexes: [
-  { unique: true, fields: ['sourceShopId', 'sourceRef'] },
-  { fields: ['paymentOwnerShopId', 'status'] },
-  { fields: ['sourceShopId', 'sourceHandled', 'status'] }
-] });
+});
+
+// Indexes for this table are also created manually with short stable names.
 
 Merchant.hasMany(Code, { foreignKey: 'merchantId' });
 Code.belongsTo(Merchant, { foreignKey: 'merchantId' });
@@ -734,6 +733,40 @@ async function initializeDatabase() {
     CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_remote_order_ref_unique"
     ON ${tableSql('PurchaseOrders')} ("remoteOrderRef")
     WHERE "remoteOrderRef" IS NOT NULL
+  `);
+
+
+  // v12.0.1: replace Sequelize's overlong auto-generated network payment
+  // index names with short, stable names. PostgreSQL truncates identifiers
+  // to 63 bytes; Sequelize then fails to recognize the truncated name on the
+  // next boot and crashes with 42P07 (relation already exists).
+  await sequelize.query(`
+    DROP INDEX IF EXISTS ${quoteIdent(config.databaseSchema)}."network_shared_payment_methods_owner_shop_id_owner_local_method"
+  `);
+  await sequelize.query(`
+    DROP INDEX IF EXISTS ${quoteIdent(config.databaseSchema)}."network_shared_payment_requests_source_shop_id_source_handled_s"
+  `);
+
+  await sequelize.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "nspm_owner_local_uq"
+    ON ${tableSql('NetworkSharedPaymentMethods')} ("ownerShopId", "ownerLocalMethodId")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "nspm_currency_active_idx"
+    ON ${tableSql('NetworkSharedPaymentMethods')} ("settlementCurrency", "isActive")
+  `);
+
+  await sequelize.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "nspr_source_ref_uq"
+    ON ${tableSql('NetworkSharedPaymentRequests')} ("sourceShopId", "sourceRef")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "nspr_owner_status_idx"
+    ON ${tableSql('NetworkSharedPaymentRequests')} ("paymentOwnerShopId", "status")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "nspr_source_handled_idx"
+    ON ${tableSql('NetworkSharedPaymentRequests')} ("sourceShopId", "sourceHandled", "status")
   `);
   // These indexes depend on columns introduced by migrations above. Keep them
   // out of the Sequelize model definition so legacy databases do not crash
