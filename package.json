@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "11.0.0",
+  "version": "11.9.0",
   "private": true,
-  "description": "Telegram digital store v11 with 10% cross-shop seller commission, shared notification stream, 30-minute debt reminders, automatic debt suspension at threshold, fair multi-owner inventory, two-party settlements, local payment overrides, and delivery recovery IDs",
+  "description": "Telegram digital store v11.8 with USD-only customer wallets, currency-grouped shared payment methods, owner-routed approvals, fair network ledgers, and automatic USD debt settlement through each creditor shop Binance verification.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
