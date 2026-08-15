@@ -1,12 +1,13 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.2.0",
+  "version": "12.4.0",
   "private": true,
-  "description": "Telegram digital store v12.2.0: non-destructive persistent upgrades. Admin data, payment methods, rich Premium Emoji metadata, service workflow fields, balances, products and settings remain in PostgreSQL across deployments.",
+  "description": "Telegram digital store v12.4.0: full performance pass with cached settings/channel checks/network reads, batched stock/catalog queries, non-overlapping background watcher, faster existing-user lookup, and preserved button-flow QA.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/payments/binancePay.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/payments/binancePay.js && node scripts/button-audit.js",
+    "button-audit": "node scripts/button-audit.js"
   },
   "engines": {
     "node": ">=20"
