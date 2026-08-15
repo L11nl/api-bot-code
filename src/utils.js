@@ -154,9 +154,11 @@ function parseInventoryLineForType(line, productType = 'account') {
   let item;
   try {
     if (raw.startsWith('{')) {
+      if (type === 'shared') return { item: null, error: 'الحساب المشترك يقبل فقط email|password' };
       item = parseJsonInventory(raw);
     } else {
       const parts = splitInventoryLine(raw).map(value => String(value).trim());
+      if (type === 'shared' && parts.length !== 2) return { item: null, error: 'الحساب المشترك يقبل فقط email|password' };
       const [email = '', password = '', ...rest] = parts;
       item = { email, password, twoFactor: '', code: '', extra: rest.join('|').trim(), raw };
     }

@@ -358,21 +358,36 @@ function customerPaymentCurrencyLabel(currency, lang = 'ar') {
   return lang === 'en' ? 'Not selected' : 'غير محددة';
 }
 
+async function showLanguageSelector(chatId) {
+  return bot.sendMessage(chatId, [
+    '🌐 <b>اختر لغتك</b>',
+    '<b>Choose your language</b>'
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🇮🇶 العربية', callback_data: 'onboard:lang:ar', style: 'primary' }],
+        [{ text: '🇬🇧 English', callback_data: 'onboard:lang:en', style: 'primary' }]
+      ]
+    }
+  });
+}
+
 async function showCustomerCurrencySelector(chatId, user, after = 'main') {
   const current = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
   const text = user.lang === 'en'
     ? [
         '💱 <b>Choose your account currency</b>',
         '',
-        'Products, wallet balance, checkout amounts and payment screens will all be shown in the currency you choose.',
-        'Binance is the only exception: Binance payments always stay in USDT/USD, then the confirmed value is converted to your selected wallet currency.',
+        'Product prices and your wallet balance will be shown in the currency you choose.',
+        'When paying, all available wallets are shown. Each payment method uses its own currency, while Binance remains USDT/USD.',
         current ? `Current currency: <b>${customerPaymentCurrencyLabel(current, 'en')}</b>` : ''
       ].filter(Boolean).join('\n')
     : [
         '💱 <b>اختَر عملة حسابك</b>',
         '',
-        'أسعار المنتجات والمحفظة ومبالغ الشراء والدفع كلها راح تظهر بالعملة اللي تختارها.',
-        'الاستثناء الوحيد هو Binance: الدفع يبقى USDT/دولار، وبعد التأكيد تنعرض قيمة الرصيد بعملتك المختارة.',
+        'أسعار المنتجات ورصيد المحفظة راح تظهر بالعملة اللي تختارها.',
+        'وقت الدفع تظهر لك كل المحافظ المتاحة، وكل طريقة دفع تستخدم عملتها الخاصة، وBinance يبقى USDT/دولار.',
         current ? `عملتك الحالية: <b>${customerPaymentCurrencyLabel(current, 'ar')}</b>` : ''
       ].filter(Boolean).join('\n');
 
@@ -512,6 +527,11 @@ function currencyFlag(code) {
   if (normalized === 'IQD') return '🇮🇶';
   if (normalized === 'EGP') return '🇪🇬';
   return '💵';
+}
+
+function isZainCashName(value) {
+  const text = String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return text.includes('zain cash') || text.includes('zaincash') || text.includes('زين كاش') || text.includes('زينكاش');
 }
 
 function serviceInputModeLabel(mode, lang = 'ar') {
@@ -723,9 +743,6 @@ async function localSuperQiNumber() {
 
 async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
   const lang = user?.lang === 'en' ? 'en' : 'ar';
-  const selectedCurrency = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
-  if (!selectedCurrency) return [];
-
   const hidden = await getHiddenPaymentTypes();
   const localBinanceReady = await binancePay.configured();
   const localSuperQi = await localSuperQiNumber();
@@ -734,23 +751,11 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
     ? 'master'
     : (network.enabledClient() ? String(config.network.shopId) : 'standalone');
 
-  const pushEntry = (currency, button, minimumLocal = null, rate = 1, kind = 'local') => {
+  const pushEntry = (currency, button, minimumLocal = null, rate = 1, kind = 'local', special = '') => {
     const normalizedCurrency = normalizePaymentCurrency(currency);
-
-    // Binance is the only USD method that stays visible regardless of the
-    // customer's selected currency. Every ordinary wallet/payment rail must
-    // match the customer's selected currency exactly.
-    if (kind === 'binance') {
-      if (normalizedCurrency !== 'USD') return;
-    } else if (normalizedCurrency !== selectedCurrency) {
-      return;
-    }
-
-    if (amountUsd != null && Number.isFinite(Number(amountUsd)) && minimumLocal != null) {
-      const dueLocal = Number(amountUsd) * Number(rate || 1);
-      if (dueLocal + 1e-9 < Number(minimumLocal || 0)) return;
-    }
-    entries.push({ currency: normalizedCurrency, button, kind });
+    // Always show every configured payment method. Minimums are validated only
+    // after the customer chooses the method, so no wallet disappears from the list.
+    entries.push({ currency: normalizedCurrency, button, kind, special, minimumLocal, rate });
   };
 
   let inheritedMethods = [];
@@ -763,35 +768,33 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
     }
   }
 
-  // Binance stays shop-specific. If this client does not configure Binance,
-  // it can still inherit the master's Binance as before.
+  // 1) Binance is always shown first when available, independent of account currency.
   if (localBinanceReady && !hidden.has('binance')) {
-    pushEntry('USD', emojiButton('Binance ID', PREMIUM_EMOJI.binance, {
+    pushEntry('USD', emojiButton('Binance', PREMIUM_EMOJI.binance, {
       callback_data: `${mode}:binance`,
       style: 'primary'
-    }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance');
+    }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance', 'binance');
   } else if (network.enabledClient() && !hidden.has('binance')) {
     const inheritedBinance = inheritedMethods.find(method => String(method.type || '') === 'binance');
     if (inheritedBinance) {
       const emoji = inheritedBinance.iconCustomEmojiId
         ? { id: String(inheritedBinance.iconCustomEmojiId), alt: inheritedBinance.iconAlt || '💳' }
         : PREMIUM_EMOJI.binance;
-      pushEntry('USD', emojiButton('Binance ID', emoji, {
+      pushEntry('USD', emojiButton('Binance', emoji, {
         callback_data: `${mode}:network:binance`,
         style: 'primary'
-      }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance');
+      }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance', 'binance');
     }
   }
 
-  // Keep the local SuperQi special rail for IQD.
-  if (selectedCurrency === 'IQD' && localSuperQi && !hidden.has('superqi')) {
+  // 2) SuperQi is always visible when configured. It will be placed beside ZainCash.
+  if (localSuperQi && !hidden.has('superqi')) {
     const iqdRate = Number(await getIqdRate());
     pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
       callback_data: `${mode}:superqi`,
       style: 'primary'
-    }), null, iqdRate, 'local');
-  } else if (network.enabledClient() && selectedCurrency === 'IQD' && !hidden.has('superqi') && !localSuperQi) {
-    // Preserve the existing master SuperQi fallback when this shop has none.
+    }), null, iqdRate, 'superqi', 'superqi');
+  } else if (network.enabledClient() && !hidden.has('superqi') && !localSuperQi) {
     const inheritedSuperQi = inheritedMethods.find(method => String(method.type || '') === 'superqi');
     if (inheritedSuperQi) {
       const emoji = inheritedSuperQi.iconCustomEmojiId
@@ -801,30 +804,27 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
       pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', emoji, {
         callback_data: `${mode}:network:superqi`,
         style: 'primary'
-      }), null, local.rate, 'fallback');
+      }), null, local.rate, 'superqi', 'superqi');
     }
   }
 
-  // This shop's own ordinary payment methods.
+  // 3) Show every ordinary wallet from this shop, no matter which currency the customer chose.
   const customMethods = await getActivePaymentMethods();
   for (const method of customMethods) {
     const local = paymentLocalAmount(1, method);
-    if (normalizePaymentCurrency(local.currency) !== selectedCurrency) continue;
-    pushEntry(local.currency, emojiButton(localizedPaymentName(method, lang), customPaymentEmoji(method), {
+    const displayName = localizedPaymentName(method, lang);
+    const label = `${currencyFlag(local.currency)} ${displayName}`.trim();
+    pushEntry(local.currency, emojiButton(label, customPaymentEmoji(method), {
       callback_data: `${mode}:custom:${method.id}`,
       style: 'primary'
-    }), minimumTransferForMethod(method), local.rate, 'local');
+    }), minimumTransferForMethod(method), local.rate, 'local', isZainCashName(displayName) ? 'zaincash' : '');
   }
 
-  // All ordinary wallets added by every other shop are visible to everyone.
-  // Example: Ahmed adds Vodafone EGP -> it appears in Nabil/Reza bots; Nabil
-  // adds an IQD wallet -> it appears in Ahmed/Reza bots. Approval is still
-  // routed to the actual owner through the shared-payment request system.
+  // 4) Show every shared wallet from the other admins/shops, also without currency filtering.
   try {
     const shared = await network.listSharedPaymentMethods();
     const candidates = (shared.methods || []).filter(method =>
       method.isActive !== false &&
-      normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency &&
       String(method.ownerShopId || '') !== currentShopId
     );
 
@@ -832,41 +832,40 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
       const labelBase = lang === 'en'
         ? (method.nameEn || method.nameAr)
         : (method.nameAr || method.nameEn);
-      const label = `${currencyFlag(method.settlementCurrency)} ${labelBase}`.trim();
+      const local = paymentLocalAmount(1, method);
+      const label = `${currencyFlag(local.currency)} ${labelBase}`.trim();
       const emoji = method.iconCustomEmojiId
         ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
         : null;
-      const local = paymentLocalAmount(1, method);
       pushEntry(local.currency, emojiButton(label, emoji, {
         callback_data: `${mode}:shared:${method.id}`,
         style: 'primary'
-      }), minimumTransferForMethod(method), local.rate, 'shared');
+      }), minimumTransferForMethod(method), local.rate, 'shared', isZainCashName(labelBase) ? 'zaincash' : '');
     }
   } catch (error) {
     console.error('Shared payment methods:', error.message);
   }
 
-  const groupLabels = lang === 'en'
-    ? {
-        USD: '💵 Pay in US dollars',
-        IQD: '🇮🇶 Pay in Iraqi dinar',
-        EGP: '🇪🇬 Pay in Egyptian pound'
-      }
-    : {
-        USD: '💵 دفع بالدولار',
-        IQD: '🇮🇶 دفع بالدينار العراقي',
-        EGP: '🇪🇬 دفع بالجنيه المصري'
-      };
-
+  // Layout requested by the store owner:
+  // Binance on its own row, then ZainCash + SuperQi side by side, then all remaining wallets.
   const rows = [];
-  const currencies = selectedCurrency === 'USD' ? ['USD'] : ['USD', selectedCurrency];
-  for (const currency of currencies) {
-    const group = entries.filter(entry => entry.currency === currency);
-    if (!group.length) continue;
-    if (!(currency === 'USD' && selectedCurrency !== 'USD')) {
-      rows.push([{ text: groupLabels[currency], callback_data: `noop:payment_group:${currency}` }]);
-    }
-    for (const entry of group) rows.push([entry.button]);
+  const used = new Set();
+  const binanceEntry = entries.find(entry => entry.special === 'binance');
+  if (binanceEntry) {
+    rows.push([binanceEntry.button]);
+    used.add(binanceEntry);
+  }
+
+  const zainEntry = entries.find(entry => entry.special === 'zaincash' && !used.has(entry));
+  const superQiEntry = entries.find(entry => entry.special === 'superqi' && !used.has(entry));
+  const secondRow = [];
+  if (zainEntry) { secondRow.push(zainEntry.button); used.add(zainEntry); }
+  if (superQiEntry) { secondRow.push(superQiEntry.button); used.add(superQiEntry); }
+  if (secondRow.length) rows.push(secondRow);
+
+  for (const entry of entries) {
+    if (used.has(entry)) continue;
+    rows.push([entry.button]);
   }
   return rows;
 }
@@ -1078,7 +1077,7 @@ async function sendCaptcha(chatId, userId, lang) {
 }
 
 async function showMain(chatId, user) {
-  if (!isAdmin(user.id) && !normalizeCustomerPaymentCurrency(user.paymentCurrency)) {
+  if (!normalizeCustomerPaymentCurrency(user.paymentCurrency)) {
     return showCustomerCurrencySelector(chatId, user, 'main');
   }
   if (!isAdmin(user.id)) {
@@ -1875,7 +1874,10 @@ bot.on('message', async msg => {
       return;
     }
 
-    if (startMatch) return showMain(msg.chat.id, user);
+    if (startMatch) {
+      if (!normalizeCustomerPaymentCurrency(user.paymentCurrency)) return showLanguageSelector(msg.chat.id);
+      return showMain(msg.chat.id, user);
+    }
 
     if (msg.text === '/admin') {
       if (!isAdmin(user.id)) return bot.sendMessage(msg.chat.id, t(user.lang, 'adminOnly'));
@@ -2000,6 +2002,15 @@ bot.on('callback_query', async query => {
 
   if (user.blocked && !isAdmin(user.id)) return answerCallback(query.id, 'حسابك محظور.', true);
   if (data === 'noop') return answerCallback(query.id);
+
+  if (data.startsWith('onboard:lang:')) {
+    const chosen = String(data.split(':')[2] || '');
+    if (!['ar', 'en'].includes(chosen)) return answerCallback(query.id, 'Invalid language.', true);
+    user.lang = chosen;
+    await user.save({ fields: ['lang'] });
+    await answerCallback(query.id, chosen === 'en' ? 'English selected.' : 'تم اختيار العربية.');
+    return showCustomerCurrencySelector(query.message.chat.id, user, 'main');
+  }
 
   if (data.startsWith('currency:choose:')) {
     const after = String(data.split(':')[2] || 'main');
@@ -2230,7 +2241,7 @@ async function handleBuy(query, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
   if (!product || !product.isActive || !productVisibleInCurrentShop(product) || (product.type !== 'service' && stock < 1)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
-  const max = product?.type === 'service' ? 1 : Math.min(stock, 100);
+  const max = ['service', 'shared'].includes(String(product?.type || '')) ? 1 : Math.min(stock, 100);
   const presets = [...new Set([1, 2, 3, 5, 10, max].filter(q => q >= 1 && q <= max))].sort((a, b) => a - b);
   const rows = [];
   for (let i = 0; i < presets.length; i += 3) {
@@ -2303,24 +2314,23 @@ async function handleQuantity(query, user, data) {
 
 async function paymentTokenMatchesCustomerCurrency(user, methodToken) {
   const token = String(methodToken || '');
-  if (token === 'wallet' || token === 'binance' || token === 'network:binance') return true;
-  const selectedCurrency = normalizeCustomerPaymentCurrency(user?.paymentCurrency);
-  if (!selectedCurrency) return false;
-  if (token === 'superqi' || token === 'network:superqi') return selectedCurrency === 'IQD';
+  if (token === 'wallet') return true;
+  if (token === 'binance') return Boolean(await binancePay.configured());
+  if (token === 'network:binance' || token === 'network:superqi') return network.enabledClient();
+  if (token === 'superqi') return Boolean(await localSuperQiNumber());
   try {
     if (token.startsWith('custom:')) {
       const id = Number(token.split(':')[1]);
       const method = await PaymentMethod.findOne({ where: { id, isActive: true } });
-      return Boolean(method && normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency);
+      return Boolean(method);
     }
     if (token.startsWith('shared:')) {
       const id = token.slice('shared:'.length);
       const shared = await network.listSharedPaymentMethods();
-      const method = (shared.methods || []).find(row => String(row.id || '') === id && row.isActive !== false);
-      return Boolean(method && normalizePaymentCurrency(method.settlementCurrency) === selectedCurrency);
+      return Boolean((shared.methods || []).find(row => String(row.id || '') === id && row.isActive !== false));
     }
   } catch (error) {
-    console.error('Payment currency validation:', error.message);
+    console.error('Payment method validation:', error.message);
     return false;
   }
   return false;
@@ -2330,8 +2340,7 @@ async function handlePayment(query, user, data) {
   const methodToken = data.slice('pay:'.length);
   const currencyUser = await User.findByPk(user.id);
   if (!(await paymentTokenMatchesCustomerCurrency(currencyUser || user, methodToken))) {
-    await answerCallback(query.id, user.lang === 'en' ? 'Choose the matching payment currency first.' : 'اختَر عملة الدفع المناسبة أولاً.', true);
-    return showCustomerCurrencySelector(query.message.chat.id, currencyUser || user, 'main');
+    return answerCallback(query.id, user.lang === 'en' ? 'This payment method is unavailable.' : 'طريقة الدفع غير متاحة حالياً.', true);
   }
   const hiddenTypes = await getHiddenPaymentTypes();
   const visibilityType = methodToken.startsWith('network:')
@@ -2581,8 +2590,7 @@ async function sendBinanceInstructions(user, transfer, orderId = null) {
 async function handleTopupStart(query, user, methodToken) {
   const currencyUser = await User.findByPk(user.id);
   if (!(await paymentTokenMatchesCustomerCurrency(currencyUser || user, methodToken))) {
-    await answerCallback(query.id, user.lang === 'en' ? 'Choose the matching payment currency first.' : 'اختَر عملة الدفع المناسبة أولاً.', true);
-    return showCustomerCurrencySelector(query.message.chat.id, currencyUser || user, 'wallet');
+    return answerCallback(query.id, user.lang === 'en' ? 'This payment method is unavailable.' : 'طريقة الدفع غير متاحة حالياً.', true);
   }
   const hiddenTypes = await getHiddenPaymentTypes();
   const visibilityType = methodToken.startsWith('network:')
@@ -2643,7 +2651,7 @@ async function finalizeNewProduct(user, data) {
     },
     image: imageValue === '-' ? null : (/^https?:\/\//i.test(imageValue) ? imageValue : null),
     isActive: true,
-    sharedLimit: 1,
+    sharedLimit: (data.type || 'free') === 'shared' ? 5 : 1,
     deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant'
   };
 
@@ -5644,6 +5652,7 @@ async function handleAdminCallback(query, user, data) {
         [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
         [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
         [{ text: '🛠 تنفيذ خدمة', callback_data: 'adm:newtype:service', style: 'primary' }],
+        [{ text: '👥 حساب مشترك', callback_data: 'adm:newtype:shared', style: 'primary' }],
         [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
       ] }
     });
@@ -5651,7 +5660,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:newtype:')) {
     const type = data.split(':')[2];
-    if (!['code', 'account', 'free', 'service'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
+    if (!['code', 'account', 'free', 'service', 'shared'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const fresh = await User.findByPk(user.id);
     const state = parseState(fresh);
     if (!state || state.action !== 'admin_new_product' || state.step !== 'type') {
@@ -5705,7 +5714,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:type:')) {
     const [, , idRaw, type] = data.split(':');
-    if (!['code', 'account', 'free', 'service'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
+    if (!['code', 'account', 'free', 'service', 'shared'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
     if (type === 'service' || String(product.type || '') === 'service') {
@@ -5717,14 +5726,14 @@ async function handleAdminCallback(query, user, data) {
       if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تغيّر نوع المنتج لأن بيه ${protection.externalAvailable} وحدات مخزون لأشخاص آخرين.`, true);
     }
     if (product.networkManaged && network.enabledClient()) {
-      try { await network.updateRemoteProduct(product.networkProductId, { type, sharedLimit: 1, deliveryMode: 'instant' }); }
+      try { await network.updateRemoteProduct(product.networkProductId, { type, sharedLimit: type === 'shared' ? 5 : 1, deliveryMode: 'instant' }); }
       catch (error) { return answerCallback(query.id, error.message.startsWith('STRUCTURE_LOCKED_BY_EXTERNAL_STOCK:') ? 'ما تگدر تغيّر نوع المنتج لأن بيه مخزون لأشخاص آخرين.' : error.message, true); }
     }
     product.type = type;
-    product.sharedLimit = 1;
+    product.sharedLimit = type === 'shared' ? 5 : 1;
     product.deliveryMode = 'instant';
     await product.save();
-    await Code.update({ maxUses: 1 }, { where: { merchantId: product.id, usedCount: 0, isUsed: false } });
+    await Code.update({ maxUses: type === 'shared' ? 5 : 1 }, { where: { merchantId: product.id, usedCount: 0, isUsed: false } });
     await answerCallback(query.id, `تم التحويل إلى ${productTypeLabel(type)}.`);
     return showAdminProductEditor(query.message.chat.id, product.id);
   }
@@ -5860,6 +5869,7 @@ function productTypeLabel(type) {
   if (type === 'account') return 'إيميل وباسورد';
   if (type === 'free') return 'منتج حر';
   if (type === 'service') return 'تنفيذ خدمة';
+  if (type === 'shared') return 'حساب مشترك';
   return String(type || 'منتج حر');
 }
 
@@ -5869,6 +5879,9 @@ function stockPrompt(product) {
   }
   if (product.type === 'account') {
     return `📥 أرسل الحسابات الآن، كل حساب بسطر بصيغة:\n<code>email@example.com|password</code>\n\nتقدر ترسل TXT/CSV أيضاً.`;
+  }
+  if (product.type === 'shared') {
+    return `👥 <b>حساب مشترك — 5 مستخدمين لكل حساب</b>\n\nأرسل كل حساب بسطر بصيغة:\n<code>email@example.com|password</code>\n\nكل إيميل ينبيع إلى 5 زبائن فقط، وبعد الاستخدام الخامس ينتقل البوت تلقائياً إلى الإيميل التالي.\nإذا أضفت حسابين يصير المخزون 10 استخدامات.`;
   }
   if (product.type === 'service') {
     return '🛠 تنفيذ خدمة ما يحتاج مخزون. بعد الدفع يرسل الزبون البيانات المطلوبة، وبعدها توصلك أزرار تنفيذ الخدمة.';
@@ -5890,7 +5903,7 @@ async function showAdminProducts(chatId, page = 0) {
   for (const product of pageProducts) {
     const stock = Number(pageStocks.get(Number(product.id)) || 0);
     keyboard.push([{
-      text: `${product.nameAr} | ${product.type === 'service' ? '🛠 خدمة' : `📦 ${stock}`} | ${moneyUsd(product.price)}`,
+      text: `${product.nameAr} | ${product.type === 'service' ? '🛠 خدمة' : product.type === 'shared' ? `👥 ${stock}/استخدام` : `📦 ${stock}`} | ${moneyUsd(product.price)}`,
       callback_data: `adm:edit:${product.id}`,
       style: !product.isActive || (product.type !== 'service' && stock < 1) ? 'danger' : 'success'
     }]);
@@ -5921,7 +5934,8 @@ async function showAdminProductEditor(chatId, productId) {
     '',
     `النوع: <b>${productTypeLabel(product.type)}</b>`,
     `السعر: <b>${moneyUsd(product.price)}</b>`,
-    `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : stock}</b>`,
+    `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
+    product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
     `ظهور المنتج: <b>${product.isActive ? 'ظاهر' : 'مخفي'}</b>`,
     `الترجمة الإنجليزية: <b>تلقائية</b>`,
     product.networkManaged ? `الشبكة: <b>منتج مشترك</b> — المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>` : '',
