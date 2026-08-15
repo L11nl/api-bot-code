@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.1.2",
+  "version": "12.2.0",
   "private": true,
-  "description": "Telegram digital store v12.1.1: service products are private to the bot/shop that created them; shared catalog products and shared payment wallets remain network-wide.",
+  "description": "Telegram digital store v12.2.0: non-destructive persistent upgrades. Admin data, payment methods, rich Premium Emoji metadata, service workflow fields, balances, products and settings remain in PostgreSQL across deployments.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
