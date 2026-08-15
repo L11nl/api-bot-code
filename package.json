@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.4.0",
+  "version": "12.5.0",
   "private": true,
-  "description": "Telegram digital store v12.4.0: full performance pass with cached settings/channel checks/network reads, batched stock/catalog queries, non-overlapping background watcher, faster existing-user lookup, and preserved button-flow QA.",
+  "description": "Telegram digital store v12.5.0: bilingual first-run language onboarding, account-currency setup, all-wallet payment layout, and 5-seat shared email/password accounts, preserving v12.4 performance improvements.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
