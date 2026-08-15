@@ -74,6 +74,9 @@ async function main() {
   startupState = 'telegram';
   const botModule = require('./bot');
   ({ bot } = botModule);
+  if (typeof botModule.loadPersistentRuntimeConfig === 'function') {
+    await botModule.loadPersistentRuntimeConfig();
+  }
 
   // Polling and webhooks cannot be active together. Clear any old webhook.
   try {

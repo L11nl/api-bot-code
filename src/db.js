@@ -509,98 +509,62 @@ async function migrateLegacySingleFileBotData() {
   } catch {}
 }
 
-async function populateFingerprintsAndRemoveUnusedDuplicates() {
-  const products = await Merchant.findAll({ attributes: ['id', 'type'], raw: true });
-  for (const product of products) {
-    const rows = await Code.findAll({
-      where: { merchantId: product.id },
-      order: [['id', 'ASC']]
-    });
-    const availableSeen = new Set();
+async function populateMissingFingerprintsOnly() {
+  // Persistence guard: upgrades must never delete or rewrite inventory rows.
+  // We only fill a missing fingerprint when the existing encrypted payload can
+  // be read and validated. Duplicate/invalid cleanup is an explicit admin job,
+  // not something startup is allowed to do.
+  const rows = await Code.findAll({
+    where: {
+      [Op.or]: [
+        { fingerprint: null },
+        { fingerprint: '' }
+      ]
+    },
+    order: [['id', 'ASC']]
+  });
 
-    for (const row of rows) {
-      let payload;
-      try { payload = decryptPayload(row.value, row.extra); }
-      catch { continue; }
-
-      const usedCount = Number(row.usedCount || 0);
-      const maxUses = Number(row.maxUses || 1);
-      const isAvailable = !row.isUsed && usedCount < maxUses;
-      const isAvailableUnused = isAvailable && usedCount === 0;
-
-      if (product.type === 'shared') {
-        const cleaned = {
-          email: String(payload.email || '').trim(),
-          password: String(payload.password || '').trim(),
-          twoFactor: '',
-          code: '',
-          extra: ''
-        };
-        if (JSON.stringify(cleaned) !== JSON.stringify({
-          email: String(payload.email || '').trim(),
-          password: String(payload.password || '').trim(),
-          twoFactor: String(payload.twoFactor || ''),
-          code: String(payload.code || ''),
-          extra: String(payload.extra || '')
-        })) {
-          payload = cleaned;
-          row.value = encryptPayload(payload);
-          row.extra = null;
-        }
-      }
-
-      if (!inventoryPayloadIsValid(product.type, payload)) {
-        if (isAvailableUnused) {
-          await row.destroy();
-        } else {
-          // Preserve purchase history but stop any invalid row from being sold again.
-          row.isUsed = true;
-          row.maxUses = Math.max(1, Number(row.usedCount || 1));
-          await row.save({ fields: ['isUsed', 'maxUses'] });
-        }
-        continue;
-      }
-
-      const fingerprint = inventoryFingerprint(product.type, payload);
-
-      if (isAvailable && availableSeen.has(fingerprint)) {
-        if (usedCount === 0) {
-          await row.destroy();
-        } else {
-          // Keep historical buyers but exhaust the duplicate so it cannot be sold again.
-          row.isUsed = true;
-          row.maxUses = Math.max(1, usedCount);
-          await row.save({ fields: ['isUsed', 'maxUses'] });
-        }
-        continue;
-      }
-
-      if (isAvailable) availableSeen.add(fingerprint);
-      if (row.fingerprint !== fingerprint || row.changed('value') || row.changed('extra')) {
-        row.fingerprint = fingerprint;
-        await row.save({ fields: ['fingerprint', 'value', 'extra'] });
-      }
-    }
+  for (const row of rows) {
+    const product = await Merchant.findByPk(row.merchantId, { attributes: ['id', 'type'] });
+    if (!product || product.type === 'service') continue;
+    let payload;
+    try { payload = decryptPayload(row.value, row.extra); }
+    catch { continue; }
+    if (!inventoryPayloadIsValid(product.type, payload)) continue;
+    const fingerprint = inventoryFingerprint(product.type, payload);
+    if (!fingerprint) continue;
+    row.fingerprint = fingerprint;
+    await row.save({ fields: ['fingerprint'] });
   }
 }
 
-async function normalizeProductDescriptions() {
-  const products = await Merchant.findAll();
+async function normalizeProductDescriptionsNonDestructive() {
+  // Only convert truly legacy string descriptions into JSON. If description is
+  // already an object, do not rebuild it: it may contain Premium Emoji IDs,
+  // service workflow settings, rich-text metadata, or future fields unknown to
+  // this version.
+  const products = await Merchant.findAll({ attributes: ['id', 'description'] });
   for (const product of products) {
-    const normalized = parseDescription(product.description);
-    const canonical = {
-      ar: normalized.ar,
-      en: normalized.en,
-      warrantyAr: normalized.warrantyAr,
-      warrantyEn: normalized.warrantyEn,
-      sold: normalized.sold
-    };
-    if (JSON.stringify(product.description || {}) !== JSON.stringify(canonical)) {
-      product.set('description', canonical);
-      product.changed('description', true);
-      await product.save({ fields: ['description'] });
-    }
+    const current = product.description;
+    if (current && typeof current === 'object' && !Array.isArray(current)) continue;
+    if (current == null || current === '') continue;
+    const normalized = parseDescription(current);
+    product.set('description', normalized);
+    product.changed('description', true);
+    await product.save({ fields: ['description'] });
   }
+}
+
+async function runMigrationOnce(key, task) {
+  const markerKey = `migration_done:${String(key)}`;
+  const existing = await Setting.findOne({ where: { key: markerKey, lang: 'global' } });
+  if (existing) return false;
+  await task();
+  await Setting.findOrCreate({
+    where: { key: markerKey, lang: 'global' },
+    defaults: { value: new Date().toISOString() }
+  });
+  return true;
 }
 
 async function initializeDatabase() {
@@ -707,7 +671,7 @@ async function initializeDatabase() {
 
   // Compatibility pass for the user's previous single-file bot. This runs
   // before encryption / validation so old products and stock stay sellable.
-  await migrateLegacySingleFileBotData();
+  await runMigrationOnce('legacy_single_file_v1', migrateLegacySingleFileBotData);
 
   // Create indexes only after legacy databases receive the new columns.
   // Defining the fingerprint index inside the Sequelize model made sync() try
@@ -820,8 +784,8 @@ async function initializeDatabase() {
     await Code.bulkCreate(updates, { updateOnDuplicate: ['value', 'extra'] });
   }
 
-  await populateFingerprintsAndRemoveUnusedDuplicates();
-  await normalizeProductDescriptions();
+  await populateMissingFingerprintsOnly();
+  await normalizeProductDescriptionsNonDestructive();
 
   const withoutNetworkId = await Merchant.findAll({ where: { networkProductId: null } });
   for (const product of withoutNetworkId) {

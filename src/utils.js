@@ -19,7 +19,8 @@ function parseDescription(value) {
   if (!value) return {
     ar: '', en: '', warrantyAr: '', warrantyEn: '', sold: 0,
     nameArHtml: '', nameEmojiId: '', nameEmojiAlt: '',
-    descriptionArHtml: '', warrantyArHtml: ''
+    descriptionArHtml: '', warrantyArHtml: '',
+    serviceInputMode: '', servicePromptAr: '', servicePromptEn: ''
   };
 
   let parsed = value;
@@ -39,7 +40,13 @@ function parseDescription(value) {
 
   const legacyContent = parsed.type === 'text' ? String(parsed.content || '') : '';
 
+  // IMPORTANT: preserve every existing custom field. Older startup code rebuilt
+  // this object from a small whitelist and accidentally deleted Premium Emoji
+  // IDs and later feature metadata (for example serviceInputMode/servicePrompt).
+  // Returning the original keys plus normalized aliases makes upgrades additive,
+  // never destructive.
   return {
+    ...parsed,
     ar: String(parsed.ar ?? parsed.descriptionAr ?? parsed.description_ar ?? parsed.arabic ?? parsed.descriptionArabic ?? legacyContent ?? ''),
     en: String(parsed.en ?? parsed.descriptionEn ?? parsed.description_en ?? parsed.english ?? parsed.descriptionEnglish ?? legacyContent ?? ''),
     warrantyAr: String(parsed.warrantyAr ?? parsed.warranty_ar ?? parsed.arWarranty ?? ''),
@@ -49,7 +56,10 @@ function parseDescription(value) {
     nameEmojiId: String(parsed.nameEmojiId || ''),
     nameEmojiAlt: String(parsed.nameEmojiAlt || ''),
     descriptionArHtml: String(parsed.descriptionArHtml || ''),
-    warrantyArHtml: String(parsed.warrantyArHtml || '')
+    warrantyArHtml: String(parsed.warrantyArHtml || ''),
+    serviceInputMode: String(parsed.serviceInputMode || ''),
+    servicePromptAr: String(parsed.servicePromptAr || ''),
+    servicePromptEn: String(parsed.servicePromptEn || '')
   };
 }
 

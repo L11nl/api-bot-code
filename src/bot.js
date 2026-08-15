@@ -39,6 +39,7 @@ const {
 } = require('./utils');
 const {
   getProductStock,
+  productVisibleInCurrentShop,
   listActiveProducts,
   createOrder,
   fulfillOrder,
@@ -157,7 +158,7 @@ function suspendedMainKeyboard(lang) {
   };
 }
 
-const PREMIUM_EMOJI = Object.freeze({
+const PREMIUM_EMOJI = {
   binance: { id: '5875443023873053217', alt: '🟡' },
   superqi: { id: '5184203496831846429', alt: '🔵' },
   support: { id: '5882260605850620296', alt: '💬' },
@@ -166,7 +167,23 @@ const PREMIUM_EMOJI = Object.freeze({
   products: { id: '5800639128961814362', alt: '🛍️' },
   // No language Custom Emoji ID was supplied. Keep a normal globe until a verified ID is configured.
   language: { id: '', alt: '🌐' }
-});
+};
+
+async function loadPersistentRuntimeConfig() {
+  // Store UI Premium Emoji IDs in PostgreSQL the first time we see them.
+  // Future code deployments load the database value instead of replacing it
+  // with whatever happens to be hard-coded in a newer source file.
+  for (const [name, emoji] of Object.entries(PREMIUM_EMOJI)) {
+    const key = `premium_emoji:${name}:id`;
+    const missingToken = '__CD_MISSING_SETTING__';
+    const stored = await getSetting(key, missingToken);
+    if (stored === missingToken) {
+      await setSetting(key, String(emoji.id || ''));
+    } else {
+      emoji.id = String(stored || '');
+    }
+  }
+}
 
 function emojiButton(text, emoji, extra = {}) {
   const button = { text, ...extra };
@@ -1148,7 +1165,7 @@ async function showProducts(chatId, user) {
 
 async function showProduct(chatId, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
-  if (!product || !product.isActive) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
+  if (!product || !product.isActive || !productVisibleInCurrentShop(product)) return bot.sendMessage(chatId, t(user.lang, 'noProducts'));
   const [stock, moneyContext] = await Promise.all([getProductStock(product.id), customerMoneyContext(user)]);
   const caption = productCaption(product, stock, user.lang, moneyContext);
   const canBuy = product.type === 'service' ? true : stock > 0;
@@ -2079,7 +2096,7 @@ bot.on('callback_query', async query => {
 async function handleBuy(query, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
-  if (!product || !product.isActive || (product.type !== 'service' && stock < 1)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+  if (!product || !product.isActive || !productVisibleInCurrentShop(product) || (product.type !== 'service' && stock < 1)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
   const max = product?.type === 'service' ? 1 : Math.min(stock, 100);
   const presets = [...new Set([1, 2, 3, 5, 10, max].filter(q => q >= 1 && q <= max))].sort((a, b) => a - b);
   const rows = [];
@@ -2146,7 +2163,7 @@ async function handleQuantity(query, user, data) {
   const quantity = Number(quantityRaw);
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
-  if (!product || (product.type !== 'service' && stock < quantity)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+  if (!product || !productVisibleInCurrentShop(product) || (product.type !== 'service' && stock < quantity)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
   await answerCallback(query.id);
   return sendCheckoutOptions(query.message.chat.id, user, product, quantity);
 }
@@ -2497,8 +2514,21 @@ async function finalizeNewProduct(user, data) {
     deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant'
   };
 
+  const isService = productPayload.type === 'service';
   let product;
-  if (network.enabledClient()) {
+  if (isService) {
+    // Service products are private to the bot/shop that created them.
+    // They are never published to the shared product catalog.
+    product = await Merchant.create({
+      ...productPayload,
+      image: imageValue === '-' ? null : imageValue,
+      networkProductId: crypto.randomUUID(),
+      networkManaged: false,
+      networkOwnerShopId: network.enabledClient() ? String(config.network.shopId || '') : (network.isMaster() ? 'master' : String(config.network.shopId || 'master')),
+      networkStock: 0,
+      ownerNote: 'Local service'
+    });
+  } else if (network.enabledClient()) {
     const remote = await network.createRemoteProduct(productPayload);
     const rp = remote.product;
     product = await Merchant.create({
@@ -2522,7 +2552,7 @@ async function finalizeNewProduct(user, data) {
     });
   }
 
-  if (network.isMaster()) {
+  if (network.isMaster() && !isService) {
     await network.publishNotificationEvent({
       eventType: 'new_product',
       networkProductId: product.networkProductId,
@@ -5694,7 +5724,8 @@ function stockPrompt(product) {
 
 async function showAdminProducts(chatId, page = 0) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => {});
-  const products = await Merchant.findAll({ order: [['id', 'ASC']] });
+  const allProducts = await Merchant.findAll({ order: [['id', 'ASC']] });
+  const products = allProducts.filter(productVisibleInCurrentShop);
   const perPage = 8;
   const pages = Math.max(1, Math.ceil(products.length / perPage));
   const safePage = Math.max(0, Math.min(page, pages - 1));
@@ -5725,7 +5756,7 @@ async function showAdminProducts(chatId, page = 0) {
 
 async function showAdminProductEditor(chatId, productId) {
   const product = await Merchant.findByPk(productId);
-  if (!product) return;
+  if (!product || !productVisibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
   const description = parseDescription(product.description);
   const stock = await getProductStock(product.id);
   const manageable = canManageNetworkProduct(product);
@@ -5769,7 +5800,8 @@ async function showAdminProductEditor(chatId, productId) {
 
 async function showStockProductList(chatId) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => null);
-  const products = await Merchant.findAll({ where: { isActive: true }, order: [['id', 'ASC']] });
+  const allProducts = await Merchant.findAll({ where: { isActive: true }, order: [['id', 'ASC']] });
+  const products = allProducts.filter(productVisibleInCurrentShop);
   const keyboard = [];
   for (const product of products) {
     const stock = await getProductStock(product.id);
@@ -6258,4 +6290,4 @@ function startNetworkAccountWatcher() {
 
 bot.on('polling_error', error => console.error('Telegram polling error:', error.message));
 
-module.exports = { bot, notifyBinanceResult, sendDeliveryToUser, startNetworkAccountWatcher };
+module.exports = { bot, notifyBinanceResult, sendDeliveryToUser, startNetworkAccountWatcher, loadPersistentRuntimeConfig };
