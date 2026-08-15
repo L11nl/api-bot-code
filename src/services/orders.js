@@ -14,9 +14,26 @@ function sellerShopIdFromOptions(options = {}) {
   return String(options.sourceShopId || 'master');
 }
 
+function currentShopId() {
+  try {
+    const network = require('../network');
+    if (network.enabledClient()) return String(config.network.shopId || '');
+    if (network.isMaster()) return 'master';
+  } catch {}
+  return String(config.network.shopId || 'master');
+}
+
+function productVisibleInCurrentShop(product) {
+  if (!product) return false;
+  if (String(product.type || '') !== 'service') return true;
+  const owner = String(product.networkOwnerShopId || '').trim();
+  if (!owner) return !product.networkManaged;
+  return owner === currentShopId();
+}
+
 async function getProductStock(merchantId) {
   const product = await Merchant.findByPk(merchantId);
-  if (product?.type === 'service') return 999999;
+  if (product?.type === 'service') return productVisibleInCurrentShop(product) ? 999999 : 0;
   if (product?.networkManaged) return Number(product.networkStock || 0);
   const [rows] = await sequelize.query(`
     SELECT COALESCE(SUM(GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)),0)::int AS stock
@@ -28,6 +45,41 @@ async function getProductStock(merchantId) {
   return Number(rows[0]?.stock || 0);
 }
 
+async function getProductStocksMap(products = []) {
+  const list = Array.isArray(products) ? products.filter(Boolean) : [];
+  const result = new Map();
+  const localIds = [];
+
+  for (const product of list) {
+    const id = Number(product?.id || product);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    if (product?.type === 'service') {
+      result.set(id, productVisibleInCurrentShop(product) ? 999999 : 0);
+    } else if (product?.networkManaged) {
+      result.set(id, Number(product.networkStock || 0));
+    } else {
+      result.set(id, 0);
+      localIds.push(id);
+    }
+  }
+
+  if (!localIds.length) return result;
+  const rows = await sequelize.query(`
+    SELECT "merchantId" AS id,
+           COALESCE(SUM(GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)),0)::int AS stock
+    FROM ${quotedSchema()}."Codes"
+    WHERE "merchantId" IN (:merchantIds)
+      AND COALESCE("isUsed", FALSE) = FALSE
+      AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+    GROUP BY "merchantId"
+  `, {
+    replacements: { merchantIds: localIds },
+    type: QueryTypes.SELECT
+  });
+  for (const row of rows || []) result.set(Number(row.id), Number(row.stock || 0));
+  return result;
+}
+
 async function listActiveProducts() {
   try {
     const network = require('../network');
@@ -36,14 +88,14 @@ async function listActiveProducts() {
     console.error('Catalog sync failed:', error.message);
   }
   const products = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder','ASC'], ['id','ASC']] });
-  const rows = [];
-  for (const product of products) rows.push({ product, stock: await getProductStock(product.id) });
-  return rows;
+  const visible = products.filter(productVisibleInCurrentShop);
+  const stocks = await getProductStocksMap(visible);
+  return visible.map(product => ({ product, stock: Number(stocks.get(Number(product.id)) || 0) }));
 }
 
 async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
   const product = await Merchant.findByPk(merchantId);
-  if (!product || !product.isActive) throw new Error('PRODUCT_NOT_FOUND');
+  if (!product || !product.isActive || !productVisibleInCurrentShop(product)) throw new Error('PRODUCT_NOT_FOUND');
   const qty = Number(quantity);
   if (!Number.isInteger(qty) || qty < 1 || qty > 100) throw new Error('INVALID_QUANTITY');
   const stock = product.type === 'service' ? 999999 : await getProductStock(product.id);
@@ -64,7 +116,8 @@ async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
 
 async function createGiftOrder({ userId, merchantId }) {
   const product = await Merchant.findByPk(merchantId);
-  if (!product) throw new Error('PRODUCT_NOT_FOUND');
+  if (!product || !productVisibleInCurrentShop(product)) throw new Error('PRODUCT_NOT_FOUND');
+  if (String(product.type || '') === 'service') throw new Error('PRODUCT_NOT_GIFT_ELIGIBLE');
   const stock = await getProductStock(product.id);
   if (stock < 1) throw new Error('OUT_OF_STOCK');
   return PurchaseOrder.create({
@@ -431,6 +484,41 @@ async function payFromWallet(orderId) {
   }
 }
 
+async function refundServiceOrderToWallet(orderId, reason = 'service_refund_wallet') {
+  const transaction = await sequelize.transaction();
+  try {
+    const order = await PurchaseOrder.findByPk(orderId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!order) throw new Error('ORDER_NOT_FOUND');
+    const product = await Merchant.findByPk(order.merchantId, { transaction });
+    if (!product || String(product.type || '') !== 'service') throw new Error('NOT_SERVICE_ORDER');
+
+    if (String(order.status || '') === 'refunded_service') {
+      await transaction.commit();
+      return { order, refunded: 0, alreadyRefunded: true };
+    }
+    if (!['service_pending_input', 'service_pending_admin'].includes(String(order.status || ''))) {
+      throw new Error('SERVICE_ORDER_ALREADY_FINALIZED');
+    }
+
+    const amount = Number(order.totalAmount || 0);
+    const user = await User.findByPk(order.userId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!user) throw new Error('USER_NOT_FOUND');
+    user.balance = Number(user.balance || 0) + amount;
+    await user.save({ transaction, fields: ['balance'] });
+
+    order.status = 'refunded_service';
+    order.paymentRef = String(reason || 'service_refund_wallet');
+    order.completedAt = new Date();
+    await order.save({ transaction, fields: ['status', 'paymentRef', 'completedAt'] });
+
+    await transaction.commit();
+    return { order, refunded: amount, newBalance: Number(user.balance), alreadyRefunded: false };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 async function addWaitingCode(orderId, code) {
   const transaction = await sequelize.transaction();
   try {
@@ -460,6 +548,8 @@ async function addWaitingCode(orderId, code) {
 
 module.exports = {
   getProductStock,
+  getProductStocksMap,
+  productVisibleInCurrentShop,
   listActiveProducts,
   createOrder,
   createGiftOrder,
@@ -468,5 +558,6 @@ module.exports = {
   refundWalletReservation,
   completeExternalPayment,
   payFromWallet,
+  refundServiceOrderToWallet,
   addWaitingCode
 };

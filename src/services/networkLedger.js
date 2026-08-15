@@ -12,6 +12,32 @@ const {
   getSetting
 } = require('../db');
 
+const shopInfoCache = new Map();
+const SHOP_INFO_CACHE_TTL_MS = Math.max(10000, Number(process.env.NETWORK_SHOP_INFO_CACHE_TTL_MS || 60000));
+
+async function cachedShopInfo(shopId) {
+  const id = normalizeShopId(shopId);
+  if (id === 'master') {
+    return {
+      name: config.network.ownerName || 'المالك الرئيسي',
+      settlementCurrency: String(config.network.settlementCurrency || 'USD').toUpperCase()
+    };
+  }
+  const cached = shopInfoCache.get(id);
+  if (cached && Date.now() - cached.at < SHOP_INFO_CACHE_TTL_MS) return cached.value;
+  const client = await NetworkClient.findOne({
+    where: { shopId: id },
+    attributes: ['name', 'settlementCurrency']
+  });
+  const value = {
+    name: client?.name || id,
+    settlementCurrency: String(client?.settlementCurrency || 'USD').toUpperCase()
+  };
+  shopInfoCache.set(id, { at: Date.now(), value });
+  return value;
+}
+
+
 function normalizeShopId(value) {
   const id = String(value || '').trim();
   return id || 'master';
@@ -307,17 +333,11 @@ async function recordObligation({
 }
 
 async function getShopName(shopId) {
-  const id = normalizeShopId(shopId);
-  if (id === 'master') return config.network.ownerName || 'المالك الرئيسي';
-  const client = await NetworkClient.findOne({ where: { shopId: id } });
-  return client?.name || id;
+  return (await cachedShopInfo(shopId)).name;
 }
 
 async function getShopCurrency(shopId) {
-  const id = normalizeShopId(shopId);
-  if (id === 'master') return String(config.network.settlementCurrency || 'USD').toUpperCase();
-  const client = await NetworkClient.findOne({ where: { shopId: id } });
-  return String(client?.settlementCurrency || 'USD').toUpperCase();
+  return (await cachedShopInfo(shopId)).settlementCurrency;
 }
 
 function directionFor(row, shopIdRaw) {
