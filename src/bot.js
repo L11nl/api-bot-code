@@ -39,6 +39,7 @@ const {
 } = require('./utils');
 const {
   getProductStock,
+  getProductStocksMap,
   productVisibleInCurrentShop,
   listActiveProducts,
   createOrder,
@@ -47,6 +48,7 @@ const {
   refundWalletReservation,
   completeExternalPayment,
   payFromWallet,
+  refundServiceOrderToWallet,
   addWaitingCode
 } = require('./services/orders');
 const {
@@ -68,6 +70,11 @@ const memoryRate = new Map();
 const pendingPartnerBotTokens = new Map();
 let cachedBotUsername = '';
 let commerceStatusCache = { at: 0, value: null };
+const channelMembershipCache = new Map();
+let activePaymentMethodsCache = { at: 0, rows: null };
+const CHANNEL_MEMBER_OK_TTL_MS = Math.max(30000, Number(process.env.CHANNEL_MEMBER_OK_TTL_MS || 300000));
+const CHANNEL_MEMBER_FAIL_TTL_MS = Math.max(5000, Number(process.env.CHANNEL_MEMBER_FAIL_TTL_MS || 20000));
+const PAYMENT_METHOD_CACHE_TTL_MS = Math.max(1000, Number(process.env.PAYMENT_METHOD_CACHE_TTL_MS || 5000));
 
 async function currentCommerceStatus(force = false) {
   const now = Date.now();
@@ -213,7 +220,7 @@ function canManageNetworkProduct(product) {
 }
 
 function canContributeStock(product) {
-  return Boolean(product && product.isActive !== false);
+  return Boolean(product && product.isActive !== false && String(product.type || '') !== 'service');
 }
 
 function isCancelText(value) {
@@ -283,19 +290,53 @@ async function clearState(userId) {
   await setState(userId, null);
 }
 
-async function getOrCreateUser(from) {
-  const [user, created] = await User.findOrCreate({
-    where: { id: from.id },
-    defaults: {
-      lang: config.defaultLanguage,
-      balance: 0,
-      verified: true,
-      username: from.username || null,
-      firstName: from.first_name || '',
-      paymentCurrency: null,
-      referralProcessed: false
+async function cancelActiveState(user, state) {
+  if (!state) {
+    await clearState(user.id);
+    return { serviceRefund: null };
+  }
+  if (state.action === 'support_chat' && state.ticketId) {
+    await SupportTicket.update({ status: 'closed', closedAt: new Date() }, { where: { id: state.ticketId, userId: user.id } });
+  }
+  let serviceRefund = null;
+  if (state.action === 'service_input' && state.orderId) {
+    try {
+      serviceRefund = await refundServiceOrderToWallet(state.orderId, 'customer_cancelled_service');
+    } catch (error) {
+      if (!['SERVICE_ORDER_ALREADY_FINALIZED', 'ORDER_NOT_FOUND'].includes(String(error.message || ''))) throw error;
     }
-  });
+  } else if (state.orderId) {
+    await refundWalletReservation(state.orderId).catch(() => {});
+  }
+  await clearState(user.id);
+  return { serviceRefund };
+}
+
+async function getOrCreateUser(from) {
+  // findOrCreate opens extra transactional work in Sequelize. Existing users are
+  // the common path, so a direct primary-key lookup is much faster.
+  let user = await User.findByPk(from.id);
+  let created = false;
+  if (!user) {
+    try {
+      user = await User.create({
+        id: from.id,
+        lang: config.defaultLanguage,
+        balance: 0,
+        verified: true,
+        username: from.username || null,
+        firstName: from.first_name || '',
+        paymentCurrency: null,
+        referralProcessed: false
+      });
+      created = true;
+    } catch (error) {
+      // Two Telegram updates for a brand-new user can race. The winner creates
+      // the row; the other request simply reloads it.
+      user = await User.findByPk(from.id);
+      if (!user) throw error;
+    }
+  }
   const changes = {};
   if (user.username !== (from.username || null)) changes.username = from.username || null;
   if (user.firstName !== (from.first_name || '')) changes.firstName = from.first_name || '';
@@ -444,10 +485,15 @@ async function setHiddenPaymentTypes(set) {
 }
 
 async function getActivePaymentMethods() {
-  return PaymentMethod.findAll({
+  if (activePaymentMethodsCache.rows && Date.now() - activePaymentMethodsCache.at < PAYMENT_METHOD_CACHE_TTL_MS) {
+    return activePaymentMethodsCache.rows;
+  }
+  const rows = await PaymentMethod.findAll({
     where: { isActive: true },
     order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
+  activePaymentMethodsCache = { at: Date.now(), rows };
+  return rows;
 }
 
 function localizedPaymentName(method, lang) {
@@ -1001,7 +1047,10 @@ async function adminSectionMenu(section) {
 function rateAllowed(userId) {
   const now = Date.now();
   const recent = (memoryRate.get(userId) || []).filter(timestamp => now - timestamp < 10000);
-  if (recent.length >= 12) return false;
+  // The old 12/10s ceiling was low enough to make normal admin navigation look
+  // like dead buttons. Keep abuse protection, but allow realistic Telegram use.
+  const limit = isAdmin(userId) ? 60 : 30;
+  if (recent.length >= limit) return false;
   recent.push(now);
   memoryRate.set(userId, recent);
   return true;
@@ -1341,17 +1390,16 @@ async function broadcastNewProductNotification(product, actorName = '') {
     if (isAdmin(target.id)) continue;
     const lang = target.lang === 'en' ? 'en' : 'ar';
     const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
-    const actorLine = actorName ? (lang === 'en' ? `\nAdded by: <b>${escapeHtml(actorName)}</b>` : `\nأضافه: <b>${escapeHtml(actorName)}</b>`) : '';
     const moneyContext = await customerMoneyContext(target);
     const message = lang === 'en'
       ? `🆕 <b>New product</b>
 
 <b>${escapeHtml(name)}</b>
-Price: <b>${customerMoney(product.price, moneyContext, lang)}</b>${actorLine}`
+Price: <b>${customerMoney(product.price, moneyContext, lang)}</b>`
       : `🆕 <b>منتج جديد</b>
 
 <b>${escapeHtml(name)}</b>
-السعر: <b>${customerMoney(product.price, moneyContext, lang)}</b>${actorLine}`;
+السعر: <b>${customerMoney(product.price, moneyContext, lang)}</b>`;
     try {
       await bot.sendMessage(target.id, message, {
         parse_mode: 'HTML',
@@ -1412,15 +1460,25 @@ function channelJoinUrl(channel) {
   return '';
 }
 
-async function userIsChannelMember(userId, channel) {
+async function userIsChannelMember(userId, channel, options = {}) {
   if (!channel || isAdmin(userId)) return true;
+  const cacheKey = `${String(channel)}:${String(userId)}`;
+  const cached = channelMembershipCache.get(cacheKey);
+  const force = options === true || Boolean(options?.force);
+  if (!force && cached) {
+    const ttl = cached.value ? CHANNEL_MEMBER_OK_TTL_MS : CHANNEL_MEMBER_FAIL_TTL_MS;
+    if (Date.now() - cached.at < ttl) return cached.value;
+  }
   try {
     const member = await bot.getChatMember(channel, userId);
-    if (['creator', 'administrator', 'member'].includes(member.status)) return true;
-    if (member.status === 'restricted') return Boolean(member.is_member);
-    return false;
+    const value = ['creator', 'administrator', 'member'].includes(member.status)
+      || (member.status === 'restricted' && Boolean(member.is_member));
+    channelMembershipCache.set(cacheKey, { at: Date.now(), value });
+    return value;
   } catch (error) {
     console.error('Channel membership check:', error.message);
+    // A temporary Telegram failure must not create a long cache lockout.
+    channelMembershipCache.set(cacheKey, { at: Date.now(), value: false });
     return false;
   }
 }
@@ -1579,52 +1637,94 @@ async function sendSupportMessageToAdmins(msg, user, ticket) {
 async function handleServiceAdminAction(query, user, data) {
   if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
   const [, action, orderIdRaw] = data.split(':');
-  const order = await PurchaseOrder.findByPk(Number(orderIdRaw));
-  if (!order) return answerCallback(query.id, 'الطلب غير موجود.', true);
+  const orderId = Number(orderIdRaw);
+  if (!Number.isInteger(orderId) || orderId < 1) return answerCallback(query.id, 'رقم الطلب غير صحيح.', true);
+  const order = await PurchaseOrder.findByPk(orderId, { include: [Merchant] });
+  if (!order || String(order.Merchant?.type || '') !== 'service') return answerCallback(query.id, 'طلب الخدمة غير موجود.', true);
   const customer = await User.findByPk(order.userId);
+  const status = String(order.status || '');
+
+  if (!['done', 'delay', 'refund', 'chat'].includes(action)) {
+    return answerCallback(query.id, 'زر خدمة غير معروف.', true);
+  }
+  if (status !== 'service_pending_admin') {
+    const message = status === 'completed'
+      ? 'تم إنهاء هذه الخدمة سابقاً.'
+      : status === 'refunded_service'
+        ? 'تم إلغاء هذه الخدمة وإرجاع الأموال سابقاً.'
+        : 'هذا الطلب لم يعد بانتظار إجراء الإدارة.';
+    return answerCallback(query.id, message, true);
+  }
+
   if (action === 'done') {
     order.status = 'completed';
     order.completedAt = new Date();
     await order.save({ fields: ['status', 'completedAt'] });
     await answerCallback(query.id, 'تمت العملية.');
+    if (query.message) {
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id
+      }).catch(() => {});
+    }
     await bot.sendMessage(order.userId, customer?.lang === 'en'
       ? `✅ Your service order #${order.id} has been activated successfully.`
       : `✅ تم تفعيل طلب الخدمة #${order.id} بنجاح.`).catch(() => {});
     return bot.sendMessage(query.message.chat.id, `✅ تم إنهاء طلب الخدمة #${order.id}.`);
   }
+
   if (action === 'delay') {
     await answerCallback(query.id, 'تم إرسال التأجيل.');
     await bot.sendMessage(order.userId, customer?.lang === 'en'
       ? '⏳ Your service activation was postponed for 30 minutes.'
       : '⏳ تم تأجيل التفعيل لمدة 30 دقيقة.').catch(() => {});
-    return bot.sendMessage(query.message.chat.id, `⏳ تم تأجيل الطلب #${order.id} لمدة 30 دقيقة.`);
+    return bot.sendMessage(query.message.chat.id, `⏳ تم إبلاغ الزبون بتأجيل الطلب #${order.id} لمدة 30 دقيقة.`);
   }
+
   if (action === 'refund') {
-    const credited = Number(order.totalAmount || 0);
-    if (!order.status.startsWith('refunded')) {
-      await User.increment({ balance: credited }, { where: { id: order.userId } });
+    let result;
+    try {
+      result = await refundServiceOrderToWallet(order.id, 'admin_service_refund');
+    } catch (error) {
+      if (error.message === 'SERVICE_ORDER_ALREADY_FINALIZED') return answerCallback(query.id, 'الطلب منتهي ولا يمكن استرداده من هذا الزر.', true);
+      throw error;
     }
-    order.status = 'refunded_service';
-    order.paymentRef = 'service_refund_wallet';
-    await order.save({ fields: ['status', 'paymentRef'] });
-    await answerCallback(query.id, 'تم رد الأموال.');
-    await bot.sendMessage(order.userId, customer?.lang === 'en'
-      ? `↩️ Your service order #${order.id} was cancelled and ${moneyUsd(credited)} was returned to your wallet.`
-      : `↩️ تم إلغاء طلب الخدمة #${order.id} وإرجاع ${moneyUsd(credited)} إلى محفظتك.`).catch(() => {});
+    await answerCallback(query.id, result.alreadyRefunded ? 'تم رد الأموال سابقاً.' : 'تم رد الأموال.');
+    if (query.message) {
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id
+      }).catch(() => {});
+    }
+    if (!result.alreadyRefunded) {
+      const moneyContext = await customerMoneyContext(customer || { paymentCurrency: 'USD' });
+      const lang = customer?.lang === 'en' ? 'en' : 'ar';
+      await bot.sendMessage(order.userId, lang === 'en'
+        ? `↩️ Your service order #${order.id} was cancelled and ${customerMoney(result.refunded, moneyContext, lang)} was returned to your wallet.`
+        : `↩️ تم إلغاء طلب الخدمة #${order.id} وإرجاع ${customerMoney(result.refunded, moneyContext, lang)} إلى محفظتك.`).catch(() => {});
+    }
     return bot.sendMessage(query.message.chat.id, `↩️ تم إلغاء الطلب #${order.id} وإرجاع الرصيد للمستخدم.`);
   }
-  if (action === 'chat') {
-    let ticket = await SupportTicket.findOne({ where: { userId: order.userId, status: 'open' }, order: [['id', 'DESC']] });
-    if (!ticket) ticket = await getOrCreateSupportTicket(order.userId);
-    await setState(order.userId, { action: 'support_chat', ticketId: ticket.id });
-    await setState(user.id, { action: 'admin_support_reply', ticketId: ticket.id, targetId: order.userId });
-    await answerCallback(query.id, 'تم فتح المحادثة.');
-    await bot.sendMessage(order.userId, customer?.lang === 'en'
-      ? '💬 A service chat has been opened. Send your message here. When done, send /cancel to close the chat.'
-      : '💬 تم فتح محادثة بخصوص الخدمة. أرسل رسالتك هنا، وللإغلاق اكتب /cancel.').catch(() => {});
-    return bot.sendMessage(query.message.chat.id, '💬 ارسل الآن رسالتك التالية وسيتم إرسالها للزبون مباشرة.', { reply_markup: cancelInlineKeyboard() });
-  }
-  return answerCallback(query.id);
+
+  let ticket = await SupportTicket.findOne({ where: { userId: order.userId, status: 'open' }, order: [['id', 'DESC']] });
+  if (!ticket) ticket = await getOrCreateSupportTicket(order.userId);
+  await setState(order.userId, { action: 'support_chat', ticketId: ticket.id, serviceOrderId: order.id });
+  await setState(user.id, { action: 'admin_support_reply', ticketId: ticket.id, targetId: order.userId, keepOpen: true, serviceOrderId: order.id });
+  await answerCallback(query.id, 'تم فتح المحادثة.');
+  await bot.sendMessage(order.userId, customer?.lang === 'en'
+    ? '💬 A service chat has been opened. Send your message here.'
+    : '💬 تم فتح محادثة بخصوص الخدمة. أرسل رسالتك هنا.', {
+    reply_markup: { inline_keyboard: [[{
+      text: customer?.lang === 'en' ? '❌ Close chat' : '❌ إغلاق الدردشة',
+      callback_data: `support:userclose:${ticket.id}`,
+      style: 'danger'
+    }]] }
+  }).catch(() => {});
+  return bot.sendMessage(query.message.chat.id, '💬 ارسل رسالتك الآن. تبقى المحادثة مفتوحة إلى أن تضغط «إغلاق الدردشة».', {
+    reply_markup: { inline_keyboard: [[
+      { text: '❌ إغلاق الدردشة', callback_data: `support:close:${ticket.id}`, style: 'danger' }
+    ]] }
+  });
 }
 
 async function showSupportTickets(chatId) {
@@ -1787,12 +1887,13 @@ bot.on('message', async msg => {
 
     if (isCancelText(msg.text)) {
       const state = parseState(user);
-      if (state?.action === 'support_chat' && state.ticketId) {
-        await SupportTicket.update({ status: 'closed', closedAt: new Date() }, { where: { id: state.ticketId, userId: user.id } });
-      }
-      if (state?.orderId) await refundWalletReservation(state.orderId).catch(() => {});
-      await clearState(user.id);
-      return bot.sendMessage(msg.chat.id, t(user.lang, 'cancelled'), { reply_markup: await getMainKeyboard(user.lang) });
+      const cancelled = await cancelActiveState(user, state);
+      const text = cancelled.serviceRefund && !cancelled.serviceRefund.alreadyRefunded
+        ? (user.lang === 'en'
+          ? `↩️ Service cancelled. ${moneyUsd(cancelled.serviceRefund.refunded)} was returned to your wallet.`
+          : `↩️ تم إلغاء الخدمة وإرجاع ${moneyUsd(cancelled.serviceRefund.refunded)} إلى محفظتك.`)
+        : t(user.lang, 'cancelled');
+      return bot.sendMessage(msg.chat.id, text, { reply_markup: await getMainKeyboard(user.lang) });
     }
 
     if (!user.verified) { user.verified = true; await user.save({ fields: ['verified'] }); }
@@ -1889,7 +1990,10 @@ bot.on('message', async msg => {
 });
 
 bot.on('callback_query', async query => {
-  if (!query.from || !rateAllowed(query.from.id)) return;
+  if (!query.from) return;
+  if (!rateAllowed(query.from.id)) {
+    return answerCallback(query.id, 'انتظر لحظة قبل الضغط مرة ثانية.');
+  }
   const user = await getOrCreateUser(query.from);
   const data = String(query.data || '');
   if (data.startsWith('noop:')) return answerCallback(query.id);
@@ -1917,13 +2021,14 @@ bot.on('callback_query', async query => {
 
   if (data === 'flow:cancel') {
     const state = parseState(await User.findByPk(user.id));
-    if (state?.action === 'support_chat' && state.ticketId) {
-      await SupportTicket.update({ status: 'closed', closedAt: new Date() }, { where: { id: state.ticketId, userId: user.id } });
-    }
-    if (state?.orderId) await refundWalletReservation(state.orderId).catch(() => {});
-    await clearState(user.id);
-    await answerCallback(query.id, t(user.lang, 'cancelled'));
-    return bot.sendMessage(user.id, t(user.lang, 'cancelled'), { reply_markup: await getMainKeyboard(user.lang) });
+    const cancelled = await cancelActiveState(user, state);
+    const text = cancelled.serviceRefund && !cancelled.serviceRefund.alreadyRefunded
+      ? (user.lang === 'en'
+        ? `↩️ Service cancelled. ${moneyUsd(cancelled.serviceRefund.refunded)} was returned to your wallet.`
+        : `↩️ تم إلغاء الخدمة وإرجاع ${moneyUsd(cancelled.serviceRefund.refunded)} إلى محفظتك.`)
+      : t(user.lang, 'cancelled');
+    await answerCallback(query.id, text);
+    return bot.sendMessage(user.id, text, { reply_markup: await getMainKeyboard(user.lang) });
   }
 
   if (data.startsWith('cap:')) {
@@ -1948,7 +2053,7 @@ bot.on('callback_query', async query => {
   if (data === 'joincheck') {
     if (!user.verified) return answerCallback(query.id, 'أكمل التحقق أولاً.', true);
     const channel = await getRequiredChannel();
-    const joined = await userIsChannelMember(user.id, channel);
+    const joined = await userIsChannelMember(user.id, channel, { force: true });
     if (!joined) return answerCallback(query.id, 'بعدك مو مشترك بالقناة.', true);
     await answerCallback(query.id, '✅ تم التحقق.');
     await processReferralIfReady(user);
@@ -1982,6 +2087,8 @@ bot.on('callback_query', async query => {
         const text = {
           GIFT_DISABLED: 'نظام الهدايا متوقف حالياً.',
           GIFT_PRODUCT_NOT_SET: 'الإدارة ما محددة منتج الهدية بعد.',
+          GIFT_PRODUCT_INVALID: 'منتج الهدية الحالي غير صالح أو صار غير متاح. راجع الإدارة.',
+          PRODUCT_NOT_GIFT_ELIGIBLE: 'هذا النوع من المنتجات ما يصلح كهدية تلقائية.',
           NOT_ENOUGH_REFERRALS: 'بعدك ما وصلت للعدد المطلوب.',
           OUT_OF_STOCK: 'مخزون الهدية نفد مؤقتاً، جرّب لاحقاً.',
           PRODUCT_NOT_FOUND: 'منتج الهدية غير موجود.',
@@ -2004,6 +2111,21 @@ bot.on('callback_query', async query => {
       });
     }
 
+    if (data.startsWith('support:userclose:')) {
+      const ticketId = Number(data.split(':')[2]);
+      const ticket = await SupportTicket.findByPk(ticketId);
+      if (!ticket || ticket.status !== 'open' || String(ticket.userId) !== String(user.id)) {
+        return answerCallback(query.id, user.lang === 'en' ? 'Chat is already closed.' : 'الدردشة مغلقة أصلاً.', true);
+      }
+      ticket.status = 'closed';
+      ticket.closedAt = new Date();
+      await ticket.save({ fields: ['status', 'closedAt'] });
+      await clearState(user.id);
+      await answerCallback(query.id, user.lang === 'en' ? 'Chat closed.' : 'تم إغلاق الدردشة.');
+      await notifyAdmins(`❌ المستخدم <code>${user.id}</code> أغلق محادثة الدعم #${ticket.id}.`).catch(() => {});
+      return bot.sendMessage(user.id, user.lang === 'en' ? '✅ Chat closed.' : '✅ تم إغلاق الدردشة.', { reply_markup: await getMainKeyboard(user.lang) });
+    }
+
     if (data.startsWith('support:close:')) {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
       const ticketId = Number(data.split(':')[2]);
@@ -2017,8 +2139,14 @@ bot.on('callback_query', async query => {
       if (targetState?.action === 'support_chat' && Number(targetState.ticketId) === ticket.id) {
         await clearState(ticket.userId);
       }
+      const adminState = parseState(await User.findByPk(user.id));
+      if (adminState?.action === 'admin_support_reply' && Number(adminState.ticketId) === ticket.id) {
+        await clearState(user.id);
+      }
       await answerCallback(query.id, 'تم إغلاق التذكرة.');
-      await bot.sendMessage(ticket.userId, '✅ تم إغلاق محادثة الدعم. تكدر تفتح محادثة جديدة من زر الدعم.').catch(() => {});
+      await bot.sendMessage(ticket.userId, targetUser?.lang === 'en'
+        ? '✅ Support chat was closed. You can open a new chat from Support.'
+        : '✅ تم إغلاق محادثة الدعم. تكدر تفتح محادثة جديدة من زر الدعم.').catch(() => {});
       return;
     }
 
@@ -2087,6 +2215,11 @@ bot.on('callback_query', async query => {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
       return handleAdminCallback(query, user, data);
     }
+
+    console.warn('Unhandled callback_data:', data, 'from user', user.id);
+    return answerCallback(query.id, user.lang === 'en'
+      ? 'This button is old or no longer valid. Reopen the menu and try again.'
+      : 'هذا الزر قديم أو لم يعد صالحاً. افتح القائمة من جديد وحاول مرة ثانية.', true);
   } catch (error) {
     console.error('Callback error:', error);
     await answerCallback(query.id, `خطأ: ${error.message}`, true);
@@ -2648,7 +2781,15 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
     await sendSupportMessageToAdmins(msg, user, ticket);
-    await bot.sendMessage(user.id, '✅ وصلت رسالتك للدعم. تقدر ترسل رسالة ثانية أو تكتب إغلاق لإنهاء المحادثة.');
+    await bot.sendMessage(user.id, user.lang === 'en'
+      ? '✅ Your message reached support. You can send another message.'
+      : '✅ وصلت رسالتك للدعم. تقدر ترسل رسالة ثانية.', {
+      reply_markup: { inline_keyboard: [[{
+        text: user.lang === 'en' ? '❌ Close chat' : '❌ إغلاق الدردشة',
+        callback_data: `support:userclose:${ticket.id}`,
+        style: 'danger'
+      }]] }
+    });
     return true;
   }
 
@@ -2670,8 +2811,25 @@ async function handleStateMessage(msg, user, state) {
     ticket.assignedAdminId = user.id;
     ticket.lastMessageAt = new Date();
     await ticket.save();
-    await clearState(user.id);
-    await bot.sendMessage(user.id, '✅ تم إرسال الرد للمستخدم.');
+    if (state.keepOpen) {
+      await bot.sendMessage(ticket.userId, targetLang === 'en' ? 'Chat controls:' : 'أزرار الدردشة:', {
+        reply_markup: { inline_keyboard: [[{
+          text: targetLang === 'en' ? '❌ Close chat' : '❌ إغلاق الدردشة',
+          callback_data: `support:userclose:${ticket.id}`,
+          style: 'danger'
+        }]] }
+      }).catch(() => {});
+      await bot.sendMessage(user.id, '✅ تم إرسال الرسالة. المحادثة ما زالت مفتوحة، ارسل رسالة ثانية أو أغلقها من الزر.', {
+        reply_markup: { inline_keyboard: [[{
+          text: '❌ إغلاق الدردشة',
+          callback_data: `support:close:${ticket.id}`,
+          style: 'danger'
+        }]] }
+      });
+    } else {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '✅ تم إرسال الرد للمستخدم.');
+    }
     return true;
   }
 
@@ -3752,73 +3910,44 @@ async function handleStateMessage(msg, user, state) {
         await bot.sendMessage(user.id, 'أرسل صورة أو رابط أو - بدون صورة.');
         return true;
       }
+      data.imageValue = imageValue;
 
-      const productPayload = {
-        nameAr: data.nameAr,
-        nameEn: data.nameEn || data.nameAr,
-        price: data.price,
-        category: 'عام',
-        type: data.type || 'free',
-        description: {
-          ar: data.descriptionAr || '',
-          en: data.descriptionEn || '',
-          warrantyAr: data.warrantyAr || '',
-          warrantyEn: data.warrantyEn || '',
-          sold: 0,
-          nameArHtml: data.nameArHtml || '',
-          nameEmojiId: data.nameEmojiId || '',
-          nameEmojiAlt: data.nameEmojiAlt || '',
-          descriptionArHtml: data.descriptionArHtml || '',
-          warrantyArHtml: data.warrantyArHtml || ''
-        },
-        // Telegram file_ids are scoped to a bot. URLs can be shared across the network safely.
-        image: imageValue === '-' ? null : (/^https?:\/\//i.test(imageValue) ? imageValue : null),
-        isActive: true,
-        sharedLimit: 1,
-        deliveryMode: 'instant'
-      };
-
-      let product;
-      if (network.enabledClient()) {
-        const remote = await network.createRemoteProduct(productPayload);
-        const rp = remote.product;
-        product = await Merchant.create({
-          ...productPayload,
-          image: productPayload.image || (imageValue === '-' ? null : imageValue),
-          networkProductId: rp.networkProductId,
-          networkManaged: true,
-          networkOwnerShopId: rp.networkOwnerShopId || config.network.shopId,
-          networkStock: Number(rp.stock || 0),
-          ownerNote: 'Network product'
+      if ((data.type || 'free') === 'service') {
+        await setState(user.id, { action: 'admin_new_product', step: 'serviceInputMode', data });
+        await bot.sendMessage(user.id, '6/7 اختَر نوع البيانات اللي تريدها من الزبون بعد الدفع:', {
+          reply_markup: { inline_keyboard: [
+            [{ text: '📧 إيميل', callback_data: 'adm:svcinputmode:email', style: 'primary' }],
+            [{ text: '📱 رقم', callback_data: 'adm:svcinputmode:phone', style: 'primary' }],
+            [{ text: '📝 نص', callback_data: 'adm:svcinputmode:text', style: 'primary' }],
+            [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
+          ] }
         });
-      } else {
-        product = await Merchant.create({
-          ...productPayload,
-          image: imageValue === '-' ? null : imageValue,
-          networkProductId: crypto.randomUUID(),
-          networkManaged: false,
-          networkOwnerShopId: network.isMaster() ? 'master' : config.network.shopId,
-          networkStock: 0,
-          ownerNote: null
-        });
+        return true;
       }
 
-      if (network.isMaster()) {
-        await network.publishNotificationEvent({
-          eventType: 'new_product',
-          networkProductId: product.networkProductId,
-          actorShopId: 'master',
-          actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي',
-          payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
-        }).catch(error => console.error('Publish product notification:', error.message));
-      }
+      return finalizeNewProduct(user, data);
+    }
 
-      await setState(user.id, { action: 'admin_add_stock', productId: product.id, afterCreate: true });
-      await bot.sendMessage(user.id, '✅ تم إنشاء المنتج ونشره. حالياً مخزونه صفر لذلك يظهر بالأحمر.\n\n' + stockPrompt(product), {
-        parse_mode: 'HTML',
-        reply_markup: cancelInlineKeyboard()
+    if (state.step === 'serviceInputMode') {
+      await bot.sendMessage(user.id, 'اختَر نوع البيانات من الأزرار: إيميل، رقم، أو نص.', {
+        reply_markup: { inline_keyboard: [
+          [{ text: '📧 إيميل', callback_data: 'adm:svcinputmode:email', style: 'primary' }],
+          [{ text: '📱 رقم', callback_data: 'adm:svcinputmode:phone', style: 'primary' }],
+          [{ text: '📝 نص', callback_data: 'adm:svcinputmode:text', style: 'primary' }],
+          [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
+        ] }
       });
       return true;
+    }
+
+    if (state.step === 'servicePromptAr') {
+      if (!text) {
+        await bot.sendMessage(user.id, 'اكتب الرسالة اللي تريد تظهر للزبون.');
+        return true;
+      }
+      data.servicePromptAr = text;
+      data.servicePromptEn = await translateArToEn(text);
+      return finalizeNewProduct(user, data);
     }
   }
 
@@ -3942,6 +4071,12 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
 
+    if (String(product.type || '') === 'service') {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '🛠 تنفيذ خدمة ما يحتاج مخزون، لذلك تم إغلاق إضافة المخزون لهذا المنتج.');
+      return true;
+    }
+
     const parsed = parseInventoryTextForProduct(text, product.type);
     if (parsed.errors.length) {
       const details = parsed.errors.slice(0, 8).map(row =>
@@ -3984,33 +4119,33 @@ async function handleStateMessage(msg, user, state) {
     const maxUses = product.type === 'shared' ? Number(product.sharedLimit || 5) : 1;
     const transaction = await sequelize.transaction();
     try {
-      const batchFingerprints = new Set();
-      let added = 0;
+      const prepared = new Map();
       let duplicates = 0;
-
       for (const item of parsed.items) {
         const fingerprint = inventoryFingerprint(product.type, item);
-        if (batchFingerprints.has(fingerprint)) {
+        if (prepared.has(fingerprint)) {
           duplicates += 1;
           continue;
         }
-        batchFingerprints.add(fingerprint);
+        prepared.set(fingerprint, item);
+      }
 
-        const existing = await Code.findOne({
-          where: {
-            merchantId: product.id,
-            fingerprint
-          },
-          transaction,
-          lock: transaction.LOCK.UPDATE
-        });
+      const fingerprints = [...prepared.keys()];
+      const existingRows = fingerprints.length
+        ? await Code.findAll({
+            where: { merchantId: product.id, fingerprint: { [Op.in]: fingerprints } },
+            attributes: ['fingerprint'],
+            raw: true,
+            transaction
+          })
+        : [];
+      const existing = new Set(existingRows.map(row => String(row.fingerprint || '')));
+      duplicates += existing.size;
 
-        if (existing) {
-          duplicates += 1;
-          continue;
-        }
-
-        await Code.create({
+      const rowsToCreate = [];
+      for (const [fingerprint, item] of prepared.entries()) {
+        if (existing.has(fingerprint)) continue;
+        rowsToCreate.push({
           value: encryptPayload(item),
           extra: null,
           merchantId: product.id,
@@ -4021,9 +4156,10 @@ async function handleStateMessage(msg, user, state) {
           fingerprint,
           stockOwnerShopId: network.enabledClient() ? config.network.shopId : 'master',
           contributionPriceUsd: Number(product.price || 0)
-        }, { transaction });
-        added += 1;
+        });
       }
+      if (rowsToCreate.length) await Code.bulkCreate(rowsToCreate, { transaction });
+      const added = rowsToCreate.length;
 
       await transaction.commit();
 
@@ -4737,6 +4873,7 @@ async function showNetworkAccounts(chatId) {
 
 async function showProductContributors(chatId, product) {
   if (!product) return bot.sendMessage(chatId, '❌ المنتج غير موجود.');
+  if (String(product.type || '') === 'service') return bot.sendMessage(chatId, '🛠 تنفيذ خدمة ما عنده مخزون أو مساهمو مخزون.');
   let contributors = [];
   if (network.enabledClient() && product.networkManaged) {
     const remote = await network.getProductContributors(product.networkProductId);
@@ -5284,7 +5421,8 @@ async function handleAdminCallback(query, user, data) {
 
   if (data === 'adm:ref_product') {
     await answerCallback(query.id);
-    const products = await Merchant.findAll({ order: [['id', 'ASC']] });
+    const allProducts = await Merchant.findAll({ where: { isActive: true }, order: [['id', 'ASC']] });
+    const products = allProducts.filter(product => productVisibleInCurrentShop(product) && String(product.type || '') !== 'service');
     const keyboard = products.map(product => [{
       text: `${product.nameAr} | ${moneyUsd(product.price)}`,
       callback_data: `adm:ref_product_set:${product.id}`
@@ -5296,7 +5434,13 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:ref_product_set:')) {
-    const productId = Number(data.split(':')[3]);
+    const productId = Number(data.split(':')[2]);
+    if (productId > 0) {
+      const product = await Merchant.findByPk(productId);
+      if (!product || !product.isActive || !productVisibleInCurrentShop(product) || String(product.type || '') === 'service') {
+        return answerCallback(query.id, 'هذا المنتج غير صالح كهدية.', true);
+      }
+    }
     await setSetting('referral_gift_product_id', productId > 0 ? String(productId) : '');
     await answerCallback(query.id, 'تم تحديث منتج الهدية.');
     return showReferralAdmin(query.message.chat.id);
@@ -5563,7 +5707,10 @@ async function handleAdminCallback(query, user, data) {
     const [, , idRaw, type] = data.split(':');
     if (!['code', 'account', 'free', 'service'].includes(type)) return answerCallback(query.id, 'نوع غير صحيح.', true);
     const product = await Merchant.findByPk(Number(idRaw));
-    if (!product) return;
+    if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    if (type === 'service' || String(product.type || '') === 'service') {
+      return answerCallback(query.id, 'تنفيذ خدمة نوع محلي خاص. أنشئه من زر «إضافة منتج جديد» ولا يتم تحويل المنتجات إليه أو منه.', true);
+    }
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
     if (!network.enabledClient()) {
       const protection = await network.productStockProtection(product.id, product.networkOwnerShopId || 'master');
@@ -5634,6 +5781,10 @@ async function handleAdminCallback(query, user, data) {
       'المكرر ينحذف تلقائياً. اكتب إغلاق للإلغاء.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
+
+  console.warn('Unhandled admin callback_data:', data, 'from admin', user.id);
+  return answerCallback(query.id, 'هذا الزر قديم أو غير مدعوم حالياً. افتح لوحة الإدارة من جديد.', true);
+
 }
 
 async function showReferralAdmin(chatId) {
@@ -5719,6 +5870,9 @@ function stockPrompt(product) {
   if (product.type === 'account') {
     return `📥 أرسل الحسابات الآن، كل حساب بسطر بصيغة:\n<code>email@example.com|password</code>\n\nتقدر ترسل TXT/CSV أيضاً.`;
   }
+  if (product.type === 'service') {
+    return '🛠 تنفيذ خدمة ما يحتاج مخزون. بعد الدفع يرسل الزبون البيانات المطلوبة، وبعدها توصلك أزرار تنفيذ الخدمة.';
+  }
   return `📥 أرسل محتوى المنتج الحر، كل سطر يعتبر قطعة مستقلة تُسلّم لزبون واحد.\nيقبل كتابة، رابط، كود، بيانات أو أي نص.\nمثال:\n<code>أي محتوى تريد تسليمه</code>`;
 }
 
@@ -5731,12 +5885,14 @@ async function showAdminProducts(chatId, page = 0) {
   const safePage = Math.max(0, Math.min(page, pages - 1));
   const keyboard = [];
 
-  for (const product of products.slice(safePage * perPage, safePage * perPage + perPage)) {
-    const stock = await getProductStock(product.id);
+  const pageProducts = products.slice(safePage * perPage, safePage * perPage + perPage);
+  const pageStocks = await getProductStocksMap(pageProducts);
+  for (const product of pageProducts) {
+    const stock = Number(pageStocks.get(Number(product.id)) || 0);
     keyboard.push([{
-      text: `${product.nameAr} | 📦 ${stock} | ${moneyUsd(product.price)}`,
+      text: `${product.nameAr} | ${product.type === 'service' ? '🛠 خدمة' : `📦 ${stock}`} | ${moneyUsd(product.price)}`,
       callback_data: `adm:edit:${product.id}`,
-      style: !product.isActive || stock < 1 ? 'danger' : 'success'
+      style: !product.isActive || (product.type !== 'service' && stock < 1) ? 'danger' : 'success'
     }]);
   }
 
@@ -5765,7 +5921,7 @@ async function showAdminProductEditor(chatId, productId) {
     '',
     `النوع: <b>${productTypeLabel(product.type)}</b>`,
     `السعر: <b>${moneyUsd(product.price)}</b>`,
-    `المخزون: <b>${stock}</b>`,
+    `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : stock}</b>`,
     `ظهور المنتج: <b>${product.isActive ? 'ظاهر' : 'مخفي'}</b>`,
     `الترجمة الإنجليزية: <b>تلقائية</b>`,
     product.networkManaged ? `الشبكة: <b>منتج مشترك</b> — المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>` : '',
@@ -5779,7 +5935,7 @@ async function showAdminProductEditor(chatId, productId) {
     description.nameEmojiId ? '✨ Custom Emoji: محفوظة تلقائياً' : '✨ Custom Emoji: لا توجد'
   ].filter(Boolean).join('\n');
 
-  const commonRows = [
+  const commonRows = product.type === 'service' ? [] : [
     [{ text: '📥 إضافة مخزون لهذا المنتج', callback_data: `adm:stockprod:${product.id}`, style: 'success' }],
     [{ text: '📊 مساهمو المخزون والمبيعات', callback_data: `adm:contributors:${product.id}`, style: 'primary' }]
   ];
@@ -5801,10 +5957,11 @@ async function showAdminProductEditor(chatId, productId) {
 async function showStockProductList(chatId) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => null);
   const allProducts = await Merchant.findAll({ where: { isActive: true }, order: [['id', 'ASC']] });
-  const products = allProducts.filter(productVisibleInCurrentShop);
+  const products = allProducts.filter(product => productVisibleInCurrentShop(product) && String(product.type || '') !== 'service');
   const keyboard = [];
+  const stocks = await getProductStocksMap(products);
   for (const product of products) {
-    const stock = await getProductStock(product.id);
+    const stock = Number(stocks.get(Number(product.id)) || 0);
     keyboard.push([{
       text: `${product.nameAr} | 📦 ${stock}`,
       callback_data: `adm:stockprod:${product.id}`,
@@ -5835,6 +5992,9 @@ bot.onText(/^\/code_(\d+)_(.+)$/s, async (msg, match) => {
 });
 
 let networkAccountWatcherStarted = false;
+let networkAccountWatcherRunning = false;
+let lastSharedPaymentSnapshotHash = '';
+let lastSharedPaymentSnapshotAt = 0;
 
 async function fetchLocalNetworkAccountData() {
   if (network.isMaster()) return networkLedger.accountsForShop('master');
@@ -5849,24 +6009,32 @@ async function syncLocalSharedPaymentMethods() {
   if (!network.isMaster() && !network.enabledClient()) return;
   const methods = await PaymentMethod.findAll({ order: [['id', 'ASC']] });
 
+  const snapshotPayload = methods.map(method => ({
+    localMethodId: method.id,
+    nameAr: method.nameAr,
+    nameEn: method.nameEn,
+    paymentNumber: method.paymentNumber,
+    iconCustomEmojiId: method.iconCustomEmojiId,
+    iconAlt: method.iconAlt,
+    settlementCurrency: method.settlementCurrency,
+    ratePerUsd: Number(method.ratePerUsd || 1),
+    minimumTransferAmount: minimumTransferForMethod(method),
+    isActive: Boolean(method.isActive)
+  }));
+  const snapshotHash = crypto.createHash('sha256').update(JSON.stringify(snapshotPayload)).digest('hex');
+  // Do not re-send the exact same payment-method snapshot every 30 seconds.
+  // A 5-minute heartbeat still repairs any missed network sync automatically.
+  if (snapshotHash === lastSharedPaymentSnapshotHash && Date.now() - lastSharedPaymentSnapshotAt < 300000) return;
+
   // v12.0.2: publish the whole local wallet list as one authoritative snapshot.
   // This makes newly-added Egyptian/Iraqi/USD wallets propagate to every bot
   // and also removes deleted wallets from the shared registry. Older masters
   // are still supported through the per-method fallback below.
   if (typeof network.syncSharedPaymentMethodsSnapshot === 'function') {
     try {
-      await network.syncSharedPaymentMethodsSnapshot(methods.map(method => ({
-        localMethodId: method.id,
-        nameAr: method.nameAr,
-        nameEn: method.nameEn,
-        paymentNumber: method.paymentNumber,
-        iconCustomEmojiId: method.iconCustomEmojiId,
-        iconAlt: method.iconAlt,
-        settlementCurrency: method.settlementCurrency,
-        ratePerUsd: Number(method.ratePerUsd || 1),
-        minimumTransferAmount: minimumTransferForMethod(method),
-        isActive: Boolean(method.isActive)
-      })));
+      await network.syncSharedPaymentMethodsSnapshot(snapshotPayload);
+      lastSharedPaymentSnapshotHash = snapshotHash;
+      lastSharedPaymentSnapshotAt = Date.now();
       return;
     } catch (error) {
       console.error('Shared payment snapshot sync:', error.message);
@@ -6269,6 +6437,8 @@ function startNetworkAccountWatcher() {
   if (networkAccountWatcherStarted || (!network.isMaster() && !network.enabledClient())) return;
   networkAccountWatcherStarted = true;
   const poll = async () => {
+    if (networkAccountWatcherRunning) return;
+    networkAccountWatcherRunning = true;
     try {
       await syncLocalSharedPaymentMethods();
       await network.syncPublicPaymentProfile().catch(error => console.error('Payment profile sync:', error.message));
@@ -6282,6 +6452,8 @@ function startNetworkAccountWatcher() {
       await processDebtRemindersAndStatus(data);
     } catch (error) {
       console.error('Network watcher:', error.message);
+    } finally {
+      networkAccountWatcherRunning = false;
     }
   };
   poll().catch(error => console.error('Initial network watcher:', error.message));

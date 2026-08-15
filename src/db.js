@@ -4,6 +4,23 @@ const config = require('./config');
 const { encryptPayload, decryptPayload, isEncrypted, legacyPayload } = require('./cryptoStore');
 const { inventoryFingerprint, inventoryPayloadIsValid, parseDescription } = require('./utils');
 
+// Small in-process caches remove repeated PostgreSQL round-trips from every
+// Telegram message/button. All writes invalidate/update the cache immediately.
+const settingCache = new Map();
+const secureSettingCache = new Map();
+const SETTING_CACHE_TTL_MS = Math.max(5000, Number(process.env.SETTING_CACHE_TTL_MS || 60000));
+const SECURE_SETTING_CACHE_TTL_MS = Math.max(5000, Number(process.env.SECURE_SETTING_CACHE_TTL_MS || 30000));
+
+function cacheRead(map, key, ttl) {
+  const row = map.get(String(key));
+  if (!row || Date.now() - row.at > ttl) {
+    if (row) map.delete(String(key));
+    return null;
+  }
+  return row;
+}
+
+
 function quoteIdent(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
@@ -749,6 +766,34 @@ async function initializeDatabase() {
     WHERE "transactionId" IS NOT NULL
   `);
 
+  // v12.4: hot-path indexes used by customer order history, payment review,
+  // product lists and background workers. These are non-destructive and safe
+  // to keep across upgrades.
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "po_user_status_created_idx"
+    ON ${tableSql('PurchaseOrders')} ("userId", "status", "createdAt" DESC)
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "po_status_created_idx"
+    ON ${tableSql('PurchaseOrders')} ("status", "createdAt" DESC)
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "bt_user_status_idx"
+    ON ${tableSql('BalanceTransactions')} ("userId", "status")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "bt_method_status_idx"
+    ON ${tableSql('BalanceTransactions')} ("paymentMethodId", "status")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "merchant_active_sort_idx"
+    ON ${tableSql('Merchants')} ("isActive", "sortOrder", "id")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "pm_active_sort_idx"
+    ON ${tableSql('PaymentMethods')} ("isActive", "sortOrder", "id")
+  `);
+
   await sequelize.query(`
     UPDATE ${tableSql('Codes')}
     SET "maxUses" = COALESCE("maxUses", 1),
@@ -797,16 +842,28 @@ async function initializeDatabase() {
 }
 
 async function getSetting(key, fallback = '') {
-  const row = await Setting.findOne({ where: { key, lang: 'global' } });
-  return row ? row.value : fallback;
+  const cacheKey = String(key);
+  const cached = cacheRead(settingCache, cacheKey, SETTING_CACHE_TTL_MS);
+  if (cached) return cached.exists ? cached.value : fallback;
+  const row = await Setting.findOne({ where: { key: cacheKey, lang: 'global' }, attributes: ['value'] });
+  if (!row) {
+    settingCache.set(cacheKey, { exists: false, value: '', at: Date.now() });
+    return fallback;
+  }
+  const value = String(row.value ?? '');
+  settingCache.set(cacheKey, { exists: true, value, at: Date.now() });
+  return value;
 }
 
 async function setSetting(key, value) {
+  const cacheKey = String(key);
+  const stringValue = String(value);
   const [row] = await Setting.findOrCreate({
-    where: { key, lang: 'global' },
-    defaults: { value: String(value) }
+    where: { key: cacheKey, lang: 'global' },
+    defaults: { value: stringValue }
   });
-  if (row.value !== String(value)) await row.update({ value: String(value) });
+  if (row.value !== stringValue) await row.update({ value: stringValue });
+  settingCache.set(cacheKey, { exists: true, value: stringValue, at: Date.now() });
   return row;
 }
 
@@ -822,18 +879,31 @@ async function getSuperQiNumber() {
 
 
 async function getSecureSetting(key, fallback = '') {
-  const row = await SecureSetting.findByPk(key);
-  if (!row) return fallback;
+  const cacheKey = String(key);
+  const cached = cacheRead(secureSettingCache, cacheKey, SECURE_SETTING_CACHE_TTL_MS);
+  if (cached) return cached.exists ? cached.value : fallback;
+  const row = await SecureSetting.findByPk(cacheKey, { attributes: ['value'] });
+  if (!row) {
+    secureSettingCache.set(cacheKey, { exists: false, value: '', at: Date.now() });
+    return fallback;
+  }
   try {
     const payload = decryptPayload(row.value, null);
-    return String(payload?.value ?? fallback);
-  } catch { return fallback; }
+    const value = String(payload?.value ?? fallback);
+    secureSettingCache.set(cacheKey, { exists: true, value, at: Date.now() });
+    return value;
+  } catch {
+    return fallback;
+  }
 }
 
 async function setSecureSetting(key, value) {
-  const encrypted = encryptPayload({ value: String(value || '') });
-  const [row] = await SecureSetting.findOrCreate({ where: { key }, defaults: { value: encrypted } });
+  const cacheKey = String(key);
+  const stringValue = String(value || '');
+  const encrypted = encryptPayload({ value: stringValue });
+  const [row] = await SecureSetting.findOrCreate({ where: { key: cacheKey }, defaults: { value: encrypted } });
   if (row.value !== encrypted) await row.update({ value: encrypted });
+  secureSettingCache.set(cacheKey, { exists: true, value: stringValue, at: Date.now() });
   return row;
 }
 

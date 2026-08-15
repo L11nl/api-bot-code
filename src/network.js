@@ -20,9 +20,33 @@ const {
 } = require('./db');
 const { encryptPayload } = require('./cryptoStore');
 const { inventoryFingerprint, escapeHtml } = require('./utils');
-const { getProductStock, fulfillOrder } = require('./services/orders');
+const { getProductStock, getProductStocksMap, fulfillOrder } = require('./services/orders');
 const binancePay = require('./payments/binancePay');
 const ledger = require('./services/networkLedger');
+
+// Runtime caches for read-heavy network data. They cut repeated HTTP/DB work
+// from every button press while keeping writes authoritative.
+const CATALOG_CACHE_TTL_MS = Math.max(3000, Number(process.env.NETWORK_CATALOG_CACHE_TTL_MS || 12000));
+const SHARED_METHODS_CACHE_TTL_MS = Math.max(3000, Number(process.env.NETWORK_SHARED_METHODS_CACHE_TTL_MS || 12000));
+const SHARED_DISCOVERY_TTL_MS = Math.max(10000, Number(process.env.NETWORK_SHARED_DISCOVERY_TTL_MS || 30000));
+let catalogSyncCache = { at: 0, products: null };
+let catalogSyncPromise = null;
+let sharedMethodsCache = { at: 0, data: null };
+let sharedDiscoveryAt = 0;
+let sharedDiscoveryPromise = null;
+let fallbackPaymentsCache = { at: 0, data: null };
+let publicPaymentProfileHash = '';
+let publicPaymentProfileSyncedAt = 0;
+let masterCatalogSnapshotCache = { at: 0, products: null };
+const authClientCache = new Map();
+const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
+
+function invalidateSharedMethodsCache() { sharedMethodsCache = { at: 0, data: null }; }
+function invalidateCatalogCache() {
+  catalogSyncCache = { at: 0, products: null };
+  masterCatalogSnapshotCache = { at: 0, products: null };
+}
+
 
 function role() { return config.network.role; }
 function isClient() { return role() === 'client'; }
@@ -64,14 +88,16 @@ function clientHeaders() {
   };
 }
 
-async function clientRequest(method, path, data) {
+async function clientRequest(method, path, data, options = {}) {
   if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  const normalizedMethod = String(method || 'get').toLowerCase();
+  const timeout = Number(options.timeout || (normalizedMethod === 'get' ? 7000 : 12000));
   const response = await axios({
-    method,
+    method: normalizedMethod,
     url: `${config.network.apiUrl}${path}`,
     data,
     headers: clientHeaders(),
-    timeout: 20000,
+    timeout,
     validateStatus: status => status >= 200 && status < 500
   });
   if (response.status >= 400 || response.data?.ok === false) {
@@ -88,7 +114,11 @@ async function authenticateRequest(req) {
   if (!apiEnabled) return null;
   const key = String(req.headers['x-store-api-key'] || '').trim();
   if (!key) return null;
-  const row = await NetworkClient.findOne({ where: { apiKeyHash: hashKey(key), isActive: true } });
+  const digest = hashKey(key);
+  const cached = authClientCache.get(digest);
+  if (cached && Date.now() - cached.at < AUTH_CLIENT_CACHE_TTL_MS) return cached.client;
+  const row = await NetworkClient.findOne({ where: { apiKeyHash: digest, isActive: true } });
+  if (row) authClientCache.set(digest, { at: Date.now(), client: row });
   return row || null;
 }
 
@@ -117,27 +147,30 @@ async function createClient({ name, ownerTelegramId, settlementCurrency = 'USD' 
 }
 
 async function catalogSnapshot() {
-  const products = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-  const output = [];
-  for (const product of products) {
-    output.push({
-      networkProductId: product.networkProductId,
-      nameAr: product.nameAr,
-      nameEn: product.nameEn,
-      price: Number(product.price),
-      category: product.category,
-      type: product.type,
-      description: product.description || {},
-      image: product.image || null,
-      isActive: Boolean(product.isActive),
-      sharedLimit: Number(product.sharedLimit || 1),
-      deliveryMode: product.deliveryMode,
-      sortOrder: Number(product.sortOrder || 0),
-      stock: await getProductStock(product.id),
-      networkOwnerShopId: product.networkOwnerShopId || 'master'
-    });
+  if (masterCatalogSnapshotCache.products && Date.now() - masterCatalogSnapshotCache.at < 5000) {
+    return masterCatalogSnapshotCache.products;
   }
-  return output;
+  const products = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
+  const sharedProducts = products.filter(product => String(product.type || '') !== 'service');
+  const stocks = await getProductStocksMap(sharedProducts);
+  const snapshot = sharedProducts.map(product => ({
+    networkProductId: product.networkProductId,
+    nameAr: product.nameAr,
+    nameEn: product.nameEn,
+    price: Number(product.price),
+    category: product.category,
+    type: product.type,
+    description: product.description || {},
+    image: product.image || null,
+    isActive: Boolean(product.isActive),
+    sharedLimit: Number(product.sharedLimit || 1),
+    deliveryMode: product.deliveryMode,
+    sortOrder: Number(product.sortOrder || 0),
+    stock: Number(stocks.get(Number(product.id)) || 0),
+    networkOwnerShopId: product.networkOwnerShopId || 'master'
+  }));
+  masterCatalogSnapshotCache = { at: Date.now(), products: snapshot };
+  return snapshot;
 }
 
 async function productStockProtection(merchantId, productOwnerShopId = 'master') {
@@ -159,13 +192,12 @@ async function productStockProtection(merchantId, productOwnerShopId = 'master')
   };
 }
 
-async function syncCatalogToLocal() {
+async function syncCatalogToLocalNow() {
   if (!enabledClient()) return null;
   const thisShopId = String(config.network.shopId || '');
 
-  // Service products are strictly local to the bot that created them.
-  // Migrate any service created by this shop in an older version from
-  // network-managed to local before syncing the shared catalog.
+  // Service products are local-only. This compatibility pass is small and only
+  // updates legacy rows when their ownership flags are actually wrong.
   const localServices = await Merchant.findAll({ where: { type: 'service' } });
   for (const service of localServices) {
     const owner = String(service.networkOwnerShopId || '').trim();
@@ -179,87 +211,108 @@ async function syncCatalogToLocal() {
         });
       }
     } else if (service.isActive) {
-      // A legacy service copied from another bot must never be visible here.
       await service.update({ isActive: false });
     }
   }
 
   const data = await clientRequest('get', '/api/v1/catalog');
-  const seen = new Set();
-  for (const remote of data.products || []) {
-    // Defense in depth: shared catalog must never contain service products.
-    if (String(remote.type || '') === 'service') continue;
-    seen.add(remote.networkProductId);
-    let product = await Merchant.findOne({ where: { networkProductId: remote.networkProductId } });
-    const values = {
-      nameAr: remote.nameAr,
-      nameEn: remote.nameEn,
-      price: Number(remote.price),
-      category: remote.category || 'general',
-      type: remote.type || 'free',
-      description: remote.description || {},
-      image: remote.image || null,
-      isActive: Boolean(remote.isActive),
-      sharedLimit: Number(remote.sharedLimit || 1),
-      deliveryMode: remote.deliveryMode || 'instant',
-      sortOrder: Number(remote.sortOrder || 0),
-      networkProductId: remote.networkProductId,
-      networkManaged: true,
-      networkOwnerShopId: remote.networkOwnerShopId || null,
-      networkStock: Number(remote.stock || 0)
-    };
-    if (!product) product = await Merchant.create(values);
-    else await product.update(values);
-    product._networkStock = Number(remote.stock || 0);
+  const remoteProducts = (data.products || []).filter(remote => String(remote.type || '') !== 'service');
+  const values = remoteProducts.map(remote => ({
+    nameAr: remote.nameAr,
+    nameEn: remote.nameEn,
+    price: Number(remote.price),
+    category: remote.category || 'general',
+    type: remote.type || 'free',
+    description: remote.description || {},
+    image: remote.image || null,
+    isActive: Boolean(remote.isActive),
+    sharedLimit: Number(remote.sharedLimit || 1),
+    deliveryMode: remote.deliveryMode || 'instant',
+    sortOrder: Number(remote.sortOrder || 0),
+    networkProductId: remote.networkProductId,
+    networkManaged: true,
+    networkOwnerShopId: remote.networkOwnerShopId || null,
+    networkStock: Number(remote.stock || 0)
+  })).filter(row => row.networkProductId);
+
+  // One PostgreSQL upsert replaces N findOne + N update queries.
+  if (values.length) {
+    await Merchant.bulkCreate(values, {
+      updateOnDuplicate: [
+        'nameAr', 'nameEn', 'price', 'category', 'type', 'description', 'image',
+        'isActive', 'sharedLimit', 'deliveryMode', 'sortOrder', 'networkManaged',
+        'networkOwnerShopId', 'networkStock'
+      ]
+    });
   }
-  const stale = await Merchant.findAll({ where: { networkManaged: true } });
-  for (const product of stale) {
-    if (seen.has(product.networkProductId)) continue;
-    if (String(product.type || '') === 'service') {
-      const owner = String(product.networkOwnerShopId || '').trim();
-      if (!owner || owner === thisShopId) {
-        await product.update({
-          networkManaged: false,
-          networkOwnerShopId: thisShopId,
-          isActive: true,
-          ownerNote: 'Local service'
-        });
-      } else {
-        await product.update({ isActive: false });
-      }
-      continue;
-    }
-    await product.update({ isActive: false });
-  }
+
+  const seen = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
+  const { Op } = require('sequelize');
+  const staleWhere = { networkManaged: true, type: { [Op.ne]: 'service' } };
+  if (seen.length) staleWhere.networkProductId = { [Op.notIn]: seen };
+  await Merchant.update({ isActive: false }, { where: staleWhere });
   return data.products || [];
 }
 
+async function syncCatalogToLocal(options = {}) {
+  if (!enabledClient()) return null;
+  const force = options === true || Boolean(options?.force);
+  const now = Date.now();
+  if (!force && catalogSyncCache.products && now - catalogSyncCache.at < CATALOG_CACHE_TTL_MS) {
+    return catalogSyncCache.products;
+  }
+  if (catalogSyncPromise) return catalogSyncPromise;
+  catalogSyncPromise = syncCatalogToLocalNow()
+    .then(products => {
+      catalogSyncCache = { at: Date.now(), products: Array.isArray(products) ? products : [] };
+      return catalogSyncCache.products;
+    })
+    .catch(error => {
+      // If the master has a short hiccup, keep the last good catalog instead of
+      // making the customer's button wait/fail.
+      if (catalogSyncCache.products) return catalogSyncCache.products;
+      throw error;
+    })
+    .finally(() => { catalogSyncPromise = null; });
+  return catalogSyncPromise;
+}
+
 async function createRemoteProduct(payload) {
-  return clientRequest('post', '/api/v1/products', payload);
+  const result = await clientRequest('post', '/api/v1/products', payload);
+  invalidateCatalogCache();
+  return result;
 }
 
 async function updateRemoteProduct(networkProductId, payload) {
-  return clientRequest('patch', `/api/v1/products/${encodeURIComponent(networkProductId)}`, payload);
+  const result = await clientRequest('patch', `/api/v1/products/${encodeURIComponent(networkProductId)}`, payload);
+  invalidateCatalogCache();
+  return result;
 }
 
 async function deleteRemoteProduct(networkProductId) {
-  return clientRequest('delete', `/api/v1/products/${encodeURIComponent(networkProductId)}`);
+  const result = await clientRequest('delete', `/api/v1/products/${encodeURIComponent(networkProductId)}`);
+  invalidateCatalogCache();
+  return result;
 }
 
 async function addRemoteInventory(networkProductId, items, options = {}) {
-  return clientRequest('post', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory`, {
+  const result = await clientRequest('post', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory`, {
     items,
     suppressNotification: Boolean(options.suppressNotification)
   });
+  invalidateCatalogCache();
+  return result;
 }
 
 async function fulfillRemote({ networkProductId, quantity, localOrderId, customerId }) {
-  return clientRequest('post', '/api/v1/fulfill', {
+  const result = await clientRequest('post', '/api/v1/fulfill', {
     networkProductId,
     quantity,
     localOrderId,
     customerId
   });
+  invalidateCatalogCache();
+  return result;
 }
 
 async function lookupRemoteDelivery(deliveryId) {
@@ -268,7 +321,18 @@ async function lookupRemoteDelivery(deliveryId) {
 
 async function fallbackPayments() {
   if (!enabledClient()) return { methods: [] };
-  return clientRequest('get', '/api/v1/payment-options');
+  const now = Date.now();
+  if (fallbackPaymentsCache.data && now - fallbackPaymentsCache.at < SHARED_METHODS_CACHE_TTL_MS) {
+    return fallbackPaymentsCache.data;
+  }
+  try {
+    const data = await clientRequest('get', '/api/v1/payment-options');
+    fallbackPaymentsCache = { at: Date.now(), data };
+    return data;
+  } catch (error) {
+    if (fallbackPaymentsCache.data) return fallbackPaymentsCache.data;
+    throw error;
+  }
 }
 
 async function localPublicBinanceProfile() {
@@ -282,7 +346,14 @@ async function syncPublicPaymentProfile() {
   const profile = await localPublicBinanceProfile();
   if (isMaster()) return { shopId: 'master', ...profile };
   if (!enabledClient()) return { shopId: localShopId(), ...profile };
-  return clientRequest('post', '/api/v1/shop-profile', profile);
+  const hash = crypto.createHash('sha256').update(JSON.stringify(profile)).digest('hex');
+  if (hash === publicPaymentProfileHash && Date.now() - publicPaymentProfileSyncedAt < 300000) {
+    return { shopId: localShopId(), ...profile, cached: true };
+  }
+  const result = await clientRequest('post', '/api/v1/shop-profile', profile);
+  publicPaymentProfileHash = hash;
+  publicPaymentProfileSyncedAt = Date.now();
+  return result;
 }
 
 async function paymentProfileForShop(shopIdRaw) {
@@ -380,6 +451,7 @@ async function upsertSharedPaymentMethod(payload) {
       defaults: { id, ownerShopId, ownerLocalMethodId: localId, ...body }
     });
     await row.update({ ownerShopId, ownerLocalMethodId: localId, ...body });
+    invalidateSharedMethodsCache();
     return { method: row.toJSON() };
   }
   if (!enabledClient()) return { method: null };
@@ -415,15 +487,20 @@ async function syncSharedPaymentMethodsSnapshot(methods = []) {
     const where = { ownerShopId };
     if (seen.length) where.id = { [require('sequelize').Op.notIn]: seen };
     await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
+    invalidateSharedMethodsCache();
     return { synced: normalized.length };
   }
   if (!enabledClient()) return { synced: 0 };
-  return clientRequest('post', '/api/v1/shared-payment-methods/sync', { methods: normalized });
+  const result = await clientRequest('post', '/api/v1/shared-payment-methods/sync', { methods: normalized });
+  invalidateSharedMethodsCache();
+  return result;
 }
 
-async function discoverSharedPaymentMethodsFromClientSchemas() {
+
+async function discoverSharedPaymentMethodsFromClientSchemasNow() {
   if (!isMaster()) return;
   const clients = await NetworkClient.findAll({ where: { isActive: true }, attributes: ['shopId'] });
+  const { Op } = require('sequelize');
   for (const client of clients) {
     const ownerShopId = String(client.shopId);
     const schema = clientDatabaseSchema(ownerShopId);
@@ -435,11 +512,10 @@ async function discoverSharedPaymentMethodsFromClientSchemas() {
         ORDER BY "id" ASC
       `);
     } catch (error) {
-      // Some partners may use another database/schema. In that case their
-      // normal API snapshot/per-method sync remains the source of truth.
       continue;
     }
 
+    const values = [];
     const seenIds = [];
     for (const method of rows || []) {
       const localId = Number(method.id || 0);
@@ -449,7 +525,8 @@ async function discoverSharedPaymentMethodsFromClientSchemas() {
       if (!nameAr || !paymentNumber) continue;
       const id = sharedPaymentMethodId(ownerShopId, localId);
       seenIds.push(id);
-      const values = {
+      values.push({
+        id,
         ownerShopId,
         ownerLocalMethodId: localId,
         nameAr,
@@ -461,27 +538,67 @@ async function discoverSharedPaymentMethodsFromClientSchemas() {
         ratePerUsd: Number(method.ratePerUsd || 1),
         minimumTransferAmount: normalizeMinimumTransferAmount(method.minimumTransferAmount, method.settlementCurrency),
         isActive: method.isActive !== false
-      };
-      const [row] = await NetworkSharedPaymentMethod.findOrCreate({ where: { id }, defaults: { id, ...values } });
-      await row.update(values);
+      });
     }
 
-    // Because this SELECT succeeded, this schema is authoritative for this
-    // partner. Deactivate registry rows that were deleted from that bot.
+    if (values.length) {
+      await NetworkSharedPaymentMethod.bulkCreate(values, {
+        updateOnDuplicate: [
+          'ownerShopId', 'ownerLocalMethodId', 'nameAr', 'nameEn', 'paymentNumber',
+          'iconCustomEmojiId', 'iconAlt', 'settlementCurrency', 'ratePerUsd',
+          'minimumTransferAmount', 'isActive'
+        ]
+      });
+    }
+
     const where = { ownerShopId };
-    if (seenIds.length) where.id = { [require('sequelize').Op.notIn]: seenIds };
+    if (seenIds.length) where.id = { [Op.notIn]: seenIds };
     await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
   }
 }
 
+async function discoverSharedPaymentMethodsFromClientSchemas(options = {}) {
+  if (!isMaster()) return;
+  const force = options === true || Boolean(options?.force);
+  if (!force && Date.now() - sharedDiscoveryAt < SHARED_DISCOVERY_TTL_MS) return;
+  if (sharedDiscoveryPromise) return sharedDiscoveryPromise;
+  sharedDiscoveryPromise = discoverSharedPaymentMethodsFromClientSchemasNow()
+    .then(() => {
+      sharedDiscoveryAt = Date.now();
+      invalidateSharedMethodsCache();
+    })
+    .finally(() => { sharedDiscoveryPromise = null; });
+  return sharedDiscoveryPromise;
+}
+
+async function readMasterSharedPaymentMethods() {
+  const now = Date.now();
+  if (sharedMethodsCache.data && now - sharedMethodsCache.at < SHARED_METHODS_CACHE_TTL_MS) return sharedMethodsCache.data;
+  const rows = await NetworkSharedPaymentMethod.findAll({ where: { isActive: true }, order: [['settlementCurrency', 'ASC'], ['createdAt', 'ASC']] });
+  const methods = await Promise.all(rows.map(async row => ({ ...row.toJSON(), ownerShopName: await ledger.getShopName(row.ownerShopId) })));
+  const data = { methods };
+  sharedMethodsCache = { at: Date.now(), data };
+  return data;
+}
+
 async function listSharedPaymentMethods() {
   if (isMaster()) {
-    await discoverSharedPaymentMethodsFromClientSchemas();
-    const rows = await NetworkSharedPaymentMethod.findAll({ where: { isActive: true }, order: [['settlementCurrency', 'ASC'], ['createdAt', 'ASC']] });
-    return { methods: await Promise.all(rows.map(async row => ({ ...row.toJSON(), ownerShopName: await ledger.getShopName(row.ownerShopId) }))) };
+    // Discovery is a fallback repair mechanism, not a reason to hold a customer
+    // button. Refresh it in the background and serve the registry immediately.
+    discoverSharedPaymentMethodsFromClientSchemas().catch(error => console.error('Shared payment discovery:', error.message));
+    return readMasterSharedPaymentMethods();
   }
   if (!enabledClient()) return { methods: [] };
-  return clientRequest('get', '/api/v1/shared-payment-methods');
+  const now = Date.now();
+  if (sharedMethodsCache.data && now - sharedMethodsCache.at < SHARED_METHODS_CACHE_TTL_MS) return sharedMethodsCache.data;
+  try {
+    const data = await clientRequest('get', '/api/v1/shared-payment-methods');
+    sharedMethodsCache = { at: Date.now(), data };
+    return data;
+  } catch (error) {
+    if (sharedMethodsCache.data) return sharedMethodsCache.data;
+    throw error;
+  }
 }
 
 async function createSharedPaymentRequest(payload) {
@@ -849,6 +966,7 @@ function installMasterRoutes(app, getBot) {
       actorName: client.name,
       payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
     });
+    invalidateCatalogCache();
     return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) }, eventId: Number(event.id) };
   }));
 
@@ -872,6 +990,7 @@ function installMasterRoutes(app, getBot) {
       throw new Error(`STRUCTURE_LOCKED_BY_EXTERNAL_STOCK:${protection.externalAvailable}`);
     }
     await product.update(changes);
+    invalidateCatalogCache();
     return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) } };
   }));
 
@@ -882,6 +1001,7 @@ function installMasterRoutes(app, getBot) {
     const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
     if (protection.externalAvailable > 0) throw new Error(`EXTERNAL_STOCK_EXISTS:${protection.externalAvailable}`);
     await product.update({ isActive: false });
+    invalidateCatalogCache();
     return { deleted: true };
   }));
 
@@ -890,15 +1010,26 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     // Any active partner can contribute stock to an existing shared product.
     // Product metadata still belongs to the original product owner.
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    let added = 0;
-    for (const payload of items.slice(0, 1000)) {
+    const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 1000) : [];
+    const preparedByFingerprint = new Map();
+    for (const payload of items) {
       const fingerprint = inventoryFingerprint(product.type, payload);
-      const duplicate = await Code.findOne({
-        where: { merchantId: product.id, fingerprint }
-      });
-      if (duplicate) continue;
-      await Code.create({
+      if (!preparedByFingerprint.has(fingerprint)) preparedByFingerprint.set(fingerprint, payload);
+    }
+    const fingerprints = [...preparedByFingerprint.keys()];
+    const { Op } = require('sequelize');
+    const existingRows = fingerprints.length
+      ? await Code.findAll({
+          where: { merchantId: product.id, fingerprint: { [Op.in]: fingerprints } },
+          attributes: ['fingerprint'],
+          raw: true
+        })
+      : [];
+    const existing = new Set(existingRows.map(row => String(row.fingerprint || '')));
+    const newRows = [];
+    for (const [fingerprint, payload] of preparedByFingerprint.entries()) {
+      if (existing.has(fingerprint)) continue;
+      newRows.push({
         value: encryptPayload(payload),
         extra: null,
         merchantId: product.id,
@@ -910,8 +1041,9 @@ function installMasterRoutes(app, getBot) {
         stockOwnerShopId: client.shopId,
         contributionPriceUsd: Number(product.price || 0)
       });
-      added += 1;
     }
+    if (newRows.length) await Code.bulkCreate(newRows);
+    const added = newRows.length;
     let eventId = null;
     if (added > 0 && !Boolean(req.body?.suppressNotification)) {
       const event = await ledger.publishNotificationEvent({
@@ -924,6 +1056,7 @@ function installMasterRoutes(app, getBot) {
       });
       eventId = Number(event.id);
     }
+    if (added > 0) invalidateCatalogCache();
     return { added, stock: await getProductStock(product.id), sourceShopId: client.shopId, eventId };
   }));
 
@@ -957,6 +1090,7 @@ function installMasterRoutes(app, getBot) {
       }
     });
     const result = await fulfillOrder(order.id, { paymentRef: remoteRef, sourceShopId: client.shopId });
+    invalidateCatalogCache();
     const deliveries = [];
     for (const delivery of result.deliveries || []) {
       deliveries.push({
@@ -982,9 +1116,8 @@ function installMasterRoutes(app, getBot) {
   }));
 
   app.get('/api/v1/shared-payment-methods', (req, res) => route(req, res, async () => {
-    await discoverSharedPaymentMethodsFromClientSchemas();
-    const rows = await NetworkSharedPaymentMethod.findAll({ where: { isActive: true }, order: [['settlementCurrency','ASC'], ['createdAt','ASC']] });
-    return { methods: await Promise.all(rows.map(async row => ({ ...row.toJSON(), ownerShopName: await ledger.getShopName(row.ownerShopId) }))) };
+    discoverSharedPaymentMethodsFromClientSchemas().catch(error => console.error('Shared payment discovery:', error.message));
+    return readMasterSharedPaymentMethods();
   }));
 
   app.post('/api/v1/shared-payment-methods/sync', (req, res) => route(req, res, async client => {
@@ -1020,6 +1153,7 @@ function installMasterRoutes(app, getBot) {
     if (seenIds.length) where.id = { [require('sequelize').Op.notIn]: seenIds };
     await NetworkSharedPaymentMethod.update({ isActive: false }, { where });
 
+    invalidateSharedMethodsCache();
     return { synced };
   }));
 
