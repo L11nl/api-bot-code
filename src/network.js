@@ -18,7 +18,7 @@ const {
   getSuperQiNumber,
   getSetting
 } = require('./db');
-const { encryptPayload } = require('./cryptoStore');
+const { encryptPayload, decryptPayload } = require('./cryptoStore');
 const { inventoryFingerprint, escapeHtml } = require('./utils');
 const { getProductStock, getProductStocksMap, fulfillOrder } = require('./services/orders');
 const binancePay = require('./payments/binancePay');
@@ -899,6 +899,42 @@ async function notifySettlement(bot, client, row, summary, activity = 'payment')
   for (const adminId of config.admins) bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
 }
 
+async function repairLegacyFreeFragmentsNetwork(product, rawText, ownerShopId) {
+  if (String(product?.type || '').toLowerCase() !== 'free') return 0;
+  const fragments = String(rawText || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(line => String(line || '').trim())
+    .filter(Boolean);
+  if (fragments.length < 2) return 0;
+  const candidates = await Code.findAll({
+    where: { merchantId: product.id, isUsed: false, usedCount: 0, maxUses: 1, stockOwnerShopId: String(ownerShopId || '') },
+    order: [['id', 'ASC']]
+  });
+  const buckets = new Map();
+  for (const row of candidates) {
+    let payload;
+    try { payload = decryptPayload(row.value, row.extra); } catch { continue; }
+    const legacyRaw = String(payload?.raw || payload?.extra || '').replace(/\r\n/g, '\n').trim();
+    if (!legacyRaw || legacyRaw.includes('\n')) continue;
+    if (!buckets.has(legacyRaw)) buckets.set(legacyRaw, []);
+    buckets.get(legacyRaw).push(row.id);
+  }
+  const ids = [];
+  const usedPerFragment = new Map();
+  for (const fragment of fragments) {
+    const rows = buckets.get(fragment) || [];
+    const used = usedPerFragment.get(fragment) || 0;
+    if (used >= rows.length) return 0;
+    ids.push(rows[used]);
+    usedPerFragment.set(fragment, used + 1);
+  }
+  if (ids.length < 2) return 0;
+  const { Op } = require('sequelize');
+  await Code.destroy({ where: { id: { [Op.in]: ids } } });
+  return ids.length;
+}
+
 function installMasterRoutes(app, getBot) {
   const route = async (req, res, handler) => {
     try {
@@ -1010,7 +1046,17 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     // Any active partner can contribute stock to an existing shared product.
     // Product metadata still belongs to the original product owner.
-    const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 1000) : [];
+    let items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 1000) : [];
+    if (String(product.type || '').toLowerCase() === 'free' && items.length > 1) {
+      throw new Error('FREE_FORM_REQUIRES_SINGLE_MESSAGE');
+    }
+    if (String(product.type || '').toLowerCase() === 'free' && items.length === 1) {
+      const raw = String(items[0]?.raw || items[0]?.extra || '').replace(/\r\n/g, '\n').trim();
+      items = raw ? [{ ...items[0], raw, extra: '' }] : [];
+    }
+    const repairedLegacyFragments = (String(product.type || '').toLowerCase() === 'free' && items.length === 1)
+      ? await repairLegacyFreeFragmentsNetwork(product, items[0]?.raw || '', client.shopId)
+      : 0;
     const preparedByFingerprint = new Map();
     for (const payload of items) {
       const fingerprint = inventoryFingerprint(product.type, payload);
@@ -1057,7 +1103,7 @@ function installMasterRoutes(app, getBot) {
       eventId = Number(event.id);
     }
     if (added > 0) invalidateCatalogCache();
-    return { added, stock: await getProductStock(product.id), sourceShopId: client.shopId, eventId };
+    return { added, repairedLegacyFragments, stock: await getProductStock(product.id), sourceShopId: client.shopId, eventId };
   }));
 
   app.get('/api/v1/products/:networkProductId/contributors', (req, res) => route(req, res, async () => {

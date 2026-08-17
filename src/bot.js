@@ -59,7 +59,7 @@ const {
   claimReferralGift
 } = require('./services/referrals');
 const binancePay = require('./payments/binancePay');
-const { encryptPayload } = require('./cryptoStore');
+const { encryptPayload, decryptPayload } = require('./cryptoStore');
 const { translateArToEn } = require('./translator');
 const network = require('./network');
 const networkLedger = require('./services/networkLedger');
@@ -2635,6 +2635,45 @@ async function handleTopupStart(query, user, methodToken) {
   return bot.sendMessage(user.id, topupAmountPrompt(inputContext, user.lang), { reply_markup: cancelInlineKeyboard() });
 }
 
+async function repairLegacyFreeFragmentsLocal(product, rawText, transaction) {
+  if (String(product?.type || '').toLowerCase() !== 'free') return 0;
+  const fragments = String(rawText || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(line => String(line || '').trim())
+    .filter(Boolean);
+  if (fragments.length < 2) return 0;
+
+  const ownerShopId = network.enabledClient() ? String(config.network.shopId || '') : 'master';
+  const candidates = await Code.findAll({
+    where: { merchantId: product.id, isUsed: false, usedCount: 0, maxUses: 1, stockOwnerShopId: ownerShopId },
+    order: [['id', 'ASC']],
+    transaction,
+    lock: transaction?.LOCK?.UPDATE
+  });
+  const buckets = new Map();
+  for (const row of candidates) {
+    let payload;
+    try { payload = decryptPayload(row.value, row.extra); } catch { continue; }
+    const legacyRaw = String(payload?.raw || payload?.extra || '').replace(/\r\n/g, '\n').trim();
+    if (!legacyRaw || legacyRaw.includes('\n')) continue;
+    if (!buckets.has(legacyRaw)) buckets.set(legacyRaw, []);
+    buckets.get(legacyRaw).push(row.id);
+  }
+  const ids = [];
+  const usedPerFragment = new Map();
+  for (const fragment of fragments) {
+    const rows = buckets.get(fragment) || [];
+    const used = usedPerFragment.get(fragment) || 0;
+    if (used >= rows.length) return 0;
+    ids.push(rows[used]);
+    usedPerFragment.set(fragment, used + 1);
+  }
+  if (ids.length < 2) return 0;
+  await Code.destroy({ where: { id: { [Op.in]: ids } }, transaction });
+  return ids.length;
+}
+
 async function finalizeNewProduct(user, data) {
   const imageValue = data.imageValue || '-';
   const productPayload = {
@@ -4094,7 +4133,19 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
 
-    const parsed = parseInventoryTextForProduct(text, product.type);
+    // Free-form inventory is ALWAYS one Telegram message = one inventory unit.
+    // Keep this guard here (in addition to utils.js) so future parser changes or
+    // partially-updated deployments can never split a multiline free product
+    // into separate rows again.
+    const normalizedStockText = String(text || '').replace(/\r\n/g, '\n').trim();
+    const parsed = String(product.type || '').toLowerCase() === 'free'
+      ? {
+          items: normalizedStockText
+            ? [{ email: '', password: '', twoFactor: '', code: '', extra: '', raw: normalizedStockText }]
+            : [],
+          errors: []
+        }
+      : parseInventoryTextForProduct(text, product.type);
     if (parsed.errors.length) {
       const details = parsed.errors.slice(0, 8).map(row =>
         `السطر ${row.line}: ${escapeHtml(row.error)}\n<code>${escapeHtml(row.value)}</code>`
@@ -4120,7 +4171,11 @@ async function handleStateMessage(msg, user, state) {
         product.networkStock = Number(remote.stock || 0);
         await product.save({ fields: ['networkStock'] });
         await clearState(user.id);
-        await bot.sendMessage(user.id, `✅ تمت إضافة ${remote.added} للمخزون المشترك.\nالمخزون العالمي الآن: ${remote.stock}`);
+        await bot.sendMessage(user.id, [
+          `✅ تمت إضافة ${remote.added} للمخزون المشترك.`,
+          Number(remote.repairedLegacyFragments || 0) > 0 ? `🧹 تم إصلاح ${remote.repairedLegacyFragments} أجزاء قديمة كانت محفوظة بالخطأ كأسطر منفصلة.` : '',
+          `المخزون العالمي الآن: ${remote.stock}`
+        ].filter(Boolean).join('\n'));
         if (Number(remote.added || 0) > 0 && product.isActive) {
           await bot.sendMessage(user.id, state.afterCreate
             ? '📢 تم نشر المنتج على شبكة البوتات، وكل بوت يطبق إعداد الإشعارات الخاص به.'
@@ -4136,6 +4191,9 @@ async function handleStateMessage(msg, user, state) {
     const maxUses = product.type === 'shared' ? Number(product.sharedLimit || 5) : 1;
     const transaction = await sequelize.transaction();
     try {
+      const repairedLegacyFragments = product.type === 'free'
+        ? await repairLegacyFreeFragmentsLocal(product, normalizedStockText, transaction)
+        : 0;
       const prepared = new Map();
       let duplicates = 0;
       for (const item of parsed.items) {
@@ -4187,6 +4245,7 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, [
         `✅ تمت إضافة: ${added}`,
         `♻️ المكرر الذي تم تجاهله: ${duplicates}`,
+        repairedLegacyFragments > 0 ? `🧹 تم إصلاح ${repairedLegacyFragments} أجزاء قديمة كانت محفوظة بالخطأ كأسطر منفصلة.` : '',
         privateDetails
       ].filter(Boolean).join('\n'));
 
@@ -5796,7 +5855,7 @@ async function handleAdminCallback(query, user, data) {
       '',
       stockPrompt(product),
       '',
-      'المكرر ينحذف تلقائياً. اكتب إغلاق للإلغاء.'
+      'في المنتج الحر، التكرار يعني نفس الرسالة كاملة فقط، مو الأسطر داخلها. اكتب إغلاق للإلغاء.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
 
