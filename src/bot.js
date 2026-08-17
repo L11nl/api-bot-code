@@ -593,15 +593,15 @@ function formatPaymentCurrencyAmount(amount, currency, lang = 'ar') {
 
 function minimumTopupLocalAmount(ratePerUsd, currency, minimumUsd = 0.01, explicitMinimumLocal = null) {
   const code = normalizePaymentCurrency(currency);
-  const explicit = Number(explicitMinimumLocal);
-  if (Number.isFinite(explicit) && explicit > 0) {
-    if (code === 'IQD') return Math.max(1, Math.ceil(explicit));
-    return Math.max(0.01, Math.ceil((explicit - 1e-9) * 100) / 100);
-  }
   const rate = Number(ratePerUsd || 1);
-  const raw = Math.max(0.01, Number(minimumUsd || 0.01)) * (Number.isFinite(rate) && rate > 0 ? rate : 1);
-  if (code === 'IQD') return Math.max(1, Math.ceil(raw));
-  return Math.max(0.01, Math.ceil((raw - 1e-9) * 100) / 100);
+  const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const usdFloorLocal = Math.max(0.01, Number(minimumUsd || 0.01)) * safeRate;
+  const explicit = Number(explicitMinimumLocal);
+  const requestedLocal = Number.isFinite(explicit) && explicit > 0
+    ? Math.max(usdFloorLocal, explicit)
+    : usdFloorLocal;
+  if (code === 'IQD') return Math.max(1, Math.ceil(requestedLocal));
+  return Math.max(0.01, Math.ceil((requestedLocal - 1e-9) * 100) / 100);
 }
 
 function minimumTransferForMethod(method) {
@@ -627,7 +627,7 @@ async function resolveTopupInputContext(methodToken) {
   }
   if (token === 'superqi') {
     const rate = Number(await getIqdRate());
-    return { currency: 'IQD', rate: Number.isFinite(rate) && rate > 0 ? rate : Number(config.iqdRate || 1500), minimumUsd: 0.01, methodType: 'superqi' };
+    return { currency: 'IQD', rate: Number.isFinite(rate) && rate > 0 ? rate : Number(config.iqdRate || 1500), minimumUsd: 1, methodType: 'superqi' };
   }
   if (token.startsWith('custom:')) {
     const id = Number(token.split(':')[1]);
@@ -637,7 +637,7 @@ async function resolveTopupInputContext(methodToken) {
     return {
       currency: normalizePaymentCurrency(local.currency),
       rate: Number(local.rate || 1),
-      minimumUsd: minimumTransferUsdForMethod(method),
+      minimumUsd: Math.max(1, minimumTransferUsdForMethod(method)),
       minimumLocal: minimumTransferForMethod(method),
       methodType: token,
       paymentMethodId: method.id,
@@ -654,7 +654,7 @@ async function resolveTopupInputContext(methodToken) {
     return {
       currency: normalizePaymentCurrency(local.currency),
       rate: Number(local.rate || 1),
-      minimumUsd: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : 0.01,
+      minimumUsd: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : Math.max(1, minimumTransferUsdForMethod(method)),
       minimumLocal: inheritedType === 'binance' ? Math.max(0.01, Number(config.binance.minAmount || 0.01)) : null,
       methodType: token,
       inheritedType,
@@ -671,7 +671,7 @@ async function resolveTopupInputContext(methodToken) {
     return {
       currency: normalizePaymentCurrency(local.currency),
       rate: Number(local.rate || 1),
-      minimumUsd: minimumTransferUsdForMethod(method),
+      minimumUsd: Math.max(1, minimumTransferUsdForMethod(method)),
       minimumLocal: minimumTransferForMethod(method),
       methodType: token,
       sharedPaymentMethodId: method.id,
@@ -690,16 +690,20 @@ function topupAmountPrompt(context, lang = 'ar') {
   const rate = Number(context?.rate || 1);
   const minimum = minimumTopupLocalAmount(rate, currency, context?.minimumUsd || 0.01, context?.minimumLocal);
   const minimumText = formatPaymentCurrencyAmount(minimum, currency, lang);
+  const methodType = String(context?.methodType || '');
+  const isBinance = methodType === 'binance' || methodType === 'network:binance';
 
   if (lang === 'en') {
-    if (currency === 'EGP') return `Send the top-up amount in Egyptian pounds (minimum ${minimumText}).`;
-    if (currency === 'IQD') return `Send the top-up amount in Iraqi dinars (minimum ${minimumText}).`;
-    return `Send the top-up amount in USD (minimum $${Number(minimum).toFixed(2)}).`;
+    if (currency === 'EGP') return `Send the top-up amount in Egyptian pounds (minimum: ${minimumText}).`;
+    if (currency === 'IQD') return `Send the top-up amount in Iraqi dinars (minimum: ${minimumText}).`;
+    if (isBinance) return `Send the Binance top-up amount (minimum: $${Number(minimum).toFixed(2)} USDT).`;
+    return `Send the top-up amount in USD (minimum: $${Number(minimum).toFixed(2)}).`;
   }
 
-  if (currency === 'EGP') return `أرسل مبلغ الشحن بالجنيه المصري (الحد الأدنى ${minimumText}):`;
-  if (currency === 'IQD') return `أرسل مبلغ الشحن بالدينار العراقي (الحد الأدنى ${minimumText}):`;
-  return `أرسل مبلغ الشحن بالدولار (يقبل أقل من $1، الحد الأدنى $${Number(minimum).toFixed(2)}):`;
+  if (currency === 'EGP') return `أرسل مبلغ الشحن بالجنيه المصري (الحد الأدنى: ${minimumText}):`;
+  if (currency === 'IQD') return `أرسل مبلغ الشحن بالدينار العراقي (الحد الأدنى: ${minimumText}):`;
+  if (isBinance) return `أرسل مبلغ الشحن عبر Binance (الحد الأدنى: $${Number(minimum).toFixed(2)} USDT):`;
+  return `أرسل مبلغ الشحن بالدولار (الحد الأدنى: $${Number(minimum).toFixed(2)}):`;
 }
 
 async function syncPaymentMethodToNetwork(method) {
@@ -1171,9 +1175,14 @@ function productButton(product, stock, lang, moneyContext) {
   const displayName = descriptionData.nameEmojiId && descriptionData.nameEmojiAlt
     ? String(name).replace(descriptionData.nameEmojiAlt, '').trim() || name
     : name;
-  const stockBadge = product.type === 'service' ? (lang === 'en' ? '⚙️ service' : '⚙️ خدمة') : `📦 ${stock}`;
+  // Unicode LTR isolates keep price and stock as separate visual blocks even inside Arabic RTL buttons.
+  const ltrIsolate = value => `⁦${String(value)}⁩`;
+  const priceBadge = `💰 ${ltrIsolate(customerMoneyCompact(product.price, moneyContext))}`;
+  const stockBadge = product.type === 'service'
+    ? (lang === 'en' ? '⚙️ service' : '⚙️ خدمة')
+    : `📦 ${ltrIsolate(stock)}`;
   const button = {
-    text: `${displayName} | ${customerMoneyCompact(product.price, moneyContext)} | ${stockBadge}`,
+    text: `${displayName} | ${priceBadge} | ${stockBadge}`,
     callback_data: `prod:${product.id}`,
     style: product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger')
   };
@@ -5886,7 +5895,7 @@ function stockPrompt(product) {
   if (product.type === 'service') {
     return '🛠 تنفيذ خدمة ما يحتاج مخزون. بعد الدفع يرسل الزبون البيانات المطلوبة، وبعدها توصلك أزرار تنفيذ الخدمة.';
   }
-  return `📥 أرسل محتوى المنتج الحر، كل سطر يعتبر قطعة مستقلة تُسلّم لزبون واحد.\nيقبل كتابة، رابط، كود، بيانات أو أي نص.\nمثال:\n<code>أي محتوى تريد تسليمه</code>`;
+  return `📥 <b>المنتج الحر — كل رسالة = قطعة واحدة</b>\n\nأرسل محتوى القطعة كامل برسالة واحدة، حتى لو كان من عدة أسطر مثل إيميل + باسورد + رمز مصادقة + رابط.\nالبوت يحفظ الرسالة كلها كمنتج واحد ويسلمها للزبون بنفس المحتوى.\n\nإذا تريد تضيف قطعة ثانية، أرسلها برسالة ثانية بعد إكمال إضافة الأولى.`;
 }
 
 async function showAdminProducts(chatId, page = 0) {
