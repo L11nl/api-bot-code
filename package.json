@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.5.2",
+  "version": "12.5.3",
   "private": true,
-  "description": "Telegram digital store v12.5.2: fixes RTL price/stock separation and enforces a $1-equivalent minimum for non-Binance wallet top-ups while Binance stays at $0.01.",
+  "description": "Telegram digital store v12.5.3: free-form inventory is enforced as one full multiline message per inventory unit, with whole-message duplicate detection.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
