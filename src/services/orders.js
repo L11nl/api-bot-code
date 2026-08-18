@@ -80,6 +80,79 @@ async function getProductStocksMap(products = []) {
   return result;
 }
 
+function normalizeProductFamilyName(name) {
+  const normalized = String(name || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+  if (!normalized) return '';
+
+  const stopWords = new Set([
+    'برو', 'premium', 'pro',
+    'شهري', 'شهريا', 'شهر', 'شهور', 'اشهر', 'سنوي', 'سنويا', 'سنه', 'سنوات',
+    'يوم', 'ايام', 'اسبوع', 'اسابيع',
+    'ضمان', 'حساب', 'مفعل', 'مفعله', 'مشترك', 'مشتركه', 'خدمه', 'اشتراك', 'اشتراكات',
+    'month', 'months', 'monthly', 'year', 'years', 'annual', 'annually', 'day', 'days',
+    'week', 'weeks', 'account', 'activated', 'shared', 'service', 'subscription', 'subscriptions',
+    'warranty', 'guarantee', 'usd', 'usdt', 'iqd', 'egp'
+  ]);
+
+  const rawTokens = normalized.split(/\s+/u).filter(Boolean);
+  const familyTokens = rawTokens.filter(token => {
+    if (stopWords.has(token)) return false;
+    if (/^\d+(?:[.,]\d+)?$/u.test(token)) return false;
+    if (/^\d+(?:m|mo|mon|month|months|y|yr|year|years|d|day|days)$/u.test(token)) return false;
+    if (/^\d+%$/u.test(token)) return false;
+    return true;
+  });
+
+  // Keep the meaningful part of the title. Two or three words are enough to
+  // keep multi-word brands such as "Cap Cut" together while stripping plan
+  // details such as duration, warranty and account type.
+  const selected = familyTokens.length ? familyTokens.slice(0, 3) : rawTokens.slice(0, 3);
+  return selected.join(' ');
+}
+
+function productRowSortKey(row) {
+  const product = row?.product || row || {};
+  const stock = Number(row?.stock ?? product.stock ?? 0);
+  const available = String(product.type || '') === 'service' || stock > 0;
+  const name = String(product.nameAr || product.nameEn || '');
+  return {
+    available,
+    family: normalizeProductFamilyName(name),
+    sortOrder: Number(product.sortOrder || 0),
+    id: Number(product.id || 0),
+    name
+  };
+}
+
+function sortProductStockRows(rows = []) {
+  return [...rows].sort((a, b) => {
+    const ka = productRowSortKey(a);
+    const kb = productRowSortKey(b);
+
+    // Products with real stock always stay above empty products.
+    if (ka.available !== kb.available) return ka.available ? -1 : 1;
+
+    // Similar product names stay next to each other (Gemini monthly, Gemini
+    // 3 months, Gemini 18 months, etc.).
+    const familyCompare = ka.family.localeCompare(kb.family, 'ar', { numeric: true, sensitivity: 'base' });
+    if (familyCompare !== 0) return familyCompare;
+
+    // Preserve the admin's original creation/order sequence inside a family.
+    if (ka.sortOrder !== kb.sortOrder) return ka.sortOrder - kb.sortOrder;
+    if (ka.id !== kb.id) return ka.id - kb.id;
+    return ka.name.localeCompare(kb.name, 'ar', { numeric: true, sensitivity: 'base' });
+  });
+}
+
 async function listActiveProducts() {
   try {
     const network = require('../network');
@@ -90,7 +163,8 @@ async function listActiveProducts() {
   const products = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder','ASC'], ['id','ASC']] });
   const visible = products.filter(productVisibleInCurrentShop);
   const stocks = await getProductStocksMap(visible);
-  return visible.map(product => ({ product, stock: Number(stocks.get(Number(product.id)) || 0) }));
+  const rows = visible.map(product => ({ product, stock: Number(stocks.get(Number(product.id)) || 0) }));
+  return sortProductStockRows(rows);
 }
 
 async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
@@ -178,7 +252,9 @@ async function fulfillOrder(orderId, options = {}) {
         networkProductId: product.networkProductId,
         quantity: order.quantity,
         localOrderId: order.id,
-        customerId: order.userId
+        customerId: order.userId,
+        retailUnitPriceUsd: Number(order.unitPrice || product.price || 0),
+        resellerPriceOverride: Number(product.localPriceOverrideUsd || 0) > Number(product.networkBasePriceUsd || 0) + 1e-9
       });
       const fresh = await PurchaseOrder.findByPk(order.id);
       fresh.status = 'completed';
@@ -279,13 +355,34 @@ async function fulfillOrder(orderId, options = {}) {
       const inventoryOwnerShopId = String(delivery.inventoryOwnerShopId || 'master');
       const retailUnitPriceUsd = Number(order.unitPrice || product.price || 0);
       const externalStock = inventoryOwnerShopId !== sellerShopId;
-      const split = externalStock
-        ? networkLedger.sellerCommissionSplit(retailUnitPriceUsd)
-        : { retailUsd: retailUnitPriceUsd, supplierUsd: retailUnitPriceUsd, commissionUsd: 0, commissionPercent: 0 };
+      const resellerPriceOverride = externalStock && Boolean(options.resellerPriceOverride);
+      let split;
+      if (resellerPriceOverride) {
+        // Reseller markup model: the stock owner keeps the exact value recorded
+        // when that inventory was contributed, and the selling bot keeps only
+        // the amount above it. The legacy 10% commission does not apply.
+        const supplierFloorUsd = Math.max(0, Number(delivery.contributionPriceUsd || 0));
+        const supplierUsd = Math.min(retailUnitPriceUsd, supplierFloorUsd);
+        const markupUsd = Math.max(0, retailUnitPriceUsd - supplierUsd);
+        split = {
+          retailUsd: retailUnitPriceUsd,
+          supplierUsd,
+          commissionUsd: 0,
+          commissionPercent: 0,
+          markupUsd,
+          priceOverride: true
+        };
+      } else {
+        split = externalStock
+          ? networkLedger.sellerCommissionSplit(retailUnitPriceUsd)
+          : { retailUsd: retailUnitPriceUsd, supplierUsd: retailUnitPriceUsd, commissionUsd: 0, commissionPercent: 0, markupUsd: 0, priceOverride: false };
+      }
 
       delivery.supplierValueUsd = Number(split.supplierUsd || 0);
       delivery.sellerCommissionUsd = Number(split.commissionUsd || 0);
       delivery.sellerCommissionPercent = Number(split.commissionPercent || 0);
+      delivery.sellerMarkupUsd = Number(split.markupUsd || 0);
+      delivery.resellerPriceOverride = Boolean(split.priceOverride);
 
       await DeliveryRecord.create({
         id: delivery.deliveryId,
@@ -321,7 +418,9 @@ async function fulfillOrder(orderId, options = {}) {
             retailUnitPriceUsd,
             supplierValueUsd: Number(split.supplierUsd),
             sellerCommissionUsd: Number(split.commissionUsd || 0),
-            sellerCommissionPercent: Number(split.commissionPercent || 0)
+            sellerCommissionPercent: Number(split.commissionPercent || 0),
+            sellerMarkupUsd: Number(split.markupUsd || 0),
+            resellerPriceOverride: Boolean(split.priceOverride)
           },
           transaction
         });
@@ -341,6 +440,26 @@ async function fulfillOrder(orderId, options = {}) {
             orderId: order.id,
             retailUnitPriceUsd,
             commissionPercent: Number(split.commissionPercent || 0)
+          },
+          transaction
+        });
+      }
+      if (externalStock && Boolean(split.priceOverride) && Number(split.markupUsd || 0) > 0) {
+        await networkLedger.recordObligation({
+          debtorShopId: sellerShopId,
+          creditorShopId: sellerShopId,
+          amountUsd: Number(split.markupUsd),
+          kind: 'sales_markup',
+          sourceRef: delivery.deliveryId,
+          networkProductId: product.networkProductId,
+          deliveryId: delivery.deliveryId,
+          sellerShopId,
+          stockOwnerShopId: inventoryOwnerShopId,
+          metadata: {
+            orderId: order.id,
+            retailUnitPriceUsd,
+            supplierValueUsd: Number(split.supplierUsd || 0),
+            markupUsd: Number(split.markupUsd || 0)
           },
           transaction
         });
@@ -550,6 +669,8 @@ module.exports = {
   getProductStock,
   getProductStocksMap,
   productVisibleInCurrentShop,
+  normalizeProductFamilyName,
+  sortProductStockRows,
   listActiveProducts,
   createOrder,
   createGiftOrder,

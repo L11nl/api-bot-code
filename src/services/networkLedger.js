@@ -472,6 +472,9 @@ async function accountsForShop(shopIdRaw) {
   const sellerCommissionEarnedUsd = Number(await NetworkLedgerEntry.sum('amountUsd', {
     where: { kind: 'sales_commission', sellerShopId: shopId }
   }) || 0);
+  const sellerMarkupEarnedUsd = Number(await NetworkLedgerEntry.sum('amountUsd', {
+    where: { kind: 'sales_markup', sellerShopId: shopId }
+  }) || 0);
   return {
     shopId,
     shopName: await getShopName(shopId),
@@ -479,6 +482,8 @@ async function accountsForShop(shopIdRaw) {
     pendingIncoming: await Promise.all(pendingIncoming.map(decorate)),
     pendingOutgoing: await Promise.all(pendingOutgoing.map(decorate)),
     sellerCommissionEarnedUsd: Number(sellerCommissionEarnedUsd.toFixed(2)),
+    sellerMarkupEarnedUsd: Number(sellerMarkupEarnedUsd.toFixed(2)),
+    sellerNetworkProfitUsd: Number((sellerCommissionEarnedUsd + sellerMarkupEarnedUsd).toFixed(2)),
     sellerCommissionPercent: Number(config.network.sellerCommissionPercent || 10),
     commerceStatus: await commerceStatusForShop(shopId)
   };
@@ -735,6 +740,13 @@ async function salesStatsForProduct(product) {
         sellerShopId: String(row.shopId)
       }
     });
+    const sellerMarkups = await NetworkLedgerEntry.sum('amountUsd', {
+      where: {
+        kind: 'sales_markup',
+        networkProductId: product.networkProductId,
+        sellerShopId: String(row.shopId)
+      }
+    });
     result.push({
       shopId: String(row.shopId),
       shopName: await getShopName(row.shopId),
@@ -743,7 +755,9 @@ async function salesStatsForProduct(product) {
       availableUnits: Number(row.availableUnits || 0),
       soldValueUsd: Number(supplierEarnings || 0),
       supplierEarningsUsd: Number(supplierEarnings || 0),
-      sellerCommissionUsd: Number(sellerCommissions || 0)
+      sellerCommissionUsd: Number(sellerCommissions || 0),
+      sellerMarkupUsd: Number(sellerMarkups || 0),
+      sellerNetworkProfitUsd: Number(sellerCommissions || 0) + Number(sellerMarkups || 0)
     });
   }
   const commissionRows = await NetworkLedgerEntry.findAll({
@@ -761,6 +775,7 @@ async function salesStatsForProduct(product) {
     const existing = result.find(item => String(item.shopId) === shopId);
     if (existing) {
       existing.sellerCommissionUsd = Number(row.commissionUsd || existing.sellerCommissionUsd || 0);
+      existing.sellerNetworkProfitUsd = Number(existing.sellerCommissionUsd || 0) + Number(existing.sellerMarkupUsd || 0);
     } else {
       result.push({
         shopId,
@@ -770,7 +785,41 @@ async function salesStatsForProduct(product) {
         availableUnits: 0,
         soldValueUsd: 0,
         supplierEarningsUsd: 0,
-        sellerCommissionUsd: Number(row.commissionUsd || 0)
+        sellerCommissionUsd: Number(row.commissionUsd || 0),
+        sellerMarkupUsd: 0,
+        sellerNetworkProfitUsd: Number(row.commissionUsd || 0)
+      });
+    }
+  }
+  const markupRows = await NetworkLedgerEntry.findAll({
+    attributes: [
+      'sellerShopId',
+      [sequelize.fn('SUM', sequelize.col('amountUsd')), 'markupUsd']
+    ],
+    where: { kind: 'sales_markup', networkProductId: product.networkProductId },
+    group: ['sellerShopId'],
+    raw: true
+  });
+  for (const row of markupRows || []) {
+    const shopId = String(row.sellerShopId || '');
+    if (!shopId) continue;
+    const markupUsd = Number(row.markupUsd || 0);
+    const existing = result.find(item => String(item.shopId) === shopId);
+    if (existing) {
+      existing.sellerMarkupUsd = markupUsd;
+      existing.sellerNetworkProfitUsd = Number(existing.sellerCommissionUsd || 0) + markupUsd;
+    } else {
+      result.push({
+        shopId,
+        shopName: await getShopName(shopId),
+        addedUnits: 0,
+        soldUnits: 0,
+        availableUnits: 0,
+        soldValueUsd: 0,
+        supplierEarningsUsd: 0,
+        sellerCommissionUsd: 0,
+        sellerMarkupUsd: markupUsd,
+        sellerNetworkProfitUsd: markupUsd
       });
     }
   }
