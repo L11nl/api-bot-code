@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.5.3",
+  "version": "12.6.0",
   "private": true,
-  "description": "Telegram digital store v12.5.3: free-form inventory is enforced as one full multiline message per inventory unit, with whole-message duplicate detection.",
+  "description": "Telegram digital store v12.6.0: per-bot reseller price overrides with owner-price floor and markup profit accounting.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
