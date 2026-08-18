@@ -1,12 +1,12 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.6.0",
+  "version": "12.7.0",
   "private": true,
-  "description": "Telegram digital store v12.6.0: per-bot reseller price overrides with owner-price floor and markup profit accounting.",
+  "description": "Telegram digital store v12.7.0: dynamic virtual-number sales via provider API with USD wallet billing and persistent SMS activations.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/payments/binancePay.js && node scripts/button-audit.js",
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/payments/binancePay.js && node scripts/button-audit.js",
     "button-audit": "node scripts/button-audit.js"
   },
   "engines": {
