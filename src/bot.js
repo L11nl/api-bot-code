@@ -467,11 +467,26 @@ function virtualNumberStatusLabel(status, lang = 'ar') {
     waiting_sms: ['بانتظار SMS', 'Waiting for SMS'],
     completed: ['مكتمل', 'Completed'],
     cancelled: ['ملغي', 'Cancelled'],
+    auto_cancelled: ['ملغي تلقائياً', 'Auto-cancelled'],
     provider_cancelled: ['ألغاه المزود', 'Cancelled by provider'],
     failed: ['فشل', 'Failed']
   };
   const pair = labels[String(status || '')] || [String(status || '—'), String(status || '—')];
   return lang === 'en' ? pair[1] : pair[0];
+}
+
+function canSeeVirtualProviderCost(user) {
+  return Boolean(
+    network.isMaster() &&
+    user?.id &&
+    config.virtualNumbers?.costViewerIds?.has?.(Number(user.id))
+  );
+}
+
+function virtualProviderCostText(providerCost, retail) {
+  const provider = Number(providerCost || 0);
+  const providerText = provider.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') || '0';
+  return `$${providerText} 👈🏻 $${Number(retail || 0).toFixed(2)}`;
 }
 
 const VIRTUAL_SERVICE_AR_NAMES = new Map([
@@ -491,13 +506,71 @@ const VIRTUAL_SERVICE_AR_NAMES = new Map([
   ['capcut', 'كاب كات'], ['gemini', 'جيميني'], ['signal', 'سيغنال'],
   ['protonmail', 'بروتون ميل'], ['proton', 'بروتون'], ['outlook', 'أوتلوك'],
   ['ebay', 'إيباي'], ['pinterest', 'بنترست'], ['reddit', 'ريديت'],
-  ['spotify', 'سبوتيفاي'], ['twitch', 'تويتش'], ['imo', 'إيمو']
+  ['spotify', 'سبوتيفاي'], ['twitch', 'تويتش'], ['imo', 'إيمو'],
+  ['any other', 'أي رقم']
 ]);
 
 const VIRTUAL_SERVICE_CODE_AR = new Map([
   ['wa', 'واتساب'], ['tg', 'تيليجرام'], ['fb', 'فيسبوك'], ['ig', 'إنستغرام'],
   ['go', 'جوجل'], ['gm', 'جيميل'], ['tw', 'تويتر'], ['ds', 'ديسكورد']
 ]);
+
+const VIRTUAL_POPULAR_SERVICE_GROUPS = [
+  ['google', 'gmail', 'youtube'],
+  ['telegram'],
+  ['whatsapp'],
+  ['netflix'],
+  ['instagram'],
+  ['facebook'],
+  ['tiktok'],
+  ['openai', 'chatgpt'],
+  ['apple'],
+  ['amazon'],
+  ['microsoft'],
+  ['snapchat'],
+  ['discord'],
+  ['paypal'],
+  ['twitter', 'x.com'],
+  ['uber']
+];
+
+function isAnyOtherVirtualService(service) {
+  const name = normalizeVirtualSearch(service?.name || '');
+  const code = String(service?.code || '').trim().toLowerCase();
+  return name === 'any other' || name.includes('any other') || code === 'ot';
+}
+
+function findAnyOtherVirtualService(services = []) {
+  return services.find(isAnyOtherVirtualService) || null;
+}
+
+function virtualServiceMatchesTokens(service, tokens = []) {
+  const name = normalizeVirtualSearch(service?.name || '');
+  const code = normalizeVirtualSearch(service?.code || '');
+  return tokens.some(token => {
+    const normalized = normalizeVirtualSearch(token);
+    return name === normalized || name.includes(normalized) || code === normalized;
+  });
+}
+
+function selectPopularVirtualServices(services = [], summary = []) {
+  const available = new Map(summary.map(row => [String(row.serviceCode), row]));
+  const used = new Set();
+  const out = [];
+  for (const tokens of VIRTUAL_POPULAR_SERVICE_GROUPS) {
+    const candidates = services.filter(service => !used.has(service.code) && available.has(String(service.code)) && virtualServiceMatchesTokens(service, tokens));
+    if (!candidates.length) continue;
+    candidates.sort((a, b) => {
+      const aa = available.get(String(a.code));
+      const bb = available.get(String(b.code));
+      return Number(aa?.retailPrice || Infinity) - Number(bb?.retailPrice || Infinity) || String(a.name).localeCompare(String(b.name), 'en');
+    });
+    const picked = candidates[0];
+    used.add(picked.code);
+    out.push({ ...picked, availabilitySummary: available.get(String(picked.code)) });
+  }
+  return out;
+}
 
 const virtualServiceArabicCache = new Map();
 let countryIsoLookupCache = null;
@@ -535,6 +608,7 @@ function trimVirtualLabel(value, max = 44) {
 
 async function virtualServiceDisplayName(service, lang = 'en') {
   const english = String(service?.name || service?.code || '').trim();
+  if (isAnyOtherVirtualService(service)) return lang === 'en' ? 'Any number' : 'أي رقم';
   if (lang === 'en' || looksArabic(english)) return trimVirtualLabel(english);
   const known = knownVirtualServiceArabic(service);
   if (known) return trimVirtualLabel(known);
@@ -600,6 +674,8 @@ function localizedVirtualCountry(countryName, lang = 'en') {
 
 async function searchVirtualServices(services, rawQuery) {
   const original = normalizeVirtualSearch(rawQuery);
+  const anyAliases = new Set(['any number', 'any other', 'اي رقم', 'أي رقم', 'اي خدمه', 'أي خدمة'].map(normalizeVirtualSearch));
+  if (anyAliases.has(original)) return services.filter(isAnyOtherVirtualService);
   let translated = original;
   if (looksArabic(rawQuery)) {
     try { translated = normalizeVirtualSearch(await translateArToEn(rawQuery)); } catch {}
@@ -633,8 +709,22 @@ async function showVirtualNumbersHome(chatId, user) {
 }
 
 async function showVirtualServices(chatId, user, page = 0, filtered = null, options = {}) {
-  const services = Array.isArray(filtered) ? filtered : await virtualNumbers.listServices();
-  const pageSize = 10;
+  const [allServices, summary] = await Promise.all([
+    virtualNumbers.listServices(),
+    virtualNumbers.availableServicesSummary().catch(() => [])
+  ]);
+
+  // The front page intentionally shows only well-known services. Everything
+  // else remains reachable through bilingual search.
+  let services;
+  if (Array.isArray(filtered)) {
+    const availableCodes = new Set(summary.map(row => String(row.serviceCode)));
+    services = filtered.filter(service => availableCodes.has(String(service.code)));
+  } else {
+    services = selectPopularVirtualServices(allServices, summary);
+  }
+
+  const pageSize = 12;
   const pages = Math.max(1, Math.ceil(services.length / pageSize));
   const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
   const rows = services.slice(safePage * pageSize, safePage * pageSize + pageSize);
@@ -644,12 +734,15 @@ async function showVirtualServices(chatId, user, page = 0, filtered = null, opti
     callback_data: `vn:svc:${service.code}`,
     style: 'primary'
   }]);
-  const nav = [];
-  if (safePage > 0) nav.push({ text: '⬅️', callback_data: `vn:services:${safePage - 1}` });
-  nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop:vnpage' });
-  if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `vn:services:${safePage + 1}` });
-  keyboard.push(nav);
-  keyboard.push([{ text: user.lang === 'en' ? '🔎 Search service' : '🔎 بحث عن خدمة', callback_data: 'vn:search' }]);
+
+  if (pages > 1) {
+    const nav = [];
+    if (safePage > 0) nav.push({ text: '⬅️', callback_data: `vn:services:${safePage - 1}` });
+    nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop:vnpage' });
+    if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `vn:services:${safePage + 1}` });
+    keyboard.push(nav);
+  }
+  keyboard.push([{ text: user.lang === 'en' ? '🔎 Search all services' : '🔎 البحث في كل الخدمات', callback_data: 'vn:search' }]);
   keyboard.push([
     { text: user.lang === 'en' ? '🧾 My orders' : '🧾 طلباتي', callback_data: 'vn:orders' },
     { text: user.lang === 'en' ? '💳 Wallet' : '💳 المحفظة', callback_data: 'vn:wallet' }
@@ -662,15 +755,15 @@ async function showVirtualServices(chatId, user, page = 0, filtered = null, opti
         '📱 <b>Buy a virtual number</b>',
         options.home ? `💰 Wallet balance: <b>${moneyUsd(Number(fresh?.balance || 0))}</b>` : '',
         '',
-        `<b>Available services — ${services.length}</b>`,
-        'Choose a service below, or use search.'
+        '<b>Popular services</b>',
+        'Only popular services are shown here. Use search for every other service; search accepts English and Arabic.'
       ].filter(Boolean).join('\n')
     : [
         '📱 <b>شراء رقم افتراضي</b>',
         options.home ? `💰 رصيد محفظتك: <b>${moneyUsd(Number(fresh?.balance || 0))}</b>` : '',
         '',
-        `<b>الخدمات المتوفرة — ${services.length}</b>`,
-        'اختَر الخدمة مباشرة من القائمة، أو استخدم البحث.'
+        '<b>الخدمات المشهورة</b>',
+        'هنا تظهر الخدمات الدارجة فقط. باقي الخدمات موجودة بالبحث، والبحث يقبل العربي والإنجليزي.'
       ].filter(Boolean).join('\n');
   return bot.sendMessage(chatId, title, {
     parse_mode: 'HTML',
@@ -678,27 +771,49 @@ async function showVirtualServices(chatId, user, page = 0, filtered = null, opti
   });
 }
 
-async function showVirtualCountries(chatId, user, serviceCode, page = 0) {
+async function showVirtualCountries(chatId, user, serviceCode, page = 0, options = {}) {
   const services = await virtualNumbers.listServices();
-  const service = services.find(row => row.code === String(serviceCode));
-  if (!service) return bot.sendMessage(chatId, virtualNumberText(user.lang, '❌ الخدمة غير موجودة.', '❌ Service not found.'));
+  let service = services.find(row => row.code === String(serviceCode));
+  if (!service) {
+    const anyService = findAnyOtherVirtualService(services);
+    if (anyService && !options.noFallback) {
+      await bot.sendMessage(chatId, virtualNumberText(user.lang,
+        '🔄 الخدمة المطلوبة غير موجودة حالياً، لذلك عرضت لك خيار <b>أي رقم</b> المتوفر.',
+        '🔄 The requested service is not available, so here is the available <b>Any number</b> option.'), { parse_mode: 'HTML' });
+      return showVirtualCountries(chatId, user, anyService.code, 0, { noFallback: true });
+    }
+    return bot.sendMessage(chatId, virtualNumberText(user.lang, 'الخدمة غير متاحة حالياً. جرّب البحث عن خدمة ثانية.', 'This service is unavailable right now. Try another search.'));
+  }
+
   const serviceName = await virtualServiceDisplayName(service, user.lang);
   const availability = await virtualNumbers.availabilityForService(service.code, true);
   if (!availability.length) {
+    const anyService = findAnyOtherVirtualService(services);
+    if (anyService && String(anyService.code) !== String(service.code) && !options.noFallback) {
+      await bot.sendMessage(chatId, virtualNumberText(user.lang,
+        `🔄 ما ظهر خيار جاهز لـ <b>${escapeHtml(serviceName)}</b>، لذلك حولتك إلى <b>أي رقم</b> مع الأسعار المتوفرة.`,
+        `🔄 No ready option is available for <b>${escapeHtml(serviceName)}</b>, so here is <b>Any number</b> with current prices.`), { parse_mode: 'HTML' });
+      return showVirtualCountries(chatId, user, anyService.code, 0, { noFallback: true });
+    }
     return bot.sendMessage(chatId, virtualNumberText(user.lang,
-      `❌ حالياً ماكو أرقام متوفرة لخدمة ${serviceName}.`,
-      `❌ No numbers are currently available for ${serviceName}.`), {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️', callback_data: 'vn:services:0' }]] }
+      '🔄 التوفر تغير للتو. ارجع للبحث واختر خياراً آخر من القائمة المحدثة.',
+      '🔄 Availability just changed. Go back to search and choose another current option.'), {
+      reply_markup: { inline_keyboard: [[{ text: user.lang === 'en' ? '🔎 Search services' : '🔎 بحث الخدمات', callback_data: 'vn:search' }]] }
     });
   }
+
   const pageSize = 8;
   const pages = Math.max(1, Math.ceil(availability.length / pageSize));
   const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
   const slice = availability.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const showProviderCost = canSeeVirtualProviderCost(user);
   const keyboard = slice.map(row => {
     const country = localizedVirtualCountry(row.countryName, user.lang);
+    const priceText = showProviderCost
+      ? virtualProviderCostText(row.providerCost, row.retailPrice)
+      : `$${Number(row.retailPrice).toFixed(2)}`;
     return [{
-      text: `${country.flag} ${country.name} • $${Number(row.retailPrice).toFixed(2)} • ${row.count}`,
+      text: `${country.flag} ${country.name} • ${priceText} • ${row.count}`,
       callback_data: `vn:quote:${service.code}:${row.countryId}`,
       style: 'primary'
     }];
@@ -710,12 +825,12 @@ async function showVirtualCountries(chatId, user, serviceCode, page = 0) {
   keyboard.push(nav);
   keyboard.push([{ text: user.lang === 'en' ? '🔎 Search country' : '🔎 بحث عن دولة', callback_data: `vn:countrysearch:${service.code}` }]);
   keyboard.push([{ text: user.lang === 'en' ? '🔄 Refresh' : '🔄 تحديث', callback_data: `vn:countries:${service.code}:${safePage}` }]);
-  keyboard.push([{ text: user.lang === 'en' ? '⬅️ Services' : '⬅️ الخدمات', callback_data: 'vn:services:0' }]);
+  keyboard.push([{ text: user.lang === 'en' ? '⬅️ Popular services' : '⬅️ الخدمات المشهورة', callback_data: 'vn:home' }]);
   return bot.sendMessage(chatId, user.lang === 'en'
     ? `📲 <b>${escapeHtml(serviceName)}</b>
-Countries are ordered from the cheapest number to the most expensive. Search works by English or Arabic country name.`
+Available options are already filtered and ordered from cheapest to most expensive.`
     : `📲 <b>${escapeHtml(serviceName)}</b>
-الدول مرتبة من أرخص رقم إلى الأغلى. وتكدر تبحث عن الدولة بالعربي أو بالإنجليزي.`, {
+الخيارات هنا مفلترة مسبقاً حسب المتوفر ومرتبة من الأرخص إلى الأغلى.`, {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -728,9 +843,10 @@ async function showVirtualQuote(chatId, user, serviceCode, countryId) {
   ]);
   const service = services.find(row => row.code === String(serviceCode));
   if (!service || !quote) {
-    return bot.sendMessage(chatId, virtualNumberText(user.lang,
-      '❌ الرقم غير متوفر حالياً. حدّث القائمة وحاول مرة ثانية.',
-      '❌ This number is not available right now. Refresh and try again.'));
+    await bot.sendMessage(chatId, virtualNumberText(user.lang,
+      '🔄 التوفر تغير للتو؛ حدثت لك الخيارات المتاحة تلقائياً.',
+      '🔄 Availability changed just now; I refreshed the current options automatically.'));
+    return showVirtualCountries(chatId, user, serviceCode, 0);
   }
   const [fresh, serviceName] = await Promise.all([
     User.findByPk(user.id),
@@ -739,11 +855,18 @@ async function showVirtualQuote(chatId, user, serviceCode, countryId) {
   const balance = Number(fresh?.balance || 0);
   const country = localizedVirtualCountry(quote.countryName, user.lang);
   const cents = Math.round(Number(quote.retailPrice) * 100);
+  const showProviderCost = canSeeVirtualProviderCost(user);
+  const priceLineEn = showProviderCost
+    ? `💵 Provider → sale: <b>${virtualProviderCostText(quote.providerCost, quote.retailPrice)}</b>`
+    : `💵 Price: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`;
+  const priceLineAr = showProviderCost
+    ? `💵 سعر الموقع ← سعر البيع: <b>${virtualProviderCostText(quote.providerCost, quote.retailPrice)}</b>`
+    : `💵 السعر: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`;
   const text = user.lang === 'en'
     ? [
         `📲 Service: <b>${escapeHtml(serviceName)}</b>`,
         `${country.flag} Country: <b>${escapeHtml(country.name)}</b>`,
-        `💵 Price: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`,
+        priceLineEn,
         `📦 Available now: <b>${quote.count}</b>`,
         `💰 Your wallet: <b>${moneyUsd(balance)}</b>`,
         '',
@@ -752,7 +875,7 @@ async function showVirtualQuote(chatId, user, serviceCode, countryId) {
     : [
         `📲 الخدمة: <b>${escapeHtml(serviceName)}</b>`,
         `${country.flag} الدولة: <b>${escapeHtml(country.name)}</b>`,
-        `💵 السعر: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`,
+        priceLineAr,
         `📦 المتوفر حالياً: <b>${quote.count}</b>`,
         `💰 رصيدك: <b>${moneyUsd(balance)}</b>`,
         '',
@@ -802,8 +925,8 @@ function virtualNumberErrorText(error, lang = 'ar') {
     BAD_COUNTRY: 'الدولة غير صحيحة أو لم تعد متوفرة.',
     NO_SERVICES_AVAILABLE: 'ماكو خدمات متوفرة حالياً.',
     NO_COUNTRIES_AVAILABLE: 'ماكو دول متوفرة حالياً.',
-    NO_NUMBERS: 'ماكو أرقام متوفرة لهذا الاختيار حالياً.',
-    NO_NUMBER: 'ماكو أرقام متوفرة لهذا الاختيار حالياً.',
+    NO_NUMBERS: 'التوفر تغير للتو وتم تحديث الخيارات المتاحة.',
+    NO_NUMBER: 'التوفر تغير للتو وتم تحديث الخيارات المتاحة.',
     NO_BALANCE: 'رصيد مزود الأرقام غير كافي. تم إرجاع مبلغك تلقائياً.',
     NO_MONEY: 'رصيد مزود الأرقام غير كافي. تم إرجاع مبلغك تلقائياً.',
     INSUFFICIENT_BALANCE: 'رصيد محفظتك غير كافي لإتمام الشراء.',
@@ -822,8 +945,8 @@ function virtualNumberErrorText(error, lang = 'ar') {
     BAD_COUNTRY: 'The country is invalid or no longer available.',
     NO_SERVICES_AVAILABLE: 'No services are available right now.',
     NO_COUNTRIES_AVAILABLE: 'No countries are available right now.',
-    NO_NUMBERS: 'No numbers are available for this selection right now.',
-    NO_NUMBER: 'No numbers are available for this selection right now.',
+    NO_NUMBERS: 'Availability changed just now; the available options were refreshed.',
+    NO_NUMBER: 'Availability changed just now; the available options were refreshed.',
     NO_BALANCE: 'The provider balance is insufficient. Your wallet was refunded automatically.',
     NO_MONEY: 'The provider balance is insufficient. Your wallet was refunded automatically.',
     INSUFFICIENT_BALANCE: 'Your wallet balance is insufficient for this purchase.',
@@ -917,7 +1040,8 @@ async function handleVirtualNumberCallback(query, user, data) {
             `📞 Number: <code>${escapeHtml(order.phoneNumber)}</code>`,
             `🆔 Order: <code>#${order.id}</code>`,
             '',
-            '⏳ Waiting for the SMS code…'
+            '⏳ Waiting for the SMS code…',
+            '⏱ If no code arrives within 5 minutes, the number will be cancelled automatically and the amount will be returned to your wallet.'
           ].join('\n')
         : [
             '✅ <b>تم شراء الرقم بنجاح</b>',
@@ -927,12 +1051,19 @@ async function handleVirtualNumberCallback(query, user, data) {
             `📞 الرقم: <code>${escapeHtml(order.phoneNumber)}</code>`,
             `🆔 الطلب: <code>#${order.id}</code>`,
             '',
-            '⏳ جاري انتظار وصول كود SMS…'
+            '⏳ جاري انتظار وصول كود SMS…',
+            '⏱ إذا ما وصل الكود خلال 5 دقائق، راح ينلغي الرقم تلقائياً وينرجع المبلغ إلى محفظتك.'
           ].join('\n'), {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[{ text: user.lang === 'en' ? '❌ Cancel number & refund' : '❌ إلغاء الرقم واسترداد الرصيد', callback_data: `vn:cancel:${order.id}`, style: 'danger' }]] }
       });
     } catch (error) {
+      if (['NO_NUMBERS', 'NO_NUMBER'].includes(String(error.code || ''))) {
+        await bot.sendMessage(user.id, virtualNumberText(user.lang,
+          '🔄 التوفر تغير أثناء تنفيذ الطلب؛ حدثت لك الخيارات المتاحة تلقائياً بدون عرض خيار فارغ.',
+          '🔄 Availability changed during purchase; the current options were refreshed automatically.'));
+        return showVirtualCountries(user.id, user, serviceCode, 0);
+      }
       if (error.code === 'PRICE_CHANGED' && error.quote) {
         await bot.sendMessage(user.id, virtualNumberErrorText(error, user.lang));
         return showVirtualQuote(user.id, user, serviceCode, countryId);
@@ -3328,24 +3459,57 @@ async function handleStateMessage(msg, user, state) {
     }
     try {
       const services = await virtualNumbers.listServices();
-      const matches = (await searchVirtualServices(services, queryText)).slice(0, 30);
+      const rawMatches = (await searchVirtualServices(services, queryText)).slice(0, 30);
+      let summary = [];
+      try { summary = await virtualNumbers.availableServicesSummary(); } catch {}
+      const availableCodes = new Set(summary.map(row => String(row.serviceCode)));
+      let matches = summary.length ? rawMatches.filter(service => availableCodes.has(String(service.code))) : [];
+
+      // If the provider's all-prices endpoint is temporarily incomplete, verify
+      // search candidates individually instead of showing dead buttons.
+      if (!summary.length && rawMatches.length) {
+        const checked = await Promise.all(rawMatches.slice(0, 15).map(async service => {
+          try {
+            const rows = await virtualNumbers.availabilityForService(service.code, true);
+            return rows.length ? service : null;
+          } catch { return null; }
+        }));
+        matches = checked.filter(Boolean);
+      }
+
       await clearState(user.id);
       if (!matches.length) {
+        const anyService = findAnyOtherVirtualService(services);
+        let anyAvailable = false;
+        if (anyService) {
+          if (availableCodes.has(String(anyService.code))) anyAvailable = true;
+          else {
+            try { anyAvailable = (await virtualNumbers.availabilityForService(anyService.code, true)).length > 0; }
+            catch {}
+          }
+        }
+        if (anyService && anyAvailable) {
+          await bot.sendMessage(user.id, user.lang === 'en'
+            ? '🔄 That service is not currently available. I found <b>Any number</b> instead; current prices are below.'
+            : '🔄 الخدمة اللي بحثت عنها مو متوفرة حالياً. ظهر لك بدلها <b>أي رقم</b> والأسعار الحالية:', { parse_mode: 'HTML' });
+          return showVirtualCountries(user.id, user, anyService.code, 0, { noFallback: true });
+        }
         await bot.sendMessage(user.id, user.lang === 'en'
-          ? '❌ No matching service found. Search accepts English or Arabic names.'
-          : '❌ ما حصلت خدمة مطابقة. البحث يقبل الاسم العربي أو الإنجليزي.');
+          ? '🔎 No currently available option matched that search. Try another service name.'
+          : '🔎 ما حصلت خيار متاح حالياً يطابق البحث. جرّب اسم خدمة ثانية.');
         return true;
       }
+
       const labels = await Promise.all(matches.map(service => virtualServiceDisplayName(service, user.lang)));
       const keyboard = matches.map((service, index) => [{
         text: `📲 ${labels[index]}`,
         callback_data: `vn:svc:${service.code}`,
         style: 'primary'
       }]);
-      keyboard.push([{ text: user.lang === 'en' ? '⬅️ Virtual numbers' : '⬅️ الأرقام الافتراضية', callback_data: 'vn:home' }]);
+      keyboard.push([{ text: user.lang === 'en' ? '⬅️ Popular services' : '⬅️ الخدمات المشهورة', callback_data: 'vn:home' }]);
       await bot.sendMessage(user.id, user.lang === 'en'
-        ? `🔎 Found ${matches.length} matching service(s):`
-        : `🔎 حصلت ${matches.length} خدمة مطابقة:`, { reply_markup: { inline_keyboard: keyboard } });
+        ? `🔎 Found ${matches.length} currently available matching service(s):`
+        : `🔎 حصلت ${matches.length} خدمة مطابقة ومتوفرة حالياً:`, { reply_markup: { inline_keyboard: keyboard } });
       return true;
     } catch (error) {
       await clearState(user.id);
@@ -3383,10 +3547,14 @@ async function handleStateMessage(msg, user, state) {
         return true;
       }
       const serviceName = await virtualServiceDisplayName(service, user.lang);
+      const showProviderCost = canSeeVirtualProviderCost(user);
       const keyboard = matches.map(row => {
         const country = localizedVirtualCountry(row.countryName, user.lang);
+        const priceText = showProviderCost
+          ? virtualProviderCostText(row.providerCost, row.retailPrice)
+          : `$${Number(row.retailPrice).toFixed(2)}`;
         return [{
-          text: `${country.flag} ${country.name} • $${Number(row.retailPrice).toFixed(2)} • ${row.count}`,
+          text: `${country.flag} ${country.name} • ${priceText} • ${row.count}`,
           callback_data: `vn:quote:${serviceCode}:${row.countryId}`,
           style: 'primary'
         }];
@@ -7259,10 +7427,15 @@ function startVirtualNumbersWatcher() {
                 `🆔 الطلب: <code>#${order.id}</code>`
               ].join('\n'), { parse_mode: 'HTML' }).catch(() => {});
         }
-        if (event.type === 'provider_cancelled' || event.type === 'expired_refund') {
+        if (event.type === 'expired_refund') {
           await bot.sendMessage(order.userId, lang === 'en'
-            ? `↩️ Virtual-number order #${order.id} was cancelled and ${moneyUsd(event.refunded || 0)} was returned to your wallet.`
-            : `↩️ تم إلغاء طلب الرقم #${order.id} وإرجاع ${moneyUsd(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
+            ? `⏱ No SMS code arrived within 5 minutes. Number order #${order.id} was cancelled automatically and ${moneyUsd(event.refunded || 0)} was returned to your wallet.`
+            : `⏱ ما وصل كود خلال 5 دقائق. تم إلغاء طلب الرقم #${order.id} تلقائياً وإرجاع ${moneyUsd(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
+        }
+        if (event.type === 'provider_cancelled') {
+          await bot.sendMessage(order.userId, lang === 'en'
+            ? `↩️ Virtual-number order #${order.id} was cancelled by the provider and ${moneyUsd(event.refunded || 0)} was returned to your wallet.`
+            : `↩️ تم إلغاء طلب الرقم #${order.id} من المزود وإرجاع ${moneyUsd(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
         }
       }
     } catch (error) {
