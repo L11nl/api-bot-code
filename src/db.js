@@ -181,6 +181,33 @@ const BinanceTransfer = sequelize.define('BinanceTransfer', {
   ]
 });
 
+const VirtualNumberOrder = sequelize.define('VirtualNumberOrder', {
+  id: { type: DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
+  userId: { type: DataTypes.BIGINT, allowNull: false },
+  serviceCode: { type: DataTypes.STRING(32), allowNull: false },
+  serviceName: { type: DataTypes.STRING(160), allowNull: false },
+  countryId: { type: DataTypes.STRING(32), allowNull: false },
+  countryName: { type: DataTypes.STRING(160), allowNull: false },
+  providerCostUsd: { type: DataTypes.DECIMAL(18, 8), allowNull: false, defaultValue: 0 },
+  salePriceUsd: { type: DataTypes.DECIMAL(18, 8), allowNull: false, defaultValue: 0 },
+  activationId: { type: DataTypes.STRING(96), allowNull: true },
+  phoneNumber: { type: DataTypes.STRING(64), allowNull: true },
+  smsCode: { type: DataTypes.TEXT, allowNull: true },
+  status: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'reserving' },
+  refundApplied: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  refundedAt: { type: DataTypes.DATE, allowNull: true },
+  expiresAt: { type: DataTypes.DATE, allowNull: true },
+  completedAt: { type: DataTypes.DATE, allowNull: true },
+  lastProviderStatus: { type: DataTypes.STRING(255), allowNull: true },
+  rawProvider: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
+}, {
+  indexes: [
+    { fields: ['userId', 'createdAt'] },
+    { fields: ['status', 'createdAt'] },
+    { unique: true, fields: ['activationId'] }
+  ]
+});
+
 const SupportTicket = sequelize.define('SupportTicket', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   userId: { type: DataTypes.BIGINT, allowNull: false },
@@ -415,6 +442,8 @@ PurchaseOrder.hasOne(BinanceTransfer, { foreignKey: 'orderId' });
 BinanceTransfer.belongsTo(PurchaseOrder, { foreignKey: 'orderId' });
 User.hasMany(SupportTicket, { foreignKey: 'userId' });
 SupportTicket.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(VirtualNumberOrder, { foreignKey: 'userId' });
+VirtualNumberOrder.belongsTo(User, { foreignKey: 'userId' });
 
 async function addColumnIfMissing(tableName, columnName, definition) {
   const qi = sequelize.getQueryInterface();
@@ -934,6 +963,7 @@ module.exports = {
   PurchaseOrder,
   BalanceTransaction,
   BinanceTransfer,
+  VirtualNumberOrder,
   SupportTicket,
   Referral,
   GiftClaim,

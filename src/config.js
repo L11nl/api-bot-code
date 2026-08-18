@@ -78,6 +78,14 @@ module.exports = {
     debtReminderThresholdUsd: Math.max(0, Number(process.env.NETWORK_DEBT_REMINDER_THRESHOLD_USD || 15)),
     debtSuspendThresholdUsd: Math.max(1, Number(process.env.NETWORK_DEBT_SUSPEND_THRESHOLD_USD || 40))
   },
+  virtualNumbers: {
+    enabled: String(process.env.VIRTUAL_NUMBERS_ENABLED || 'true').toLowerCase() !== 'false',
+    apiKey: String(process.env.SMSBOWER_API_KEY || process.env.VIRTUAL_NUMBERS_API_KEY || '').trim(),
+    baseUrl: String(process.env.SMSBOWER_BASE_URL || process.env.VIRTUAL_NUMBERS_BASE_URL || 'https://smsbower.page/stubs/handler_api.php').trim(),
+    timeoutMs: Math.min(30000, Math.max(3000, Number(process.env.VIRTUAL_NUMBERS_TIMEOUT_MS || 12000))),
+    pollIntervalMs: Math.max(5000, Number(process.env.VIRTUAL_NUMBERS_POLL_INTERVAL_MS || 7000)),
+    activationTimeoutMinutes: Math.min(30, Math.max(5, Number(process.env.VIRTUAL_NUMBERS_ACTIVATION_TIMEOUT_MINUTES || 10)))
+  },
   binance: {
     // Normal Binance account API keys with read permission only.
     // Legacy BINANCE_PAY_* names are accepted so the current Railway setup keeps working.

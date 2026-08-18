@@ -90,9 +90,10 @@ async function main() {
   console.log('Telegram bot polling started');
   await setupTelegramCommands(bot);
   if (typeof botModule.startNetworkAccountWatcher === 'function') botModule.startNetworkAccountWatcher();
+  if (typeof botModule.startVirtualNumbersWatcher === 'function') botModule.startVirtualNumbersWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v12.4.0 is ready');
+  console.log('CD Store v12.7.0 is ready');
 }
 
 main().catch(error => {
