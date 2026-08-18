@@ -1,0 +1,455 @@
+const axios = require('axios');
+const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder } = require('../db');
+const config = require('../config');
+
+const servicesCache = { at: 0, value: [] };
+const countriesCache = { at: 0, value: [] };
+const pricesCache = new Map();
+const purchaseLocks = new Set();
+
+const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
+const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
+const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
+
+function enabled() {
+  return Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
+}
+
+function roundMoney(value, decimals = 2) {
+  const factor = 10 ** decimals;
+  return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
+}
+
+// Exact pricing ladder requested by the store owner:
+// <= $0.03  -> $0.30
+// > $0.03 and < $1 -> $0.50
+// >= $1 -> provider cost + $1 (so $1->$2, $2->$3).
+function retailPrice(providerCost) {
+  const cost = Number(providerCost || 0);
+  if (!Number.isFinite(cost) || cost < 0) return 0;
+  if (cost <= 0.03 + 1e-9) return 0.30;
+  if (cost < 1) return 0.50;
+  return roundMoney(cost + 1, 2);
+}
+
+function apiError(code, detail = '') {
+  const error = new Error(code);
+  error.code = code;
+  error.detail = detail;
+  return error;
+}
+
+async function apiRequest(action, extra = {}, options = {}) {
+  if (!enabled()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  const params = {
+    api_key: config.virtualNumbers.apiKey,
+    action,
+    ...extra
+  };
+  let response;
+  try {
+    response = await axios.get(config.virtualNumbers.baseUrl, {
+      params,
+      timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
+      responseType: 'text',
+      transformResponse: [data => data]
+    });
+  } catch (error) {
+    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+  }
+  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
+  if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
+    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+  }
+  return text;
+}
+
+function parseJson(text, fallback = null) {
+  try { return JSON.parse(text); }
+  catch { return fallback; }
+}
+
+async function getBalance() {
+  const text = await apiRequest('getBalance');
+  if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text);
+  const amount = Number(text.slice('ACCESS_BALANCE:'.length));
+  if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
+  return amount;
+}
+
+async function listServices(force = false) {
+  const now = Date.now();
+  if (!force && servicesCache.value.length && now - servicesCache.at < SERVICES_TTL_MS) return servicesCache.value;
+  const text = await apiRequest('getServicesList');
+  const json = parseJson(text);
+  let rows = [];
+  if (json && Array.isArray(json.services)) rows = json.services;
+  else if (Array.isArray(json)) rows = json;
+  rows = rows
+    .map(row => ({
+      code: String(row?.code ?? row?.id ?? '').trim(),
+      name: String(row?.name ?? row?.title ?? row?.code ?? '').trim()
+    }))
+    .filter(row => row.code && row.name)
+    .filter(row => /^[A-Za-z0-9_-]{1,24}$/.test(row.code));
+  const seen = new Set();
+  rows = rows.filter(row => {
+    if (seen.has(row.code)) return false;
+    seen.add(row.code);
+    return true;
+  }).sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+  if (!rows.length) throw apiError('NO_SERVICES_AVAILABLE', text.slice(0, 200));
+  servicesCache.at = now;
+  servicesCache.value = rows;
+  return rows;
+}
+
+function flattenCountries(json) {
+  if (!json) return [];
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json.countries)) return json.countries;
+  if (Array.isArray(json.data)) return json.data;
+  if (typeof json === 'object') {
+    return Object.entries(json).map(([key, value]) => {
+      if (value && typeof value === 'object') return { id: value.id ?? key, ...value };
+      return { id: key, eng: String(value ?? key) };
+    });
+  }
+  return [];
+}
+
+async function listCountries(force = false) {
+  const now = Date.now();
+  if (!force && countriesCache.value.length && now - countriesCache.at < COUNTRIES_TTL_MS) return countriesCache.value;
+  const text = await apiRequest('getCountries');
+  const json = parseJson(text);
+  let rows = flattenCountries(json).map(row => ({
+    id: String(row?.id ?? row?.country ?? row?.code ?? '').trim(),
+    name: String(row?.eng ?? row?.en ?? row?.name ?? row?.rus ?? row?.id ?? '').trim()
+  })).filter(row => row.id && row.name);
+  const seen = new Set();
+  rows = rows.filter(row => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+  if (!rows.length) throw apiError('NO_COUNTRIES_AVAILABLE', text.slice(0, 200));
+  countriesCache.at = now;
+  countriesCache.value = rows;
+  return rows;
+}
+
+function extractPriceRows(json, serviceCode) {
+  const out = [];
+  if (!json || typeof json !== 'object') return out;
+  for (const [countryId, countryData] of Object.entries(json)) {
+    if (!countryData || typeof countryData !== 'object') continue;
+    let serviceData = countryData[serviceCode];
+    if (!serviceData && String(countryId) === String(serviceCode)) continue;
+    if (!serviceData && ('cost' in countryData || 'price' in countryData)) serviceData = countryData;
+    if (!serviceData || typeof serviceData !== 'object') continue;
+
+    let cost = Number(serviceData.cost ?? serviceData.price);
+    let count = Number(serviceData.count ?? 0);
+    if (!Number.isFinite(cost)) {
+      const priceTiers = Object.entries(serviceData)
+        .map(([price, amount]) => ({ price: Number(price), count: Number(amount) }))
+        .filter(row => Number.isFinite(row.price) && Number.isFinite(row.count) && row.count > 0)
+        .sort((a, b) => a.price - b.price);
+      if (priceTiers.length) {
+        cost = priceTiers[0].price;
+        count = priceTiers.reduce((sum, row) => sum + row.count, 0);
+      }
+    }
+    if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) continue;
+    out.push({ countryId: String(countryId), providerCost: cost, count: Math.floor(count) });
+  }
+  return out;
+}
+
+async function availabilityForService(serviceCode, force = false) {
+  const code = String(serviceCode || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,24}$/.test(code)) throw apiError('BAD_SERVICE');
+  const cached = pricesCache.get(code);
+  if (!force && cached && Date.now() - cached.at < PRICES_TTL_MS) return cached.value;
+  const text = await apiRequest('getPrices', { service: code });
+  const json = parseJson(text);
+  const rows = extractPriceRows(json, code);
+  const countries = await listCountries().catch(() => []);
+  const countryMap = new Map(countries.map(row => [String(row.id), row.name]));
+  const value = rows.map(row => ({
+    ...row,
+    countryName: countryMap.get(String(row.countryId)) || `Country ${row.countryId}`,
+    retailPrice: retailPrice(row.providerCost)
+  })).sort((a, b) => a.countryName.localeCompare(b.countryName, 'en', { sensitivity: 'base' }));
+  pricesCache.set(code, { at: Date.now(), value });
+  return value;
+}
+
+async function quote(serviceCode, countryId, force = false) {
+  const rows = await availabilityForService(serviceCode, force);
+  return rows.find(row => String(row.countryId) === String(countryId)) || null;
+}
+
+async function getNumberV2(serviceCode, countryId, maxPrice) {
+  const text = await apiRequest('getNumberV2', {
+    service: serviceCode,
+    country: countryId,
+    maxPrice: Number(maxPrice).toFixed(4)
+  });
+  const json = parseJson(text);
+  if (json && (json.activationId || json.phoneNumber)) {
+    return {
+      activationId: String(json.activationId || '').trim(),
+      phoneNumber: String(json.phoneNumber || '').trim(),
+      activationCost: Number(json.activationCost),
+      raw: json
+    };
+  }
+  if (text.startsWith('ACCESS_NUMBER:')) {
+    const parts = text.split(':');
+    return {
+      activationId: String(parts[1] || '').trim(),
+      phoneNumber: String(parts[2] || '').trim(),
+      activationCost: Number(maxPrice),
+      raw: { legacy: text }
+    };
+  }
+  if (/^(NO_NUMBERS|NO_NUMBER|NO_BALANCE|NO_MONEY|ERROR_SQL|WRONG_MAX_PRICE|BAD_SERVICE|BAD_COUNTRY)/i.test(text)) {
+    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+  }
+  throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
+}
+
+async function getStatus(activationId) {
+  return apiRequest('getStatus', { id: activationId });
+}
+
+async function setStatus(activationId, status) {
+  return apiRequest('setStatus', { id: activationId, status });
+}
+
+async function reserveCustomerWallet(userId, orderData) {
+  const tx = await sequelize.transaction();
+  try {
+    const user = await User.findByPk(userId, { transaction: tx, lock: tx.LOCK.UPDATE });
+    if (!user) throw apiError('USER_NOT_FOUND');
+    const price = Number(orderData.salePrice || 0);
+    const balance = Number(user.balance || 0);
+    if (balance + 1e-9 < price) {
+      const error = apiError('INSUFFICIENT_BALANCE');
+      error.balance = balance;
+      error.required = price;
+      throw error;
+    }
+    const order = await VirtualNumberOrder.create({
+      userId,
+      serviceCode: orderData.serviceCode,
+      serviceName: orderData.serviceName,
+      countryId: String(orderData.countryId),
+      countryName: orderData.countryName,
+      providerCostUsd: orderData.providerCost,
+      salePriceUsd: price,
+      status: 'reserving',
+      expiresAt: new Date(Date.now() + config.virtualNumbers.activationTimeoutMinutes * 60_000)
+    }, { transaction: tx });
+    user.balance = balance - price;
+    await user.save({ transaction: tx, fields: ['balance'] });
+    await BalanceTransaction.create({
+      userId,
+      amount: -price,
+      type: 'virtual_number_purchase',
+      txid: `VN:${order.id}`,
+      status: 'completed',
+      caption: `${orderData.serviceName} / ${orderData.countryName}`,
+      paymentOrigin: 'wallet'
+    }, { transaction: tx });
+    await tx.commit();
+    return order;
+  } catch (error) {
+    await tx.rollback();
+    throw error;
+  }
+}
+
+async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
+  const tx = await sequelize.transaction();
+  try {
+    const order = await VirtualNumberOrder.findByPk(orderId, { transaction: tx, lock: tx.LOCK.UPDATE });
+    if (!order) throw apiError('ORDER_NOT_FOUND');
+    if (order.refundApplied) {
+      await tx.commit();
+      return { order, refunded: 0, alreadyRefunded: true };
+    }
+    const user = await User.findByPk(order.userId, { transaction: tx, lock: tx.LOCK.UPDATE });
+    const amount = Number(order.salePriceUsd || 0);
+    user.balance = Number(user.balance || 0) + amount;
+    await user.save({ transaction: tx, fields: ['balance'] });
+    order.refundApplied = true;
+    order.refundedAt = new Date();
+    order.status = status;
+    if (providerStatus) order.lastProviderStatus = String(providerStatus).slice(0, 255);
+    await order.save({ transaction: tx });
+    await BalanceTransaction.create({
+      userId: order.userId,
+      amount,
+      type: 'virtual_number_refund',
+      txid: `VN-REFUND:${order.id}`,
+      status: 'completed',
+      caption: `${order.serviceName} / ${order.countryName}`,
+      paymentOrigin: 'wallet'
+    }, { transaction: tx });
+    await tx.commit();
+    return { order, refunded: amount, alreadyRefunded: false };
+  } catch (error) {
+    await tx.rollback();
+    throw error;
+  }
+}
+
+async function purchase({ userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
+  const lockKey = String(userId);
+  if (purchaseLocks.has(lockKey)) throw apiError('PURCHASE_IN_PROGRESS');
+  purchaseLocks.add(lockKey);
+  let order = null;
+  try {
+    const freshQuote = await quote(serviceCode, countryId, true);
+    if (!freshQuote || freshQuote.count < 1) throw apiError('NO_NUMBERS');
+    const currentCents = Math.round(Number(freshQuote.retailPrice) * 100);
+    if (Number(expectedRetailCents) !== currentCents) {
+      const error = apiError('PRICE_CHANGED');
+      error.quote = freshQuote;
+      throw error;
+    }
+    order = await reserveCustomerWallet(userId, {
+      serviceCode,
+      serviceName,
+      countryId,
+      countryName: countryName || freshQuote.countryName,
+      providerCost: freshQuote.providerCost,
+      salePrice: freshQuote.retailPrice
+    });
+
+    let provider;
+    try {
+      provider = await getNumberV2(serviceCode, countryId, freshQuote.providerCost);
+    } catch (error) {
+      await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
+      throw error;
+    }
+    if (!provider.activationId || !provider.phoneNumber) {
+      await refundOrder(order.id, 'failed', 'BAD_NUMBER_RESPONSE').catch(() => {});
+      throw apiError('BAD_PROVIDER_RESPONSE');
+    }
+    order.activationId = provider.activationId;
+    order.phoneNumber = provider.phoneNumber;
+    if (Number.isFinite(provider.activationCost) && provider.activationCost >= 0) order.providerCostUsd = provider.activationCost;
+    order.status = 'waiting_sms';
+    order.rawProvider = provider.raw || {};
+    order.lastProviderStatus = 'STATUS_WAIT_CODE';
+    await order.save();
+    return order;
+  } finally {
+    purchaseLocks.delete(lockKey);
+  }
+}
+
+async function cancelCustomerOrder(userId, orderId) {
+  const order = await VirtualNumberOrder.findByPk(orderId);
+  if (!order || String(order.userId) !== String(userId)) throw apiError('ORDER_NOT_FOUND');
+  if (['cancelled', 'provider_cancelled', 'failed'].includes(order.status)) {
+    return { order, alreadyDone: true, refunded: Number(order.refundApplied ? order.salePriceUsd : 0) };
+  }
+  if (order.status === 'completed') throw apiError('ORDER_ALREADY_COMPLETED');
+  if (!order.activationId) {
+    const refunded = await refundOrder(order.id, 'cancelled', 'LOCAL_CANCEL');
+    return { ...refunded, providerResponse: 'LOCAL_CANCEL' };
+  }
+  const response = await setStatus(order.activationId, 8);
+  if (response === 'EARLY_CANCEL_DENIED') throw apiError('EARLY_CANCEL_DENIED', response);
+  if (!['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(response)) {
+    if (/EARLY_CANCEL_DENIED/i.test(response)) throw apiError('EARLY_CANCEL_DENIED', response);
+    throw apiError('CANCEL_NOT_CONFIRMED', response);
+  }
+  const refunded = await refundOrder(order.id, 'cancelled', response);
+  return { ...refunded, providerResponse: response };
+}
+
+async function pollPendingOrders(limit = 40) {
+  if (!enabled()) return [];
+  const rows = await VirtualNumberOrder.findAll({
+    where: { status: 'waiting_sms', activationId: { [Op.ne]: null } },
+    order: [['createdAt', 'ASC']],
+    limit: Math.max(1, Math.min(100, Number(limit) || 40))
+  });
+  const events = [];
+  const concurrency = 8;
+  for (let offset = 0; offset < rows.length; offset += concurrency) {
+    const chunk = rows.slice(offset, offset + concurrency);
+    const results = await Promise.all(chunk.map(async order => {
+      try {
+        if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) {
+          try {
+            const cancelResponse = await setStatus(order.activationId, 8);
+            if (['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(cancelResponse)) {
+              const refund = await refundOrder(order.id, 'cancelled', cancelResponse);
+              return { type: 'expired_refund', order: refund.order, refunded: refund.refunded };
+            }
+          } catch (error) {
+            console.error('Virtual number expiry cancel:', order.id, error.message);
+          }
+        }
+
+        const status = await getStatus(order.activationId);
+        order.lastProviderStatus = String(status).slice(0, 255);
+        await order.save({ fields: ['lastProviderStatus'] });
+        if (status.startsWith('STATUS_OK:')) {
+          const code = status.slice('STATUS_OK:'.length).trim();
+          const fresh = await VirtualNumberOrder.findByPk(order.id);
+          if (!fresh || fresh.status !== 'waiting_sms') return null;
+          fresh.smsCode = code;
+          fresh.status = 'completed';
+          fresh.completedAt = new Date();
+          fresh.lastProviderStatus = status.slice(0, 255);
+          await fresh.save();
+          setStatus(fresh.activationId, 6).catch(error => console.error('Virtual number close activation:', fresh.id, error.message));
+          return { type: 'sms', order: fresh, code };
+        }
+        if (status === 'STATUS_CANCEL') {
+          const refund = await refundOrder(order.id, 'provider_cancelled', status);
+          return { type: 'provider_cancelled', order: refund.order, refunded: refund.refunded };
+        }
+        return null;
+      } catch (error) {
+        if (!['PROVIDER_UNAVAILABLE'].includes(error.code)) {
+          console.error('Virtual number poll:', order.id, error.code || error.message, error.detail || '');
+        }
+        return null;
+      }
+    }));
+    for (const event of results) if (event) events.push(event);
+  }
+  return events;
+}
+
+async function listUserOrders(userId, limit = 10) {
+  return VirtualNumberOrder.findAll({
+    where: { userId },
+    order: [['createdAt', 'DESC']],
+    limit: Math.max(1, Math.min(30, Number(limit) || 10))
+  });
+}
+
+module.exports = {
+  enabled,
+  retailPrice,
+  getBalance,
+  listServices,
+  listCountries,
+  availabilityForService,
+  quote,
+  purchase,
+  cancelCustomerOrder,
+  pollPendingOrders,
+  listUserOrders
+};
