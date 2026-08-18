@@ -41,6 +41,7 @@ const {
   getProductStock,
   getProductStocksMap,
   productVisibleInCurrentShop,
+  sortProductStockRows,
   listActiveProducts,
   createOrder,
   fulfillOrder,
@@ -217,6 +218,24 @@ function canManageNetworkProduct(product) {
   if (!product) return false;
   if (!network.enabledClient() || !product.networkManaged) return true;
   return String(product.networkOwnerShopId || '') === String(config.network.shopId);
+}
+
+function networkProductBasePrice(product) {
+  const base = Number(product?.networkBasePriceUsd);
+  if (Number.isFinite(base) && base >= 0) return base;
+  return Number(product?.price || 0);
+}
+
+function hasLocalNetworkPriceOverride(product) {
+  if (!network.enabledClient() || !product?.networkManaged || canManageNetworkProduct(product)) return false;
+  const override = Number(product.localPriceOverrideUsd);
+  const base = networkProductBasePrice(product);
+  return Number.isFinite(override) && override > base + 1e-9;
+}
+
+function canEditProductField(product, field) {
+  if (canManageNetworkProduct(product)) return true;
+  return field === 'price' && network.enabledClient() && Boolean(product?.networkManaged) && String(product?.type || '') !== 'service';
 }
 
 function canContributeStock(product) {
@@ -1785,9 +1804,11 @@ async function sendDeliveryToUser(userId, fulfillment) {
   const shared = adminSharedDetails(fulfillment);
   const deliveryIds = (fulfillment.deliveries || []).map(item => item.deliveryId).filter(Boolean);
   const commissionEarned = (fulfillment.deliveries || []).reduce((sum, item) => sum + Number(item.sellerCommissionUsd || 0), 0);
+  const markupEarned = (fulfillment.deliveries || []).reduce((sum, item) => sum + Number(item.sellerMarkupUsd || 0), 0);
   await notifyAdmins([
     `✅ تم تسليم الطلب <b>#${order.id}</b>`,
     `المستخدم: <code>${order.userId}</code>`,
+    markupEarned > 0 ? `📈 ربح فرق السعر من مخزون الآخرين بهذا الطلب: <b>$${markupEarned.toFixed(2)}</b>` : '',
     commissionEarned > 0 ? `💸 عمولة بيع مخزون الآخرين بهذا الطلب: <b>$${commissionEarned.toFixed(2)}</b>` : '',
     deliveryIds.length ? `معرفات المنتجات المستلمة: ${deliveryIds.map(id => `<code>${escapeHtml(id)}</code>`).join(' | ')}` : '',
     shared ? `\n🔒 تفاصيل المشاركة السرية:\n${shared}` : ''
@@ -2727,6 +2748,8 @@ async function finalizeNewProduct(user, data) {
       networkManaged: true,
       networkOwnerShopId: rp.networkOwnerShopId || config.network.shopId,
       networkStock: Number(rp.stock || 0),
+      networkBasePriceUsd: Number(rp.price ?? productPayload.price),
+      localPriceOverrideUsd: null,
       ownerNote: 'Network product'
     });
   } else {
@@ -4018,6 +4041,12 @@ async function handleStateMessage(msg, user, state) {
     if (field === 'image' && msg.photo?.length) value = msg.photo[msg.photo.length - 1].file_id;
     if (!value) return true;
 
+    if (!canEditProductField(product, field)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '⛔ هذا المنتج تابع لمتجر آخر. مسموح لك فقط ترفع سعره داخل بوتك، أما باقي التفاصيل فيعدلها صاحب المنتج.');
+      return true;
+    }
+
     const description = parseDescription(product.description);
     if (field === 'nameAr') {
       const rich = extractProductNameRichText(value, msg.entities);
@@ -4033,10 +4062,33 @@ async function handleStateMessage(msg, user, state) {
       description.nameEmojiAlt = rich.firstCustomEmojiAlt;
     } else if (field === 'price') {
       const number = Number(value);
-      if (!Number.isFinite(number) || number < 0) {
+      if (!Number.isFinite(number) || number < 0 || number > 1000000) {
         await bot.sendMessage(user.id, '❌ سعر غير صحيح.');
         return true;
       }
+
+      if (network.enabledClient() && product.networkManaged && !canManageNetworkProduct(product)) {
+        const basePrice = networkProductBasePrice(product);
+        if (number + 1e-9 < basePrice) {
+          await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأن هذا هو سعر صاحب المنتج. تگدر تخليه نفسه أو ترفعه فقط.`);
+          return true;
+        }
+        product.localPriceOverrideUsd = number > basePrice + 1e-9 ? number : null;
+        product.price = number > basePrice + 1e-9 ? number : basePrice;
+        await product.save({ fields: ['price', 'localPriceOverrideUsd'] });
+        await clearState(user.id);
+        const profit = Math.max(0, Number(product.price) - basePrice);
+        await bot.sendMessage(user.id, product.localPriceOverrideUsd
+          ? `✅ تم حفظ السعر داخل هذا البوت فقط.
+السعر الأساسي: ${moneyUsd(basePrice)}
+سعر هذا البوت: ${moneyUsd(product.price)}
+فرق السعر لك: ${moneyUsd(profit)} لكل وحدة.
+عمولة 10% لا تُحسب على المبيعات بهذا السعر المحلي.`
+          : `✅ رجّعت السعر إلى السعر الأساسي ${moneyUsd(basePrice)}. بهالحالة يرجع نظام العمولة الاعتيادي.`);
+        await showAdminProductEditor(user.id, product.id);
+        return true;
+      }
+
       if (!network.enabledClient()) {
         const protection = await network.productStockProtection(product.id, product.networkOwnerShopId || 'master');
         if (number + 1e-9 < protection.maxContributionPriceUsd) {
@@ -4045,6 +4097,10 @@ async function handleStateMessage(msg, user, state) {
         }
       }
       product.price = number;
+      if (product.networkManaged) {
+        product.networkBasePriceUsd = number;
+        product.localPriceOverrideUsd = null;
+      }
     } else if (field === 'descriptionAr') {
       if (value === '-') {
         description.ar = '';
@@ -4073,11 +4129,6 @@ async function handleStateMessage(msg, user, state) {
 
     product.set('description', { ...description });
     product.changed('description', true);
-    if (!canManageNetworkProduct(product)) {
-      await clearState(user.id);
-      await bot.sendMessage(user.id, '⛔ هذا المنتج مضاف من متجر آخر بالشبكة، وتقدر تبيعه لكن ما تقدر تعدله.');
-      return true;
-    }
     if (product.networkManaged && network.enabledClient()) {
       try {
         await network.updateRemoteProduct(product.networkProductId, {
@@ -4093,8 +4144,10 @@ async function handleStateMessage(msg, user, state) {
           deliveryMode: product.deliveryMode,
           sortOrder: product.sortOrder
         });
+        product.networkBasePriceUsd = Number(product.price);
+        product.localPriceOverrideUsd = null;
       } catch (error) {
-        await network.syncCatalogToLocal().catch(() => {});
+        await network.syncCatalogToLocal({ force: true }).catch(() => {});
         await clearState(user.id);
         const message = String(error.message || '');
         const friendly = message.startsWith('PRICE_BELOW_STOCK_VALUE:')
@@ -4869,7 +4922,9 @@ async function showNetworkAccounts(chatId) {
     'كل الديون والتسويات هنا بالدولار فقط. إذا صار دين بالعكس بين نفس الطرفين، النظام يسوي صافي تلقائياً.'
   ];
   const keyboard = [];
-  lines.push('', `💸 عمولة البيع من مخزون الآخرين (${Number(data.sellerCommissionPercent ?? config.network.sellerCommissionPercent ?? 10).toFixed(0)}%): <b>$${Number(data.sellerCommissionEarnedUsd || 0).toFixed(2)}</b>`);
+  lines.push('', `💸 عمولة البيع التقليدية من مخزون الآخرين (${Number(data.sellerCommissionPercent ?? config.network.sellerCommissionPercent ?? 10).toFixed(0)}%): <b>$${Number(data.sellerCommissionEarnedUsd || 0).toFixed(2)}</b>`);
+  lines.push(`📈 أرباح فرق السعر المحلي: <b>$${Number(data.sellerMarkupEarnedUsd || 0).toFixed(2)}</b>`);
+  lines.push(`💰 إجمالي ربح البيع الشبكي: <b>$${Number(data.sellerNetworkProfitUsd ?? ((data.sellerCommissionEarnedUsd || 0) + (data.sellerMarkupEarnedUsd || 0))).toFixed(2)}</b>`);
   const debtStatus = data.commerceStatus || await currentCommerceStatus(true);
   if (debtStatus?.suspended) {
     lines.push(
@@ -4973,7 +5028,8 @@ async function showProductContributors(chatId, product) {
       `👤 <b>${escapeHtml(row.shopName || row.shopId)}</b>`,
       `أضاف: <b>${Number(row.addedUnits || 0)}</b> • انباع من مخزونه: <b>${Number(row.soldUnits || 0)}</b> • باقي: <b>${Number(row.availableUnits || 0)}</b>`,
       `حقه من القطع المباعة: <b>$${Number((row.supplierEarningsUsd ?? row.soldValueUsd) || 0).toFixed(2)}</b>`,
-      `عمولة البيع التي كسبها من مخزون الآخرين: <b>$${Number(row.sellerCommissionUsd || 0).toFixed(2)}</b>`
+      `عمولة البيع التي كسبها من مخزون الآخرين: <b>$${Number(row.sellerCommissionUsd || 0).toFixed(2)}</b>`,
+      `ربح فرق السعر المحلي: <b>$${Number(row.sellerMarkupUsd || 0).toFixed(2)}</b>`
     );
   }
   if (!contributors.length) lines.push('— ماكو مخزون بعد.');
@@ -5764,7 +5820,7 @@ async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:field:')) {
     const [, , idRaw, field] = data.split(':');
     const managedProduct = await Merchant.findByPk(Number(idRaw));
-    if (!canManageNetworkProduct(managedProduct)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة ولا يمكن تعديله من هنا.', true);
+    if (!canEditProductField(managedProduct, field)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر. تگدر فقط ترفع سعره داخل بوتك.', true);
     if (!['nameAr', 'price', 'descriptionAr', 'warrantyAr', 'image'].includes(field)) {
       return answerCallback(query.id, 'هذا الحقل لم يعد مستخدماً.', true);
     }
@@ -5772,7 +5828,9 @@ async function handleAdminCallback(query, user, data) {
     await answerCallback(query.id);
     const prompts = {
       nameAr: 'أرسل اسم المنتج بالعربي. تقدر تستخدم Custom Emoji Premium مباشرة أو ID بين [] مثل [5221980268230882832] اسم المنتج.',
-      price: 'أرسل السعر الجديد بالدولار.',
+      price: !canManageNetworkProduct(managedProduct) && managedProduct?.networkManaged
+        ? `أرسل السعر الذي تريد عرضه داخل بوتك فقط. أقل سعر مسموح: ${moneyUsd(networkProductBasePrice(managedProduct))}. تگدر ترفع السعر لكن ما تگدر تنزله عن سعر صاحب المنتج.`
+        : 'أرسل السعر الجديد بالدولار.',
       descriptionAr: 'أرسل الوصف بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
       warrantyAr: 'أرسل الضمان بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
       image: 'أرسل صورة مباشرة، رابط صورة، أو - لحذف الصورة.'
@@ -5959,17 +6017,20 @@ function stockPrompt(product) {
 
 async function showAdminProducts(chatId, page = 0) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => {});
-  const allProducts = await Merchant.findAll({ order: [['id', 'ASC']] });
+  const allProducts = await Merchant.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
   const products = allProducts.filter(productVisibleInCurrentShop);
+  const stocks = await getProductStocksMap(products);
+  const sortedRows = sortProductStockRows(products.map(product => ({
+    product,
+    stock: Number(stocks.get(Number(product.id)) || 0)
+  })));
   const perPage = 8;
-  const pages = Math.max(1, Math.ceil(products.length / perPage));
+  const pages = Math.max(1, Math.ceil(sortedRows.length / perPage));
   const safePage = Math.max(0, Math.min(page, pages - 1));
   const keyboard = [];
 
-  const pageProducts = products.slice(safePage * perPage, safePage * perPage + perPage);
-  const pageStocks = await getProductStocksMap(pageProducts);
-  for (const product of pageProducts) {
-    const stock = Number(pageStocks.get(Number(product.id)) || 0);
+  const pageRows = sortedRows.slice(safePage * perPage, safePage * perPage + perPage);
+  for (const { product, stock } of pageRows) {
     keyboard.push([{
       text: `${product.nameAr} | ${product.type === 'service' ? '🛠 خدمة' : product.type === 'shared' ? `👥 ${stock}/استخدام` : `📦 ${stock}`} | ${moneyUsd(product.price)}`,
       callback_data: `adm:edit:${product.id}`,
@@ -6002,12 +6063,14 @@ async function showAdminProductEditor(chatId, productId) {
     '',
     `النوع: <b>${productTypeLabel(product.type)}</b>`,
     `السعر: <b>${moneyUsd(product.price)}</b>`,
+    product.networkManaged && !manageable ? `السعر الأساسي لصاحب المنتج: <b>${moneyUsd(networkProductBasePrice(product))}</b>` : '',
+    product.networkManaged && !manageable && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(Number(product.price) - networkProductBasePrice(product))}</b> لكل وحدة` : '',
     `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
     product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
     `ظهور المنتج: <b>${product.isActive ? 'ظاهر' : 'مخفي'}</b>`,
     `الترجمة الإنجليزية: <b>تلقائية</b>`,
     product.networkManaged ? `الشبكة: <b>منتج مشترك</b> — المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>` : '',
-    product.networkManaged && !manageable ? '🔒 <b>قراءة فقط:</b> المنتج مضاف من متجر آخر.' : '',
+    product.networkManaged && !manageable ? '💵 <b>صلاحيتك:</b> تگدر تغيّر سعر البيع داخل بوتك فقط، بدون تغيير سعر البوتات الثانية.' : '',
     '',
     `الوصف: ${escapeHtml(description.ar || '—')}`,
     `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
@@ -6030,6 +6093,7 @@ async function showAdminProductEditor(chatId, productId) {
     [{ text: '🗑 حذف المنتج', callback_data: `adm:delete:${product.id}`, style: 'danger' }],
     [{ text: '⬅️ كل المنتجات', callback_data: 'adm:products:0' }]
   ] : [
+    [{ text: '💵 تعديل سعر هذا البوت', callback_data: `adm:field:${product.id}:price`, style: 'primary' }],
     ...commonRows,
     [{ text: '⬅️ كل المنتجات', callback_data: 'adm:products:0' }]
   ];
@@ -6038,12 +6102,15 @@ async function showAdminProductEditor(chatId, productId) {
 
 async function showStockProductList(chatId) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => null);
-  const allProducts = await Merchant.findAll({ where: { isActive: true }, order: [['id', 'ASC']] });
+  const allProducts = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
   const products = allProducts.filter(product => productVisibleInCurrentShop(product) && String(product.type || '') !== 'service');
   const keyboard = [];
   const stocks = await getProductStocksMap(products);
-  for (const product of products) {
-    const stock = Number(stocks.get(Number(product.id)) || 0);
+  const sortedRows = sortProductStockRows(products.map(product => ({
+    product,
+    stock: Number(stocks.get(Number(product.id)) || 0)
+  })));
+  for (const { product, stock } of sortedRows) {
     keyboard.push([{
       text: `${product.nameAr} | 📦 ${stock}`,
       callback_data: `adm:stockprod:${product.id}`,

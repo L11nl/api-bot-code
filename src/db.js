@@ -80,6 +80,11 @@ const Merchant = sequelize.define('Merchant', {
   nameEn: { type: DataTypes.STRING, allowNull: false },
   nameAr: { type: DataTypes.STRING, allowNull: false },
   price: { type: DataTypes.DECIMAL(18, 2), allowNull: false, defaultValue: 0 },
+  // For network products on client bots: the owner's shared catalog price is
+  // the minimum allowed price. A reseller may keep a higher price only in
+  // their own schema without changing the master catalog.
+  networkBasePriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  localPriceOverrideUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'free' },
   description: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
@@ -608,6 +613,8 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'networkManaged', { type: DataTypes.BOOLEAN, defaultValue: false });
   await addColumnIfMissing('Merchants', 'networkOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
   await addColumnIfMissing('Merchants', 'networkStock', { type: DataTypes.INTEGER, defaultValue: 0 });
+  await addColumnIfMissing('Merchants', 'networkBasePriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Merchants', 'localPriceOverrideUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
 
   await addColumnIfMissing('PurchaseOrders', 'walletApplied', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
   await addColumnIfMissing('PurchaseOrders', 'externalAmount', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
@@ -810,6 +817,15 @@ async function initializeDatabase() {
     SET "contributionPriceUsd" = COALESCE(c."contributionPriceUsd", m."price")
     FROM ${tableSql('Merchants')} m
     WHERE c."merchantId" = m."id"
+  `).catch(() => {});
+
+  // v12.6: remember the catalog floor separately from a shop-local markup.
+  // Existing rows start with their current synchronized price as the floor;
+  // future catalog syncs keep localPriceOverrideUsd only when it is >= floor.
+  await sequelize.query(`
+    UPDATE ${tableSql('Merchants')}
+    SET "networkBasePriceUsd" = COALESCE("networkBasePriceUsd", "price")
+    WHERE COALESCE("networkManaged", FALSE) = TRUE
   `).catch(() => {});
 
   while (true) {

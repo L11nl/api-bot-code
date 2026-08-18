@@ -217,31 +217,53 @@ async function syncCatalogToLocalNow() {
 
   const data = await clientRequest('get', '/api/v1/catalog');
   const remoteProducts = (data.products || []).filter(remote => String(remote.type || '') !== 'service');
-  const values = remoteProducts.map(remote => ({
-    nameAr: remote.nameAr,
-    nameEn: remote.nameEn,
-    price: Number(remote.price),
-    category: remote.category || 'general',
-    type: remote.type || 'free',
-    description: remote.description || {},
-    image: remote.image || null,
-    isActive: Boolean(remote.isActive),
-    sharedLimit: Number(remote.sharedLimit || 1),
-    deliveryMode: remote.deliveryMode || 'instant',
-    sortOrder: Number(remote.sortOrder || 0),
-    networkProductId: remote.networkProductId,
-    networkManaged: true,
-    networkOwnerShopId: remote.networkOwnerShopId || null,
-    networkStock: Number(remote.stock || 0)
-  })).filter(row => row.networkProductId);
+
+  // Preserve a reseller's local markup while refreshing the shared catalog.
+  // The master price is always the floor. If the owner raises the floor above
+  // an old local override, the override is cleared automatically.
+  const remoteIds = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
+  const existingRows = remoteIds.length ? await Merchant.findAll({
+    where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
+    attributes: ['networkProductId', 'localPriceOverrideUsd'],
+    raw: true
+  }) : [];
+  const existingOverride = new Map(existingRows.map(row => [String(row.networkProductId), row.localPriceOverrideUsd]));
+
+  const values = remoteProducts.map(remote => {
+    const basePrice = Number(remote.price || 0);
+    const ownerShopId = String(remote.networkOwnerShopId || '');
+    const rawOverride = existingOverride.get(String(remote.networkProductId || ''));
+    const parsedOverride = rawOverride == null ? null : Number(rawOverride);
+    const canKeepOverride = ownerShopId !== thisShopId && Number.isFinite(parsedOverride) && parsedOverride > basePrice + 1e-9;
+    const localOverride = canKeepOverride ? parsedOverride : null;
+    return {
+      nameAr: remote.nameAr,
+      nameEn: remote.nameEn,
+      price: localOverride ?? basePrice,
+      networkBasePriceUsd: basePrice,
+      localPriceOverrideUsd: localOverride,
+      category: remote.category || 'general',
+      type: remote.type || 'free',
+      description: remote.description || {},
+      image: remote.image || null,
+      isActive: Boolean(remote.isActive),
+      sharedLimit: Number(remote.sharedLimit || 1),
+      deliveryMode: remote.deliveryMode || 'instant',
+      sortOrder: Number(remote.sortOrder || 0),
+      networkProductId: remote.networkProductId,
+      networkManaged: true,
+      networkOwnerShopId: remote.networkOwnerShopId || null,
+      networkStock: Number(remote.stock || 0)
+    };
+  }).filter(row => row.networkProductId);
 
   // One PostgreSQL upsert replaces N findOne + N update queries.
   if (values.length) {
     await Merchant.bulkCreate(values, {
       updateOnDuplicate: [
-        'nameAr', 'nameEn', 'price', 'category', 'type', 'description', 'image',
-        'isActive', 'sharedLimit', 'deliveryMode', 'sortOrder', 'networkManaged',
-        'networkOwnerShopId', 'networkStock'
+        'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'localPriceOverrideUsd',
+        'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
+        'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock'
       ]
     });
   }
@@ -304,12 +326,14 @@ async function addRemoteInventory(networkProductId, items, options = {}) {
   return result;
 }
 
-async function fulfillRemote({ networkProductId, quantity, localOrderId, customerId }) {
+async function fulfillRemote({ networkProductId, quantity, localOrderId, customerId, retailUnitPriceUsd, resellerPriceOverride }) {
   const result = await clientRequest('post', '/api/v1/fulfill', {
     networkProductId,
     quantity,
     localOrderId,
-    customerId
+    customerId,
+    retailUnitPriceUsd,
+    resellerPriceOverride: Boolean(resellerPriceOverride)
   });
   invalidateCatalogCache();
   return result;
@@ -1119,14 +1143,21 @@ function installMasterRoutes(app, getBot) {
     const remoteRef = `${client.shopId}:${String(body.localOrderId)}`;
     const quantity = Math.max(1, Math.min(100, Number(body.quantity || 1)));
     if (!Number.isInteger(quantity)) throw new Error('INVALID_QUANTITY');
+    const basePrice = Number(product.price || 0);
+    const wantsOverride = Boolean(body.resellerPriceOverride);
+    const requestedRetail = Number(body.retailUnitPriceUsd);
+    if (wantsOverride && (!Number.isFinite(requestedRetail) || requestedRetail + 1e-9 < basePrice || requestedRetail > 1000000)) {
+      throw new Error(`LOCAL_PRICE_BELOW_BASE:${basePrice.toFixed(2)}`);
+    }
+    const retailUnitPriceUsd = wantsOverride ? requestedRetail : basePrice;
     const [order] = await PurchaseOrder.findOrCreate({
       where: { remoteOrderRef: remoteRef },
       defaults: {
         userId: String(body.customerId || 0),
         merchantId: product.id,
         quantity,
-        unitPrice: Number(product.price),
-        totalAmount: Number(product.price) * quantity,
+        unitPrice: retailUnitPriceUsd,
+        totalAmount: retailUnitPriceUsd * quantity,
         currency: 'USDT',
         paymentMethod: `network:${client.shopId}`,
         status: 'paid',
@@ -1135,7 +1166,11 @@ function installMasterRoutes(app, getBot) {
         paymentOrigin: 'network_client'
       }
     });
-    const result = await fulfillOrder(order.id, { paymentRef: remoteRef, sourceShopId: client.shopId });
+    const result = await fulfillOrder(order.id, {
+      paymentRef: remoteRef,
+      sourceShopId: client.shopId,
+      resellerPriceOverride: wantsOverride
+    });
     invalidateCatalogCache();
     const deliveries = [];
     for (const delivery of result.deliveries || []) {
