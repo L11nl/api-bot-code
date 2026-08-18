@@ -5,6 +5,7 @@ const config = require('../config');
 const servicesCache = { at: 0, value: [] };
 const countriesCache = { at: 0, value: [] };
 const pricesCache = new Map();
+const allPricesCache = { at: 0, value: [] };
 const purchaseLocks = new Set();
 
 const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
@@ -166,6 +167,58 @@ function extractPriceRows(json, serviceCode) {
     out.push({ countryId: String(countryId), providerCost: cost, count: Math.floor(count) });
   }
   return out;
+}
+
+function parseServicePriceData(serviceData) {
+  if (!serviceData || typeof serviceData !== 'object') return null;
+  let cost = Number(serviceData.cost ?? serviceData.price);
+  let count = Number(serviceData.count ?? 0);
+  if (!Number.isFinite(cost)) {
+    const priceTiers = Object.entries(serviceData)
+      .map(([price, amount]) => ({ price: Number(price), count: Number(amount) }))
+      .filter(row => Number.isFinite(row.price) && Number.isFinite(row.count) && row.count > 0)
+      .sort((a, b) => a.price - b.price);
+    if (priceTiers.length) {
+      cost = priceTiers[0].price;
+      count = priceTiers.reduce((sum, row) => sum + row.count, 0);
+    }
+  }
+  if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
+  return { providerCost: cost, count: Math.floor(count), retailPrice: retailPrice(cost) };
+}
+
+// One getPrices call without service returns availability for the whole catalog.
+// This is used to hide dead service buttons before the customer taps them.
+async function availableServicesSummary(force = false) {
+  const now = Date.now();
+  if (!force && allPricesCache.value.length && now - allPricesCache.at < PRICES_TTL_MS) return allPricesCache.value;
+  const text = await apiRequest('getPrices');
+  const json = parseJson(text);
+  const byService = new Map();
+  if (json && typeof json === 'object') {
+    for (const countryData of Object.values(json)) {
+      if (!countryData || typeof countryData !== 'object') continue;
+      for (const [serviceCode, serviceData] of Object.entries(countryData)) {
+        const parsed = parseServicePriceData(serviceData);
+        if (!parsed) continue;
+        const key = String(serviceCode || '').trim();
+        if (!/^[A-Za-z0-9_-]{1,24}$/.test(key)) continue;
+        const current = byService.get(key) || { serviceCode: key, count: 0, providerCost: Infinity, retailPrice: Infinity };
+        current.count += parsed.count;
+        if (parsed.retailPrice < current.retailPrice || (parsed.retailPrice === current.retailPrice && parsed.providerCost < current.providerCost)) {
+          current.providerCost = parsed.providerCost;
+          current.retailPrice = parsed.retailPrice;
+        }
+        byService.set(key, current);
+      }
+    }
+  }
+  const value = [...byService.values()]
+    .filter(row => row.count > 0 && Number.isFinite(row.retailPrice))
+    .sort((a, b) => Number(a.retailPrice) - Number(b.retailPrice) || String(a.serviceCode).localeCompare(String(b.serviceCode)));
+  allPricesCache.at = now;
+  allPricesCache.value = value;
+  return value;
 }
 
 async function availabilityForService(serviceCode, force = false) {
@@ -482,6 +535,9 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
     order.status = 'waiting_sms';
     order.rawProvider = provider.raw || {};
     order.lastProviderStatus = 'STATUS_WAIT_CODE';
+    // Start the five-minute protection window from the moment the real number
+    // is allocated, not from the earlier wallet-reservation step.
+    order.expiresAt = new Date(Date.now() + 5 * 60_000);
     await order.save();
     await syncProviderCostAccounting(order).catch(error => {
       console.error('Virtual number provider-cost accounting:', order.id, error.message);
@@ -495,7 +551,7 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
 async function cancelCustomerOrder(userId, orderId) {
   const order = await VirtualNumberOrder.findByPk(orderId);
   if (!order || String(order.userId) !== String(userId)) throw apiError('ORDER_NOT_FOUND');
-  if (['cancelled', 'provider_cancelled', 'failed'].includes(order.status)) {
+  if (['cancelled', 'auto_cancelled', 'provider_cancelled', 'failed'].includes(order.status)) {
     return { order, alreadyDone: true, refunded: Number(order.refundApplied ? order.salePriceUsd : 0) };
   }
   if (order.status === 'completed') throw apiError('ORDER_ALREADY_COMPLETED');
@@ -526,18 +582,8 @@ async function pollPendingOrders(limit = 40) {
     const chunk = rows.slice(offset, offset + concurrency);
     const results = await Promise.all(chunk.map(async order => {
       try {
-        if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) {
-          try {
-            const cancelResponse = await setStatus(order.activationId, 8);
-            if (['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(cancelResponse)) {
-              const refund = await refundOrder(order.id, 'cancelled', cancelResponse);
-              return { type: 'expired_refund', order: refund.order, refunded: refund.refunded };
-            }
-          } catch (error) {
-            console.error('Virtual number expiry cancel:', order.id, error.message);
-          }
-        }
-
+        // Always check for an SMS first. This avoids cancelling at the five-minute
+        // boundary when the provider already has the code waiting for us.
         const status = await getStatus(order.activationId);
         order.lastProviderStatus = String(status).slice(0, 255);
         await order.save({ fields: ['lastProviderStatus'] });
@@ -556,6 +602,24 @@ async function pollPendingOrders(limit = 40) {
         if (status === 'STATUS_CANCEL') {
           const refund = await refundOrder(order.id, 'provider_cancelled', status);
           return { type: 'provider_cancelled', order: refund.order, refunded: refund.refunded };
+        }
+
+        // No code arrived. Once five minutes pass, ask the provider to cancel.
+        // Refund only after the provider confirms cancellation, so wallet money
+        // and provider money can never diverge. If the provider/API is briefly
+        // unavailable, the order remains waiting_sms and the watcher retries.
+        if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) {
+          try {
+            const cancelResponse = await setStatus(order.activationId, 8);
+            if (['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(cancelResponse)) {
+              const refund = await refundOrder(order.id, 'auto_cancelled', cancelResponse);
+              return { type: 'expired_refund', order: refund.order, refunded: refund.refunded };
+            }
+            order.lastProviderStatus = String(cancelResponse || status).slice(0, 255);
+            await order.save({ fields: ['lastProviderStatus'] });
+          } catch (error) {
+            console.error('Virtual number expiry cancel:', order.id, error.message);
+          }
         }
         return null;
       } catch (error) {
@@ -584,6 +648,7 @@ module.exports = {
   getBalance,
   listServices,
   listCountries,
+  availableServicesSummary,
   availabilityForService,
   quote,
   purchase,
