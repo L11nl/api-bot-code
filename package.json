@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.8.0",
+  "version": "12.8.2",
   "private": true,
-  "description": "Telegram digital store v12.8.0: bilingual virtual-number catalog, country flags/search, and cheapest-first availability.",
+  "description": "Telegram digital store v12.8.2: popular virtual-number services first, bilingual full search, Any number fallback, and availability-only purchase options.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
