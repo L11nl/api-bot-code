@@ -20,16 +20,17 @@ function roundMoney(value, decimals = 2) {
   return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
 }
 
-// Exact pricing ladder requested by the store owner:
-// <= $0.03  -> $0.30
-// > $0.03 and < $1 -> $0.50
-// >= $1 -> provider cost + $1 (so $1->$2, $2->$3).
+// Virtual-number pricing requested by the store owner:
+// <= $0.03       -> $0.30
+// > $0.03 < $0.30 -> $0.50
+// >= $0.30       -> provider cost + a fixed $0.30 margin.
+// This guarantees that higher-cost numbers never sell below provider cost.
 function retailPrice(providerCost) {
   const cost = Number(providerCost || 0);
   if (!Number.isFinite(cost) || cost < 0) return 0;
   if (cost <= 0.03 + 1e-9) return 0.30;
-  if (cost < 1) return 0.50;
-  return roundMoney(cost + 1, 2);
+  if (cost < 0.30 - 1e-9) return 0.50;
+  return roundMoney(cost + 0.30, 2);
 }
 
 function apiError(code, detail = '') {
@@ -181,7 +182,11 @@ async function availabilityForService(serviceCode, force = false) {
     ...row,
     countryName: countryMap.get(String(row.countryId)) || `Country ${row.countryId}`,
     retailPrice: retailPrice(row.providerCost)
-  })).sort((a, b) => a.countryName.localeCompare(b.countryName, 'en', { sensitivity: 'base' }));
+  })).sort((a, b) =>
+    Number(a.retailPrice || 0) - Number(b.retailPrice || 0) ||
+    Number(a.providerCost || 0) - Number(b.providerCost || 0) ||
+    a.countryName.localeCompare(b.countryName, 'en', { sensitivity: 'base' })
+  );
   pricesCache.set(code, { at: Date.now(), value });
   return value;
 }
@@ -227,6 +232,133 @@ async function getStatus(activationId) {
 
 async function setStatus(activationId, status) {
   return apiRequest('setStatus', { id: activationId, status });
+}
+
+function currentShopIdForAccounting() {
+  if (String(config.network?.role || '').toLowerCase() === 'client') return String(config.network?.shopId || '').trim();
+  return 'master';
+}
+
+async function markAccounting(order, fields) {
+  Object.assign(order, fields);
+  await order.save({ fields: Object.keys(fields) });
+  return order;
+}
+
+async function syncProviderCostAccounting(order) {
+  if (!order || order.providerCostAccounted) return { accounted: Boolean(order?.providerCostAccounted), skipped: true };
+  // A provider cost exists only after a real activation was allocated. If the
+  // provider rejected the purchase before returning activationId, there is no
+  // inter-shop cost to charge.
+  if (!String(order.activationId || '').trim()) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+  const amountUsd = Number(order.providerCostUsd || 0);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+
+  // Master/standalone storefront pays the provider directly, so there is no
+  // inter-shop debt to create. Client storefronts owe Master only the real
+  // provider cost; the retail margin remains with the client storefront.
+  let network;
+  try { network = require('../network'); }
+  catch { network = null; }
+  if (!network?.enabledClient?.()) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+
+  try {
+    await network.recordVirtualNumberProviderCost({
+      orderId: String(order.id),
+      activationId: String(order.activationId || ''),
+      amountUsd,
+      salePriceUsd: Number(order.salePriceUsd || 0),
+      customerId: String(order.userId || ''),
+      serviceCode: String(order.serviceCode || ''),
+      countryId: String(order.countryId || '')
+    });
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true };
+  } catch (error) {
+    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
+    throw error;
+  }
+}
+
+async function syncProviderCostReversal(order) {
+  if (!order || !order.refundApplied || order.providerCostReversed) {
+    return { reversed: Boolean(order?.providerCostReversed), skipped: true };
+  }
+
+  // Never create a refund obligation before the original provider-cost debt
+  // exists. If the original write failed, retry it first; both writes are
+  // idempotent on Master, so repeated background attempts are safe.
+  if (!order.providerCostAccounted) await syncProviderCostAccounting(order);
+  if (!String(order.activationId || '').trim()) {
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true, skipped: true };
+  }
+
+  const amountUsd = Number(order.providerCostUsd || 0);
+  let network;
+  try { network = require('../network'); }
+  catch { network = null; }
+  if (!network?.enabledClient?.() || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true, skipped: true };
+  }
+
+  try {
+    await network.reverseVirtualNumberProviderCost({
+      orderId: String(order.id),
+      activationId: String(order.activationId || ''),
+      amountUsd,
+      salePriceUsd: Number(order.salePriceUsd || 0),
+      customerId: String(order.userId || ''),
+      serviceCode: String(order.serviceCode || ''),
+      countryId: String(order.countryId || '')
+    });
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true };
+  } catch (error) {
+    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
+    throw error;
+  }
+}
+
+async function syncAccountingBacklog(limit = 60) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 60));
+  const rows = await VirtualNumberOrder.findAll({
+    where: {
+      [Op.or]: [
+        { providerCostAccounted: false, activationId: { [Op.ne]: null } },
+        { refundApplied: true, providerCostReversed: false }
+      ]
+    },
+    order: [['createdAt', 'ASC']],
+    limit: safeLimit
+  });
+  let accounted = 0;
+  let reversed = 0;
+  for (const order of rows) {
+    try {
+      if (!order.providerCostAccounted && order.activationId) {
+        await syncProviderCostAccounting(order);
+        accounted += 1;
+      }
+      if (order.refundApplied && !order.providerCostReversed) {
+        await syncProviderCostReversal(order);
+        reversed += 1;
+      }
+    } catch (error) {
+      console.error('Virtual number accounting retry:', order.id, error.message);
+    }
+  }
+  return { scanned: rows.length, accounted, reversed };
 }
 
 async function reserveCustomerWallet(userId, orderData) {
@@ -300,6 +432,9 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
       paymentOrigin: 'wallet'
     }, { transaction: tx });
     await tx.commit();
+    await syncProviderCostReversal(order).catch(error => {
+      console.error('Virtual number provider-cost reversal:', order.id, error.message);
+    });
     return { order, refunded: amount, alreadyRefunded: false };
   } catch (error) {
     await tx.rollback();
@@ -348,6 +483,9 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
     order.rawProvider = provider.raw || {};
     order.lastProviderStatus = 'STATUS_WAIT_CODE';
     await order.save();
+    await syncProviderCostAccounting(order).catch(error => {
+      console.error('Virtual number provider-cost accounting:', order.id, error.message);
+    });
     return order;
   } finally {
     purchaseLocks.delete(lockKey);
@@ -451,5 +589,8 @@ module.exports = {
   purchase,
   cancelCustomerOrder,
   pollPendingOrders,
+  syncAccountingBacklog,
+  syncProviderCostAccounting,
+  syncProviderCostReversal,
   listUserOrders
 };
