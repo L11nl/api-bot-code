@@ -19,7 +19,8 @@ function parseDescription(value) {
   if (!value) return {
     ar: '', en: '', warrantyAr: '', warrantyEn: '', sold: 0,
     nameArHtml: '', nameEmojiId: '', nameEmojiAlt: '',
-    descriptionArHtml: '', warrantyArHtml: ''
+    descriptionArHtml: '', warrantyArHtml: '',
+    serviceInputMode: '', servicePromptAr: '', servicePromptEn: ''
   };
 
   let parsed = value;
@@ -39,7 +40,13 @@ function parseDescription(value) {
 
   const legacyContent = parsed.type === 'text' ? String(parsed.content || '') : '';
 
+  // IMPORTANT: preserve every existing custom field. Older startup code rebuilt
+  // this object from a small whitelist and accidentally deleted Premium Emoji
+  // IDs and later feature metadata (for example serviceInputMode/servicePrompt).
+  // Returning the original keys plus normalized aliases makes upgrades additive,
+  // never destructive.
   return {
+    ...parsed,
     ar: String(parsed.ar ?? parsed.descriptionAr ?? parsed.description_ar ?? parsed.arabic ?? parsed.descriptionArabic ?? legacyContent ?? ''),
     en: String(parsed.en ?? parsed.descriptionEn ?? parsed.description_en ?? parsed.english ?? parsed.descriptionEnglish ?? legacyContent ?? ''),
     warrantyAr: String(parsed.warrantyAr ?? parsed.warranty_ar ?? parsed.arWarranty ?? ''),
@@ -49,7 +56,10 @@ function parseDescription(value) {
     nameEmojiId: String(parsed.nameEmojiId || ''),
     nameEmojiAlt: String(parsed.nameEmojiAlt || ''),
     descriptionArHtml: String(parsed.descriptionArHtml || ''),
-    warrantyArHtml: String(parsed.warrantyArHtml || '')
+    warrantyArHtml: String(parsed.warrantyArHtml || ''),
+    serviceInputMode: String(parsed.serviceInputMode || ''),
+    servicePromptAr: String(parsed.servicePromptAr || ''),
+    servicePromptEn: String(parsed.servicePromptEn || '')
   };
 }
 
@@ -144,9 +154,11 @@ function parseInventoryLineForType(line, productType = 'account') {
   let item;
   try {
     if (raw.startsWith('{')) {
+      if (type === 'shared') return { item: null, error: 'الحساب المشترك يقبل فقط email|password' };
       item = parseJsonInventory(raw);
     } else {
       const parts = splitInventoryLine(raw).map(value => String(value).trim());
+      if (type === 'shared' && parts.length !== 2) return { item: null, error: 'الحساب المشترك يقبل فقط email|password' };
       const [email = '', password = '', ...rest] = parts;
       item = { email, password, twoFactor: '', code: '', extra: rest.join('|').trim(), raw };
     }
@@ -166,21 +178,34 @@ function parseInventoryLineForType(line, productType = 'account') {
 }
 
 function parseInventoryTextForProduct(text, productType = 'account') {
-  const lines = String(text || '').split(/\r?\n/);
+  const type = String(productType || 'account').toLowerCase();
+  const rawText = String(text || '').replace(/\r\n/g, '\n').trim();
+
+  // Free-form products are message-based, not line-based. A single Telegram
+  // message may contain email, password, 2FA, links and notes across many
+  // lines; the entire block is one inventory unit and must be delivered as-is.
+  if (type === 'free') {
+    if (!rawText) return { items: [], errors: [] };
+    return {
+      items: [{ email: '', password: '', twoFactor: '', code: '', extra: '', raw: rawText }],
+      errors: []
+    };
+  }
+
+  const lines = rawText.split(/\n/);
   const items = [];
   const errors = [];
 
   lines.forEach((line, index) => {
     const trimmed = String(line || '').trim();
     if (!trimmed) return;
-    const result = parseInventoryLineForType(trimmed, productType);
+    const result = parseInventoryLineForType(trimmed, type);
     if (result.error) errors.push({ line: index + 1, value: trimmed, error: result.error });
     else if (result.item) items.push(result.item);
   });
 
   return { items, errors };
 }
-
 function parseInventoryText(text) {
   return parseInventoryTextForProduct(text, 'account').items;
 }
@@ -208,7 +233,7 @@ function inventoryFingerprint(productType, item) {
   const type = String(productType || 'account');
   let normalized;
   if (type === 'code') normalized = { code: String(item?.code || item?.raw || '').trim() };
-  else if (type === 'free') normalized = { raw: String(item?.raw || item?.extra || '').trim() };
+  else if (type === 'free') normalized = { kind: 'free-message-v2', raw: String(item?.raw || item?.extra || '').replace(/\r\n/g, '\n').trim() };
   else normalized = { email: normalizeEmail(item?.email), password: String(item?.password || '').trim() };
   return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
@@ -222,7 +247,7 @@ function renderDelivery(item, lang = 'ar') {
   if (item.password) lines.push(`<b>${labels.password}:</b> <code>${escapeHtml(item.password)}</code>`);
   if (item.code) lines.push(`<b>${labels.code}:</b> <code>${escapeHtml(item.code)}</code>`);
   if (item.extra) lines.push(`<b>${labels.extra}:</b> ${escapeHtml(item.extra)}`);
-  if (!lines.length && item.raw) lines.push(`<code>${escapeHtml(item.raw)}</code>`);
+  if (!lines.length && item.raw) lines.push(`<pre>${escapeHtml(item.raw)}</pre>`);
   return lines.join('\n') || (lang === 'en' ? 'Contact support for delivery.' : 'راجع الدعم للتسليم.');
 }
 
