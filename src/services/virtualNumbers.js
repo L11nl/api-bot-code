@@ -1,5 +1,8 @@
 const axios = require('axios');
-const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSetting, setSetting, getSecureSetting, setSecureSetting } = require('../db');
+const {
+  sequelize, Op, User, BalanceTransaction, VirtualNumberOrder,
+  getSetting, setSetting, getSecureSetting, setSecureSetting
+} = require('../db');
 const config = require('../config');
 
 const servicesCache = { at: 0, value: [] };
@@ -7,94 +10,150 @@ const countriesCache = { at: 0, value: [] };
 const pricesCache = new Map();
 const allPricesCache = { at: 0, value: [] };
 const purchaseLocks = new Set();
-let runtimeProviderCache = { at: 0, value: null };
 
-const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
-const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
-const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
-const PROVIDER_CONFIG_TTL_MS = 5000;
+const RUNTIME_SETTING_KEYS = {
+  apiKey: 'virtual_numbers:grizzlysms_api_key',
+  baseUrl: 'virtual_numbers:grizzlysms_base_url',
+  walletUrl: 'virtual_numbers:grizzlysms_wallet_url',
+  cancelDelaySeconds: 'virtual_numbers:grizzlysms_cancel_delay_seconds',
+  fallbackMinMarginUsd: 'virtual_numbers:fallback_min_margin_usd',
+  providerRetries: 'virtual_numbers:provider_retries'
+};
 
-function clearProviderCaches() {
-  runtimeProviderCache = { at: 0, value: null };
+const runtimeConfig = {
+  loaded: false,
+  apiKey: String(config.virtualNumbers?.apiKey || '').trim(),
+  baseUrl: String(config.virtualNumbers?.baseUrl || '').trim(),
+  walletUrl: String(config.virtualNumbers?.walletUrl || '').trim(),
+  cancelDelaySeconds: Number(config.virtualNumbers?.cancelDelaySeconds || 120),
+  fallbackMinMarginUsd: Number(config.virtualNumbers?.fallbackMinMarginUsd || 0.20),
+  providerRetries: Number(config.virtualNumbers?.providerRetries || 2),
+  sources: {}
+};
+
+function firstEnv(...names) {
+  for (const name of names) {
+    const value = String(process.env[name] || '').trim();
+    if (value) return { value, source: `Railway:${name}` };
+  }
+  return { value: '', source: '' };
+}
+
+function resetProviderCaches() {
   servicesCache.at = 0; servicesCache.value = [];
   countriesCache.at = 0; countriesCache.value = [];
   pricesCache.clear();
   allPricesCache.at = 0; allPricesCache.value = [];
 }
 
-async function getProviderConfig(force = false) {
-  if (!force && runtimeProviderCache.value && Date.now() - runtimeProviderCache.at < PROVIDER_CONFIG_TTL_MS) return runtimeProviderCache.value;
-  const envEnabled = Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
-  const [enabledRaw, dbKey, dbBaseUrl] = await Promise.all([
-    getSetting('virtual_numbers_enabled', envEnabled ? 'true' : 'false'),
-    getSecureSetting('virtual_numbers_api_key', ''),
-    getSetting('virtual_numbers_base_url', '')
-  ]);
-  const value = {
-    enabled: String(enabledRaw || '').toLowerCase() === 'true',
-    apiKey: String(dbKey || config.virtualNumbers?.apiKey || '').trim(),
-    baseUrl: String(dbBaseUrl || config.virtualNumbers?.baseUrl || '').trim(),
-    timeoutMs: Number(config.virtualNumbers?.timeoutMs || 15000),
-    source: dbKey ? 'database' : (config.virtualNumbers?.apiKey ? 'environment' : 'none')
+async function loadRuntimeConfig() {
+  const previous = JSON.stringify({
+    apiKey: runtimeConfig.apiKey, baseUrl: runtimeConfig.baseUrl, walletUrl: runtimeConfig.walletUrl,
+    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds, fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
+    providerRetries: runtimeConfig.providerRetries
+  });
+
+  const envKey = firstEnv('GRIZZLYSMS_API_KEY', 'SMSBOWER_API_KEY', 'VIRTUAL_NUMBERS_API_KEY');
+  const envBase = firstEnv('GRIZZLYSMS_BASE_URL', 'SMSBOWER_BASE_URL', 'VIRTUAL_NUMBERS_BASE_URL');
+  const envWallet = firstEnv('GRIZZLYSMS_WALLET_URL');
+  const envCancel = firstEnv('GRIZZLYSMS_CANCEL_DELAY_SECONDS');
+  const envMargin = firstEnv('VIRTUAL_NUMBERS_FALLBACK_MIN_MARGIN_USD');
+  const envRetries = firstEnv('VIRTUAL_NUMBERS_PROVIDER_RETRIES');
+
+  const storedKey = envKey.value ? '' : String(await getSecureSetting(RUNTIME_SETTING_KEYS.apiKey, '') || '').trim();
+  const storedBase = envBase.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.baseUrl, '') || '').trim();
+  const storedWallet = envWallet.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.walletUrl, '') || '').trim();
+  const storedCancel = envCancel.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.cancelDelaySeconds, '') || '').trim();
+  const storedMargin = envMargin.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.fallbackMinMarginUsd, '') || '').trim();
+  const storedRetries = envRetries.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.providerRetries, '') || '').trim();
+
+  runtimeConfig.apiKey = envKey.value || storedKey || '';
+  runtimeConfig.baseUrl = envBase.value || storedBase || String(config.virtualNumbers?.baseUrl || 'https://api.grizzlysms.com/stubs/handler_api.php').trim();
+  runtimeConfig.walletUrl = envWallet.value || storedWallet || String(config.virtualNumbers?.walletUrl || 'https://api.grizzlysms.com/public/crypto/wallet').trim();
+
+  const cancelRaw = envCancel.value || storedCancel || String(config.virtualNumbers?.cancelDelaySeconds || 120);
+  const marginRaw = envMargin.value || storedMargin || String(config.virtualNumbers?.fallbackMinMarginUsd || 0.20);
+  const retriesRaw = envRetries.value || storedRetries || String(config.virtualNumbers?.providerRetries || 2);
+  const cancelNumber = Number(cancelRaw);
+  const marginNumber = Number(marginRaw);
+  const retriesNumber = Number(retriesRaw);
+  runtimeConfig.cancelDelaySeconds = Math.max(0, Math.min(3600, Number.isFinite(cancelNumber) ? cancelNumber : 120));
+  runtimeConfig.fallbackMinMarginUsd = Math.max(0, Math.min(10, Number.isFinite(marginNumber) ? marginNumber : 0.20));
+  runtimeConfig.providerRetries = Math.max(0, Math.min(10, Math.trunc(Number.isFinite(retriesNumber) ? retriesNumber : 2)));
+  runtimeConfig.sources = {
+    apiKey: envKey.value ? envKey.source : (storedKey ? 'Bot' : 'Missing'),
+    baseUrl: envBase.value ? envBase.source : (storedBase ? 'Bot' : 'Default'),
+    walletUrl: envWallet.value ? envWallet.source : (storedWallet ? 'Bot' : 'Default'),
+    cancelDelaySeconds: envCancel.value ? envCancel.source : (storedCancel ? 'Bot' : 'Default'),
+    fallbackMinMarginUsd: envMargin.value ? envMargin.source : (storedMargin ? 'Bot' : 'Default'),
+    providerRetries: envRetries.value ? envRetries.source : (storedRetries ? 'Bot' : 'Default')
   };
-  runtimeProviderCache = { at: Date.now(), value };
-  return value;
+  runtimeConfig.loaded = true;
+
+  const current = JSON.stringify({
+    apiKey: runtimeConfig.apiKey, baseUrl: runtimeConfig.baseUrl, walletUrl: runtimeConfig.walletUrl,
+    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds, fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
+    providerRetries: runtimeConfig.providerRetries
+  });
+  if (previous !== current) resetProviderCaches();
+  return getRuntimeConfigSummary();
 }
 
-// Backward-compatible quick check for old call-sites. DB-backed enablement is
-// authoritative through isEnabled(), which bot UI now uses asynchronously.
+function maskSecret(value) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  if (raw.length <= 8) return `${raw.slice(0, 2)}••••`;
+  return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+}
+
+function getRuntimeConfigSummary() {
+  return {
+    configured: Boolean(runtimeConfig.apiKey && runtimeConfig.baseUrl),
+    missing: runtimeConfig.apiKey ? [] : ['GRIZZLYSMS_API_KEY'],
+    apiKeyMasked: maskSecret(runtimeConfig.apiKey),
+    baseUrl: runtimeConfig.baseUrl,
+    walletUrl: runtimeConfig.walletUrl,
+    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds,
+    fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
+    providerRetries: runtimeConfig.providerRetries,
+    sources: { ...runtimeConfig.sources }
+  };
+}
+
+async function setRuntimeSetting(name, value) {
+  const clean = String(value ?? '').trim();
+  if (!(name in RUNTIME_SETTING_KEYS)) throw apiError('BAD_RUNTIME_SETTING');
+  if (name === 'apiKey') await setSecureSetting(RUNTIME_SETTING_KEYS.apiKey, clean);
+  else await setSetting(RUNTIME_SETTING_KEYS[name], clean);
+  return loadRuntimeConfig();
+}
+
+const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
+const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
+const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
+
 function enabled() {
-  if (runtimeProviderCache.value) return Boolean(runtimeProviderCache.value.enabled && runtimeProviderCache.value.apiKey && runtimeProviderCache.value.baseUrl);
-  return Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
+  return Boolean(config.virtualNumbers?.enabled && runtimeConfig.apiKey && runtimeConfig.baseUrl);
 }
 
-async function isEnabled() {
-  const provider = await getProviderConfig();
-  return Boolean(provider.enabled && provider.apiKey && provider.baseUrl);
-}
-
-async function configureProvider({ apiKey, baseUrl, enabled: shouldEnable = true } = {}) {
-  if (apiKey !== undefined) {
-    const clean = String(apiKey || '').trim();
-    if (!clean) throw apiError('API_KEY_REQUIRED');
-    await setSecureSetting('virtual_numbers_api_key', clean);
-  }
-  if (baseUrl !== undefined) {
-    const cleanUrl = String(baseUrl || '').trim();
-    if (cleanUrl && !/^https:\/\//i.test(cleanUrl)) throw apiError('INVALID_PROVIDER_URL');
-    await setSetting('virtual_numbers_base_url', cleanUrl);
-  }
-  await setSetting('virtual_numbers_enabled', shouldEnable ? 'true' : 'false');
-  clearProviderCaches();
-  return getProviderConfig(true);
-}
-
-async function setEnabled(shouldEnable) {
-  await setSetting('virtual_numbers_enabled', shouldEnable ? 'true' : 'false');
-  clearProviderCaches();
-  return getProviderConfig(true);
-}
-
-async function clearProvider() {
-  await Promise.all([
-    setSecureSetting('virtual_numbers_api_key', ''),
-    setSetting('virtual_numbers_enabled', 'false')
-  ]);
-  clearProviderCaches();
-  return getProviderConfig(true);
-}
 
 function roundMoney(value, decimals = 2) {
   const factor = 10 ** decimals;
   return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
 }
 
-// v13: every storefront using its own provider API gets a fixed $0.30 gross
-// margin on every virtual number. This never sells below provider cost.
+// Virtual-number pricing requested by the store owner:
+// <= $0.03       -> $0.30
+// > $0.03 < $0.30 -> $0.50
+// >= $0.30       -> provider cost + a fixed $0.30 margin.
+// This guarantees that higher-cost numbers never sell below provider cost.
 function retailPrice(providerCost) {
   const cost = Number(providerCost || 0);
   if (!Number.isFinite(cost) || cost < 0) return 0;
-  return roundMoney(cost + 0.30, 2);
+  if (cost <= 0.03 + 1e-9) return 0.30;
+  if (cost < 0.30 - 1e-9) return 0.50;
+  const margin = Math.max(0.30, Number(runtimeConfig.fallbackMinMarginUsd || 0));
+  return roundMoney(cost + margin, 2);
 }
 
 function apiError(code, detail = '') {
@@ -105,29 +164,39 @@ function apiError(code, detail = '') {
 }
 
 async function apiRequest(action, extra = {}, options = {}) {
-  const provider = await getProviderConfig();
-  if ((!provider.enabled && !options.allowDisabled) || !provider.apiKey || !provider.baseUrl) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  if (!enabled()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
   const params = {
-    api_key: provider.apiKey,
+    api_key: runtimeConfig.apiKey,
     action,
     ...extra
   };
-  let response;
-  try {
-    response = await axios.get(provider.baseUrl, {
-      params,
-      timeout: options.timeoutMs || provider.timeoutMs,
-      responseType: 'text',
-      transformResponse: [data => data]
-    });
-  } catch (error) {
-    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+  const retrySafe = options.retrySafe !== false;
+  const attempts = retrySafe ? Math.max(1, Number(runtimeConfig.providerRetries || 0) + 1) : 1;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let response;
+    try {
+      response = await axios.get(runtimeConfig.baseUrl, {
+        params,
+        timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
+        responseType: 'text',
+        transformResponse: [data => data]
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000, 250 * (attempt + 1))));
+        continue;
+      }
+      throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+    }
+    const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
+    if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
+      throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+    }
+    return text;
   }
-  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
-  if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
-    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
-  }
-  return text;
+  throw apiError('PROVIDER_UNAVAILABLE', lastError?.message || 'request failed');
 }
 
 function parseJson(text, fallback = null) {
@@ -135,38 +204,11 @@ function parseJson(text, fallback = null) {
   catch { return fallback; }
 }
 
-async function getBalance(options = {}) {
-  const text = await apiRequest('getBalance', {}, options);
+async function getBalance() {
+  const text = await apiRequest('getBalance');
   if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text);
   const amount = Number(text.slice('ACCESS_BALANCE:'.length));
   if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
-  return amount;
-}
-
-// Validate a replacement provider before overwriting the currently working
-// encrypted configuration. This makes the admin setup flow transactional from
-// the operator's point of view: bad credentials never disable a good provider.
-async function testProviderCredentials(apiKey, baseUrl) {
-  const cleanKey = String(apiKey || '').trim();
-  const cleanUrl = String(baseUrl || '').trim();
-  if (!cleanKey) throw apiError('API_KEY_REQUIRED');
-  if (!/^https:\/\//i.test(cleanUrl)) throw apiError('INVALID_PROVIDER_URL');
-  let response;
-  try {
-    response = await axios.get(cleanUrl, {
-      params: { api_key: cleanKey, action: 'getBalance' },
-      timeout: Number(config.virtualNumbers?.timeoutMs || 15000),
-      responseType: 'text',
-      transformResponse: [data => data]
-    });
-  } catch (error) {
-    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
-  }
-  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
-  if (/^(BAD_KEY|BAD_ACTION)/i.test(text)) throw apiError(text.split(':')[0].trim().toUpperCase(), text);
-  if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
-  const amount = Number(text.slice('ACCESS_BALANCE:'.length));
-  if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
   return amount;
 }
 
@@ -251,7 +293,7 @@ function extractPriceRows(json, serviceCode) {
         .sort((a, b) => a.price - b.price);
       if (priceTiers.length) {
         cost = priceTiers[0].price;
-        count = priceTiers.reduce((sum, row) => sum + row.count, 0);
+        count = priceTiers[0].count;
       }
     }
     if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) continue;
@@ -271,7 +313,7 @@ function parseServicePriceData(serviceData) {
       .sort((a, b) => a.price - b.price);
     if (priceTiers.length) {
       cost = priceTiers[0].price;
-      count = priceTiers.reduce((sum, row) => sum + row.count, 0);
+      count = priceTiers[0].count;
     }
   }
   if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
@@ -345,7 +387,7 @@ async function getNumberV2(serviceCode, countryId, maxPrice) {
     service: serviceCode,
     country: countryId,
     maxPrice: Number(maxPrice).toFixed(4)
-  });
+  }, { retrySafe: false });
   const json = parseJson(text);
   if (json && (json.activationId || json.phoneNumber)) {
     return {
@@ -410,7 +452,7 @@ async function syncProviderCostAccounting(order) {
   let network;
   try { network = require('../network'); }
   catch { network = null; }
-  if (!network?.enabledClient?.() || String(order.providerSource || '') === 'local_api') {
+  if (!network?.enabledClient?.()) {
     await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
     return { accounted: true, skipped: true };
   }
@@ -451,7 +493,7 @@ async function syncProviderCostReversal(order) {
   let network;
   try { network = require('../network'); }
   catch { network = null; }
-  if (!network?.enabledClient?.() || String(order.providerSource || '') === 'local_api' || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+  if (!network?.enabledClient?.() || !Number.isFinite(amountUsd) || amountUsd <= 0) {
     await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
     return { reversed: true, skipped: true };
   }
@@ -527,9 +569,7 @@ async function reserveCustomerWallet(userId, orderData) {
       providerCostUsd: orderData.providerCost,
       salePriceUsd: price,
       status: 'reserving',
-      providerOwnerShopId: currentShopIdForAccounting(),
-      providerSource: 'local_api',
-      expiresAt: new Date(Date.now() + 5 * 60_000)
+      expiresAt: new Date(Date.now() + config.virtualNumbers.activationTimeoutMinutes * 60_000)
     }, { transaction: tx });
     user.balance = balance - price;
     await user.save({ transaction: tx, fields: ['balance'] });
@@ -612,11 +652,39 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
     });
 
     let provider;
-    try {
-      provider = await getNumberV2(serviceCode, countryId, freshQuote.providerCost);
-    } catch (error) {
-      await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
-      throw error;
+    let providerQuote = freshQuote;
+    const explicitRetries = Math.max(0, Number(runtimeConfig.providerRetries || 0));
+    for (let attempt = 0; attempt <= explicitRetries; attempt += 1) {
+      try {
+        provider = await getNumberV2(serviceCode, countryId, providerQuote.providerCost);
+        break;
+      } catch (error) {
+        const noNumber = ['NO_NUMBERS', 'NO_NUMBER'].includes(String(error.code || '').toUpperCase());
+        if (!noNumber || attempt >= explicitRetries) {
+          await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
+          throw error;
+        }
+
+        // NO_NUMBERS is a safe retry because the provider explicitly confirmed
+        // that no activation was allocated. Refresh the live quote before trying
+        // again so stale/empty price tiers are never retried blindly.
+        const refreshed = await quote(serviceCode, countryId, true).catch(() => null);
+        if (!refreshed || refreshed.count < 1) {
+          await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
+          throw error;
+        }
+        const refreshedCents = Math.round(Number(refreshed.retailPrice) * 100);
+        if (refreshedCents !== currentCents) {
+          await refundOrder(order.id, 'failed', 'PRICE_CHANGED').catch(() => {});
+          const changed = apiError('PRICE_CHANGED');
+          changed.quote = refreshed;
+          throw changed;
+        }
+        providerQuote = refreshed;
+        order.providerCostUsd = Number(refreshed.providerCost || order.providerCostUsd || 0);
+        await order.save({ fields: ['providerCostUsd'] }).catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, Math.min(750, 200 * (attempt + 1))));
+      }
     }
     if (!provider.activationId || !provider.phoneNumber) {
       await refundOrder(order.id, 'failed', 'BAD_NUMBER_RESPONSE').catch(() => {});
@@ -648,6 +716,16 @@ async function cancelCustomerOrder(userId, orderId) {
     return { order, alreadyDone: true, refunded: Number(order.refundApplied ? order.salePriceUsd : 0) };
   }
   if (order.status === 'completed') throw apiError('ORDER_ALREADY_COMPLETED');
+  if (order.activationId && Number(runtimeConfig.cancelDelaySeconds || 0) > 0) {
+    const allocatedAt = new Date(order.createdAt || Date.now()).getTime();
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - allocatedAt) / 1000));
+    const waitSeconds = Math.max(0, Math.ceil(Number(runtimeConfig.cancelDelaySeconds || 0) - ageSeconds));
+    if (waitSeconds > 0) {
+      const error = apiError('EARLY_CANCEL_DENIED');
+      error.waitSeconds = waitSeconds;
+      throw error;
+    }
+  }
   if (!order.activationId) {
     const refunded = await refundOrder(order.id, 'cancelled', 'LOCAL_CANCEL');
     return { ...refunded, providerResponse: 'LOCAL_CANCEL' };
@@ -663,7 +741,7 @@ async function cancelCustomerOrder(userId, orderId) {
 }
 
 async function pollPendingOrders(limit = 40) {
-  if (!await isEnabled()) return [];
+  if (!enabled()) return [];
   const rows = await VirtualNumberOrder.findAll({
     where: { status: 'waiting_sms', activationId: { [Op.ne]: null } },
     order: [['createdAt', 'ASC']],
@@ -737,14 +815,11 @@ async function listUserOrders(userId, limit = 10) {
 
 module.exports = {
   enabled,
-  isEnabled,
-  getProviderConfig,
-  configureProvider,
-  setEnabled,
-  clearProvider,
+  loadRuntimeConfig,
+  getRuntimeConfigSummary,
+  setRuntimeSetting,
   retailPrice,
   getBalance,
-  testProviderCredentials,
   listServices,
   listCountries,
   availableServicesSummary,
