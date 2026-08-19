@@ -1,8 +1,5 @@
 const axios = require('axios');
-const {
-  sequelize, Op, User, BalanceTransaction, VirtualNumberOrder,
-  getSetting, setSetting, getSecureSetting, setSecureSetting
-} = require('../db');
+const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder } = require('../db');
 const config = require('../config');
 
 const servicesCache = { at: 0, value: [] };
@@ -11,131 +8,13 @@ const pricesCache = new Map();
 const allPricesCache = { at: 0, value: [] };
 const purchaseLocks = new Set();
 
-const RUNTIME_SETTING_KEYS = {
-  apiKey: 'virtual_numbers:grizzlysms_api_key',
-  baseUrl: 'virtual_numbers:grizzlysms_base_url',
-  walletUrl: 'virtual_numbers:grizzlysms_wallet_url',
-  cancelDelaySeconds: 'virtual_numbers:grizzlysms_cancel_delay_seconds',
-  fallbackMinMarginUsd: 'virtual_numbers:fallback_min_margin_usd',
-  providerRetries: 'virtual_numbers:provider_retries'
-};
-
-const runtimeConfig = {
-  loaded: false,
-  apiKey: String(config.virtualNumbers?.apiKey || '').trim(),
-  baseUrl: String(config.virtualNumbers?.baseUrl || '').trim(),
-  walletUrl: String(config.virtualNumbers?.walletUrl || '').trim(),
-  cancelDelaySeconds: Number(config.virtualNumbers?.cancelDelaySeconds || 120),
-  fallbackMinMarginUsd: Number(config.virtualNumbers?.fallbackMinMarginUsd || 0.20),
-  providerRetries: Number(config.virtualNumbers?.providerRetries || 2),
-  sources: {}
-};
-
-function firstEnv(...names) {
-  for (const name of names) {
-    const value = String(process.env[name] || '').trim();
-    if (value) return { value, source: `Railway:${name}` };
-  }
-  return { value: '', source: '' };
-}
-
-function resetProviderCaches() {
-  servicesCache.at = 0; servicesCache.value = [];
-  countriesCache.at = 0; countriesCache.value = [];
-  pricesCache.clear();
-  allPricesCache.at = 0; allPricesCache.value = [];
-}
-
-async function loadRuntimeConfig() {
-  const previous = JSON.stringify({
-    apiKey: runtimeConfig.apiKey, baseUrl: runtimeConfig.baseUrl, walletUrl: runtimeConfig.walletUrl,
-    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds, fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
-    providerRetries: runtimeConfig.providerRetries
-  });
-
-  const envKey = firstEnv('GRIZZLYSMS_API_KEY', 'SMSBOWER_API_KEY', 'VIRTUAL_NUMBERS_API_KEY');
-  const envBase = firstEnv('GRIZZLYSMS_BASE_URL', 'SMSBOWER_BASE_URL', 'VIRTUAL_NUMBERS_BASE_URL');
-  const envWallet = firstEnv('GRIZZLYSMS_WALLET_URL');
-  const envCancel = firstEnv('GRIZZLYSMS_CANCEL_DELAY_SECONDS');
-  const envMargin = firstEnv('VIRTUAL_NUMBERS_FALLBACK_MIN_MARGIN_USD');
-  const envRetries = firstEnv('VIRTUAL_NUMBERS_PROVIDER_RETRIES');
-
-  const storedKey = envKey.value ? '' : String(await getSecureSetting(RUNTIME_SETTING_KEYS.apiKey, '') || '').trim();
-  const storedBase = envBase.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.baseUrl, '') || '').trim();
-  const storedWallet = envWallet.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.walletUrl, '') || '').trim();
-  const storedCancel = envCancel.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.cancelDelaySeconds, '') || '').trim();
-  const storedMargin = envMargin.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.fallbackMinMarginUsd, '') || '').trim();
-  const storedRetries = envRetries.value ? '' : String(await getSetting(RUNTIME_SETTING_KEYS.providerRetries, '') || '').trim();
-
-  runtimeConfig.apiKey = envKey.value || storedKey || '';
-  runtimeConfig.baseUrl = envBase.value || storedBase || String(config.virtualNumbers?.baseUrl || 'https://api.grizzlysms.com/stubs/handler_api.php').trim();
-  runtimeConfig.walletUrl = envWallet.value || storedWallet || String(config.virtualNumbers?.walletUrl || 'https://api.grizzlysms.com/public/crypto/wallet').trim();
-
-  const cancelRaw = envCancel.value || storedCancel || String(config.virtualNumbers?.cancelDelaySeconds || 120);
-  const marginRaw = envMargin.value || storedMargin || String(config.virtualNumbers?.fallbackMinMarginUsd || 0.20);
-  const retriesRaw = envRetries.value || storedRetries || String(config.virtualNumbers?.providerRetries || 2);
-  const cancelNumber = Number(cancelRaw);
-  const marginNumber = Number(marginRaw);
-  const retriesNumber = Number(retriesRaw);
-  runtimeConfig.cancelDelaySeconds = Math.max(0, Math.min(3600, Number.isFinite(cancelNumber) ? cancelNumber : 120));
-  runtimeConfig.fallbackMinMarginUsd = Math.max(0, Math.min(10, Number.isFinite(marginNumber) ? marginNumber : 0.20));
-  runtimeConfig.providerRetries = Math.max(0, Math.min(10, Math.trunc(Number.isFinite(retriesNumber) ? retriesNumber : 2)));
-  runtimeConfig.sources = {
-    apiKey: envKey.value ? envKey.source : (storedKey ? 'Bot' : 'Missing'),
-    baseUrl: envBase.value ? envBase.source : (storedBase ? 'Bot' : 'Default'),
-    walletUrl: envWallet.value ? envWallet.source : (storedWallet ? 'Bot' : 'Default'),
-    cancelDelaySeconds: envCancel.value ? envCancel.source : (storedCancel ? 'Bot' : 'Default'),
-    fallbackMinMarginUsd: envMargin.value ? envMargin.source : (storedMargin ? 'Bot' : 'Default'),
-    providerRetries: envRetries.value ? envRetries.source : (storedRetries ? 'Bot' : 'Default')
-  };
-  runtimeConfig.loaded = true;
-
-  const current = JSON.stringify({
-    apiKey: runtimeConfig.apiKey, baseUrl: runtimeConfig.baseUrl, walletUrl: runtimeConfig.walletUrl,
-    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds, fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
-    providerRetries: runtimeConfig.providerRetries
-  });
-  if (previous !== current) resetProviderCaches();
-  return getRuntimeConfigSummary();
-}
-
-function maskSecret(value) {
-  const raw = String(value || '');
-  if (!raw) return '';
-  if (raw.length <= 8) return `${raw.slice(0, 2)}••••`;
-  return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
-}
-
-function getRuntimeConfigSummary() {
-  return {
-    configured: Boolean(runtimeConfig.apiKey && runtimeConfig.baseUrl),
-    missing: runtimeConfig.apiKey ? [] : ['GRIZZLYSMS_API_KEY'],
-    apiKeyMasked: maskSecret(runtimeConfig.apiKey),
-    baseUrl: runtimeConfig.baseUrl,
-    walletUrl: runtimeConfig.walletUrl,
-    cancelDelaySeconds: runtimeConfig.cancelDelaySeconds,
-    fallbackMinMarginUsd: runtimeConfig.fallbackMinMarginUsd,
-    providerRetries: runtimeConfig.providerRetries,
-    sources: { ...runtimeConfig.sources }
-  };
-}
-
-async function setRuntimeSetting(name, value) {
-  const clean = String(value ?? '').trim();
-  if (!(name in RUNTIME_SETTING_KEYS)) throw apiError('BAD_RUNTIME_SETTING');
-  if (name === 'apiKey') await setSecureSetting(RUNTIME_SETTING_KEYS.apiKey, clean);
-  else await setSetting(RUNTIME_SETTING_KEYS[name], clean);
-  return loadRuntimeConfig();
-}
-
 const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
 const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
 const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
 
 function enabled() {
-  return Boolean(config.virtualNumbers?.enabled && runtimeConfig.apiKey && runtimeConfig.baseUrl);
+  return Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
 }
-
 
 function roundMoney(value, decimals = 2) {
   const factor = 10 ** decimals;
@@ -152,8 +31,7 @@ function retailPrice(providerCost) {
   if (!Number.isFinite(cost) || cost < 0) return 0;
   if (cost <= 0.03 + 1e-9) return 0.30;
   if (cost < 0.30 - 1e-9) return 0.50;
-  const margin = Math.max(0.30, Number(runtimeConfig.fallbackMinMarginUsd || 0));
-  return roundMoney(cost + margin, 2);
+  return roundMoney(cost + 0.30, 2);
 }
 
 function apiError(code, detail = '') {
@@ -166,37 +44,26 @@ function apiError(code, detail = '') {
 async function apiRequest(action, extra = {}, options = {}) {
   if (!enabled()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
   const params = {
-    api_key: runtimeConfig.apiKey,
+    api_key: config.virtualNumbers.apiKey,
     action,
     ...extra
   };
-  const retrySafe = options.retrySafe !== false;
-  const attempts = retrySafe ? Math.max(1, Number(runtimeConfig.providerRetries || 0) + 1) : 1;
-  let lastError = null;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    let response;
-    try {
-      response = await axios.get(runtimeConfig.baseUrl, {
-        params,
-        timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
-        responseType: 'text',
-        transformResponse: [data => data]
-      });
-    } catch (error) {
-      lastError = error;
-      if (attempt + 1 < attempts) {
-        await new Promise(resolve => setTimeout(resolve, Math.min(1000, 250 * (attempt + 1))));
-        continue;
-      }
-      throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
-    }
-    const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
-    if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
-      throw apiError(text.split(':')[0].trim().toUpperCase(), text);
-    }
-    return text;
+  let response;
+  try {
+    response = await axios.get(config.virtualNumbers.baseUrl, {
+      params,
+      timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
+      responseType: 'text',
+      transformResponse: [data => data]
+    });
+  } catch (error) {
+    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
   }
-  throw apiError('PROVIDER_UNAVAILABLE', lastError?.message || 'request failed');
+  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
+  if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
+    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+  }
+  return text;
 }
 
 function parseJson(text, fallback = null) {
@@ -210,6 +77,127 @@ async function getBalance() {
   const amount = Number(text.slice('ACCESS_BALANCE:'.length));
   if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
   return amount;
+}
+
+
+function safeProviderErrorText(value) {
+  const text = String(value || '').replace(/api_key=[^&\s]+/gi, 'api_key=***').trim();
+  return text.slice(0, 180);
+}
+
+async function probeProvider({ name, baseUrl, apiKey, walletUrl = '' }) {
+  const startedAt = Date.now();
+  const result = {
+    name: String(name || 'Provider'),
+    configured: Boolean(apiKey && baseUrl),
+    siteReachable: false,
+    apiWorking: false,
+    keyState: apiKey ? 'unknown' : 'missing',
+    balance: null,
+    servicesWorking: false,
+    servicesCount: null,
+    walletConfigured: Boolean(walletUrl),
+    walletReachable: null,
+    latencyMs: null,
+    errorCode: '',
+    errorDetail: ''
+  };
+
+  if (!baseUrl) {
+    result.errorCode = 'NO_BASE_URL';
+    result.latencyMs = Date.now() - startedAt;
+    return result;
+  }
+
+  const timeout = Math.min(10_000, Math.max(3_000, Number(config.virtualNumbers?.timeoutMs || 8_000)));
+  const request = async action => {
+    const response = await axios.get(baseUrl, {
+      params: { api_key: apiKey || '__missing_api_key__', action },
+      timeout,
+      responseType: 'text',
+      transformResponse: [data => data],
+      validateStatus: status => status >= 200 && status < 500
+    });
+    return {
+      status: Number(response.status || 0),
+      text: typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim()
+    };
+  };
+
+  try {
+    const balanceResponse = await request('getBalance');
+    result.siteReachable = true;
+    const text = balanceResponse.text;
+    if (!apiKey) {
+      result.keyState = 'missing';
+    } else if (/^ACCESS_BALANCE:/i.test(text)) {
+      const balance = Number(text.slice(text.indexOf(':') + 1));
+      result.keyState = 'valid';
+      result.apiWorking = true;
+      result.balance = Number.isFinite(balance) ? balance : null;
+    } else if (/^BAD_KEY/i.test(text)) {
+      result.keyState = 'invalid';
+      result.errorCode = 'BAD_KEY';
+    } else {
+      result.errorCode = 'UNEXPECTED_BALANCE_RESPONSE';
+      result.errorDetail = safeProviderErrorText(text);
+    }
+  } catch (error) {
+    result.errorCode = 'UNREACHABLE';
+    result.errorDetail = safeProviderErrorText(error?.message || 'request failed');
+  }
+
+  if (result.apiWorking && result.keyState === 'valid') {
+    try {
+      const servicesResponse = await request('getServicesList');
+      const parsed = parseJson(servicesResponse.text);
+      const rows = Array.isArray(parsed?.services) ? parsed.services : (Array.isArray(parsed) ? parsed : []);
+      result.servicesCount = rows.filter(row => row && (row.code || row.id) && (row.name || row.title || row.code)).length;
+      result.servicesWorking = result.servicesCount > 0;
+      if (!result.servicesWorking && !result.errorCode) {
+        result.errorCode = 'SERVICES_EMPTY';
+        result.errorDetail = safeProviderErrorText(servicesResponse.text);
+      }
+    } catch (error) {
+      if (!result.errorCode) result.errorCode = 'SERVICES_CHECK_FAILED';
+      if (!result.errorDetail) result.errorDetail = safeProviderErrorText(error?.message || 'services request failed');
+    }
+  }
+
+  if (walletUrl) {
+    try {
+      const walletResponse = await axios.get(walletUrl, {
+        timeout,
+        responseType: 'text',
+        transformResponse: [data => data],
+        validateStatus: status => status >= 200 && status < 500
+      });
+      result.walletReachable = Number(walletResponse.status || 0) >= 200 && Number(walletResponse.status || 0) < 400;
+    } catch {
+      result.walletReachable = false;
+    }
+  }
+
+  result.latencyMs = Date.now() - startedAt;
+  return result;
+}
+
+async function diagnoseProviders() {
+  const secondary = config.virtualNumbers?.secondaryProvider || {};
+  const [primary, second] = await Promise.all([
+    probeProvider({
+      name: 'SMSBower',
+      baseUrl: config.virtualNumbers?.baseUrl,
+      apiKey: config.virtualNumbers?.apiKey
+    }),
+    probeProvider({
+      name: secondary.name || 'GrizzlySMS',
+      baseUrl: secondary.baseUrl,
+      apiKey: secondary.apiKey,
+      walletUrl: secondary.walletUrl
+    })
+  ]);
+  return { primary, secondary: second, checkedAt: new Date() };
 }
 
 async function listServices(force = false) {
@@ -293,7 +281,7 @@ function extractPriceRows(json, serviceCode) {
         .sort((a, b) => a.price - b.price);
       if (priceTiers.length) {
         cost = priceTiers[0].price;
-        count = priceTiers[0].count;
+        count = priceTiers.reduce((sum, row) => sum + row.count, 0);
       }
     }
     if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) continue;
@@ -313,7 +301,7 @@ function parseServicePriceData(serviceData) {
       .sort((a, b) => a.price - b.price);
     if (priceTiers.length) {
       cost = priceTiers[0].price;
-      count = priceTiers[0].count;
+      count = priceTiers.reduce((sum, row) => sum + row.count, 0);
     }
   }
   if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
@@ -387,7 +375,7 @@ async function getNumberV2(serviceCode, countryId, maxPrice) {
     service: serviceCode,
     country: countryId,
     maxPrice: Number(maxPrice).toFixed(4)
-  }, { retrySafe: false });
+  });
   const json = parseJson(text);
   if (json && (json.activationId || json.phoneNumber)) {
     return {
@@ -652,39 +640,11 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
     });
 
     let provider;
-    let providerQuote = freshQuote;
-    const explicitRetries = Math.max(0, Number(runtimeConfig.providerRetries || 0));
-    for (let attempt = 0; attempt <= explicitRetries; attempt += 1) {
-      try {
-        provider = await getNumberV2(serviceCode, countryId, providerQuote.providerCost);
-        break;
-      } catch (error) {
-        const noNumber = ['NO_NUMBERS', 'NO_NUMBER'].includes(String(error.code || '').toUpperCase());
-        if (!noNumber || attempt >= explicitRetries) {
-          await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
-          throw error;
-        }
-
-        // NO_NUMBERS is a safe retry because the provider explicitly confirmed
-        // that no activation was allocated. Refresh the live quote before trying
-        // again so stale/empty price tiers are never retried blindly.
-        const refreshed = await quote(serviceCode, countryId, true).catch(() => null);
-        if (!refreshed || refreshed.count < 1) {
-          await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
-          throw error;
-        }
-        const refreshedCents = Math.round(Number(refreshed.retailPrice) * 100);
-        if (refreshedCents !== currentCents) {
-          await refundOrder(order.id, 'failed', 'PRICE_CHANGED').catch(() => {});
-          const changed = apiError('PRICE_CHANGED');
-          changed.quote = refreshed;
-          throw changed;
-        }
-        providerQuote = refreshed;
-        order.providerCostUsd = Number(refreshed.providerCost || order.providerCostUsd || 0);
-        await order.save({ fields: ['providerCostUsd'] }).catch(() => {});
-        await new Promise(resolve => setTimeout(resolve, Math.min(750, 200 * (attempt + 1))));
-      }
+    try {
+      provider = await getNumberV2(serviceCode, countryId, freshQuote.providerCost);
+    } catch (error) {
+      await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
+      throw error;
     }
     if (!provider.activationId || !provider.phoneNumber) {
       await refundOrder(order.id, 'failed', 'BAD_NUMBER_RESPONSE').catch(() => {});
@@ -716,16 +676,6 @@ async function cancelCustomerOrder(userId, orderId) {
     return { order, alreadyDone: true, refunded: Number(order.refundApplied ? order.salePriceUsd : 0) };
   }
   if (order.status === 'completed') throw apiError('ORDER_ALREADY_COMPLETED');
-  if (order.activationId && Number(runtimeConfig.cancelDelaySeconds || 0) > 0) {
-    const allocatedAt = new Date(order.createdAt || Date.now()).getTime();
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - allocatedAt) / 1000));
-    const waitSeconds = Math.max(0, Math.ceil(Number(runtimeConfig.cancelDelaySeconds || 0) - ageSeconds));
-    if (waitSeconds > 0) {
-      const error = apiError('EARLY_CANCEL_DENIED');
-      error.waitSeconds = waitSeconds;
-      throw error;
-    }
-  }
   if (!order.activationId) {
     const refunded = await refundOrder(order.id, 'cancelled', 'LOCAL_CANCEL');
     return { ...refunded, providerResponse: 'LOCAL_CANCEL' };
@@ -815,11 +765,9 @@ async function listUserOrders(userId, limit = 10) {
 
 module.exports = {
   enabled,
-  loadRuntimeConfig,
-  getRuntimeConfigSummary,
-  setRuntimeSetting,
   retailPrice,
   getBalance,
+  diagnoseProviders,
   listServices,
   listCountries,
   availableServicesSummary,
