@@ -1,97 +1,39 @@
-const axios = require('axios');
-const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSecureSetting, setSecureSetting } = require('../db');
-const config = require('../config');
+const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSetting, setSetting } = require('../db');
+const { encryptPayload, decryptPayload, isEncrypted } = require('../cryptoStore');
+const smsbower = require('../providers/smsbower');
+const smsman = require('../providers/smsman');
 
-const servicesCache = { at: 0, value: [] };
-const countriesCache = { at: 0, value: [] };
-const pricesCache = new Map();
-const allPricesCache = { at: 0, value: [] };
+const DEFAULT_PROFIT = 0.15;
+const ACTIVATION_TIMEOUT_MINUTES = 10;
 const purchaseLocks = new Set();
-
-const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
-const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
-const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
 
 const PROVIDERS = {
   smsbower: {
     id: 'smsbower',
-    name: 'SMSBower',
-    baseUrl: () => String(config.virtualNumbers?.baseUrl || 'https://smsbower.page/stubs/handler_api.php').trim(),
-    walletUrl: () => String(config.virtualNumbers?.smsBowerWalletUrl || 'https://smsbower.page/api/payment/getActualWalletAddress').trim(),
-    envKey: () => String(config.virtualNumbers?.apiKey || '').trim(),
-    secureKey: 'virtual_numbers_smsbower_api_key',
-    purchaseEnabled: true
+    adminName: 'SMSBower',
+    adapter: smsbower,
+    apiSetting: 'virtual_numbers_smsbower_api',
+    profitSetting: 'virtual_numbers_smsbower_profit',
+    envKey: 'SMSBOWER_API_KEY'
   },
-  grizzly: {
-    id: 'grizzly',
-    name: 'GrizzlySMS',
-    baseUrl: () => String(config.virtualNumbers?.grizzlyBaseUrl || 'https://api.grizzlysms.com/stubs/handler_api.php').trim(),
-    walletUrl: () => String(config.virtualNumbers?.grizzlyWalletUrl || 'https://api.grizzlysms.com/public/crypto/wallet').trim(),
-    envKey: () => String(config.virtualNumbers?.grizzlyApiKey || '').trim(),
-    secureKey: 'virtual_numbers_grizzly_api_key',
-    purchaseEnabled: false
+  smsman: {
+    id: 'smsman',
+    adminName: 'SMS-MAN',
+    adapter: smsman,
+    apiSetting: 'virtual_numbers_smsman_api',
+    profitSetting: 'virtual_numbers_smsman_profit',
+    envKey: 'SMSMAN_API_KEY'
   }
 };
 
-const providerKeyPresence = new Map([['smsbower', Boolean(PROVIDERS.smsbower.envKey())], ['grizzly', Boolean(PROVIDERS.grizzly.envKey())]]);
-
-function normalizeProviderId(providerId) {
-  const id = String(providerId || '').trim().toLowerCase();
-  if (!PROVIDERS[id]) throw apiError('BAD_PROVIDER');
-  return id;
-}
-
-async function getProviderApiKey(providerId) {
-  const id = normalizeProviderId(providerId);
-  const provider = PROVIDERS[id];
-  const stored = String(await getSecureSetting(provider.secureKey, '') || '').trim();
-  const value = stored || provider.envKey();
-  providerKeyPresence.set(id, Boolean(value));
-  return value;
-}
-
-async function setProviderApiKey(providerId, value) {
-  const id = normalizeProviderId(providerId);
-  const clean = String(value || '').trim();
-  await setSecureSetting(PROVIDERS[id].secureKey, clean);
-  providerKeyPresence.set(id, Boolean(clean || PROVIDERS[id].envKey()));
-  if (id === 'smsbower') clearAvailabilityCaches();
-  return Boolean(clean);
-}
-
-function clearAvailabilityCaches() {
-  servicesCache.at = 0; servicesCache.value = [];
-  countriesCache.at = 0; countriesCache.value = [];
-  allPricesCache.at = 0; allPricesCache.value = [];
-  pricesCache.clear();
-}
-
-function enabled() {
-  // A key may be stored encrypted in PostgreSQL instead of Railway Variables.
-  // apiRequest() performs the authoritative async key check.
-  return Boolean(config.virtualNumbers?.enabled && PROVIDERS.smsbower.baseUrl() && (providerKeyPresence.get('smsbower') || PROVIDERS.smsbower.envKey()));
-}
-
-// Prime encrypted-key presence after startup without blocking module loading.
-getProviderApiKey('smsbower').catch(() => {});
-getProviderApiKey('grizzly').catch(() => {});
-
-function roundMoney(value, decimals = 2) {
-  const factor = 10 ** decimals;
-  return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
-}
-
-// Virtual-number pricing requested by the store owner:
-// <= $0.03       -> $0.30
-// > $0.03 < $0.30 -> $0.50
-// >= $0.30       -> provider cost + a fixed $0.30 margin.
-// This guarantees that higher-cost numbers never sell below provider cost.
-function retailPrice(providerCost) {
-  const cost = Number(providerCost || 0);
-  if (!Number.isFinite(cost) || cost < 0) return 0;
-  if (cost <= 0.03 + 1e-9) return 0.30;
-  if (cost < 0.30 - 1e-9) return 0.50;
-  return roundMoney(cost + 0.30, 2);
+function providerRecord(providerId) {
+  const row = PROVIDERS[String(providerId || '').toLowerCase()];
+  if (!row) {
+    const error = new Error('UNKNOWN_PROVIDER');
+    error.code = 'UNKNOWN_PROVIDER';
+    throw error;
+  }
+  return row;
 }
 
 function apiError(code, detail = '') {
@@ -101,463 +43,183 @@ function apiError(code, detail = '') {
   return error;
 }
 
-async function providerApiRequest(providerId, action, extra = {}, options = {}) {
-  const id = normalizeProviderId(providerId);
-  const provider = PROVIDERS[id];
-  const apiKey = await getProviderApiKey(id);
-  if (!apiKey || !provider.baseUrl()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
-  const params = { api_key: apiKey, action, ...extra };
-  let response;
+function roundMoney(value, decimals = 2) {
+  const factor = 10 ** decimals;
+  return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
+}
+
+function salePrice(providerCost, profit) {
+  const cost = Number(providerCost || 0);
+  const margin = Number(profit || 0);
+  if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(margin) || margin < 0) return 0;
+  return roundMoney(cost + margin, 2);
+}
+
+function decodeStoredSecret(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!isEncrypted(raw)) return raw;
   try {
-    response = await axios.get(provider.baseUrl(), {
-      params,
-      timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
-      responseType: 'text',
-      transformResponse: [data => data]
-    });
-  } catch (error) {
-    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+    const payload = decryptPayload(raw);
+    return String(payload?.value || payload?.apiKey || '').trim();
+  } catch {
+    return '';
   }
-  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
-  if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) {
-    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+}
+
+async function getProviderApiKey(providerId) {
+  const provider = providerRecord(providerId);
+  const storedRaw = String(await getSetting(provider.apiSetting, '') || '').trim();
+  if (storedRaw === '__DISABLED__') return '';
+  const stored = decodeStoredSecret(storedRaw);
+  if (stored) return stored;
+  return String(process.env[provider.envKey] || '').trim();
+}
+
+async function hasProviderApi(providerId) {
+  return Boolean(await getProviderApiKey(providerId));
+}
+
+async function hasAnyConfiguredProvider() {
+  const results = await Promise.all(Object.keys(PROVIDERS).map(hasProviderApi));
+  return results.some(Boolean);
+}
+
+async function getProviderProfit(providerId) {
+  const provider = providerRecord(providerId);
+  const raw = await getSetting(provider.profitSetting, String(DEFAULT_PROFIT));
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_PROFIT;
+}
+
+async function setProviderProfit(providerId, value) {
+  const provider = providerRecord(providerId);
+  const profit = Number(value);
+  if (!Number.isFinite(profit) || profit < 0 || profit > 100) throw apiError('INVALID_PROFIT');
+  await setSetting(provider.profitSetting, String(roundMoney(profit, 4)));
+  return getProviderProfit(providerId);
+}
+
+async function testProviderApi(providerId, apiKey = null) {
+  const provider = providerRecord(providerId);
+  const key = String(apiKey || await getProviderApiKey(providerId) || '').trim();
+  if (!key) throw apiError('BAD_KEY');
+  const balance = await provider.adapter.getBalance(key);
+  return { providerId: provider.id, balance };
+}
+
+async function setProviderApiKey(providerId, apiKey) {
+  const provider = providerRecord(providerId);
+  const key = String(apiKey || '').trim();
+  if (!key) {
+    await setSetting(provider.apiSetting, '__DISABLED__');
+    return { configured: false, removed: true };
   }
-  return text;
+  const test = await testProviderApi(providerId, key);
+  await setSetting(provider.apiSetting, encryptPayload({ value: key }));
+  return { configured: true, balance: test.balance };
 }
 
-async function apiRequest(action, extra = {}, options = {}) {
-  return providerApiRequest('smsbower', action, extra, options);
-}
-
-async function providerBalance(providerId) {
-  const text = await providerApiRequest(providerId, 'getBalance');
-  if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text);
-  const amount = Number(text.slice('ACCESS_BALANCE:'.length));
-  if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
-  return amount;
-}
-
-async function providerServicesProbe(providerId) {
-  const text = await providerApiRequest(providerId, 'getServicesList');
-  const json = parseJson(text);
-  const rows = Array.isArray(json?.services) ? json.services : (Array.isArray(json) ? json : []);
-  return rows.filter(row => String(row?.code ?? row?.id ?? '').trim()).length;
-}
-
-async function providerStatus(providerId) {
-  const id = normalizeProviderId(providerId);
-  const provider = PROVIDERS[id];
-  const apiKey = await getProviderApiKey(id);
-  const result = {
-    id,
-    name: provider.name,
-    configured: Boolean(apiKey),
-    baseUrl: provider.baseUrl(),
-    walletUrl: provider.walletUrl(),
-    purchaseEnabled: Boolean(provider.purchaseEnabled),
-    balance: null,
-    keyValid: false,
-    servicesOk: false,
-    serviceCount: null,
-    errorCode: '',
-    errorDetail: ''
-  };
-  if (!apiKey) return result;
-  try {
-    result.balance = await providerBalance(id);
-    result.keyValid = true;
-  } catch (error) {
-    result.errorCode = String(error.code || 'PROVIDER_UNAVAILABLE');
-    result.errorDetail = String(error.detail || error.message || '');
-    return result;
-  }
-  try {
-    result.serviceCount = await providerServicesProbe(id);
-    result.servicesOk = result.serviceCount > 0;
-  } catch (error) {
-    // Balance is enough to prove the API key works. Some compatible providers
-    // do not expose getServicesList on every account/API version.
-    result.servicesOk = false;
-    result.servicesErrorCode = String(error.code || 'SERVICES_PROBE_FAILED');
-  }
-  return result;
-}
-
-async function providerWallet(providerId) {
-  const id = normalizeProviderId(providerId);
-  const provider = PROVIDERS[id];
-  const apiKey = await getProviderApiKey(id);
-  if (!apiKey) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
-  let response;
-  try {
-    response = await axios.get(provider.walletUrl(), {
-      params: { api_key: apiKey, coin: 'usdt', network: 'tron' },
-      timeout: config.virtualNumbers.timeoutMs
-    });
-  } catch (error) {
-    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'wallet request failed');
-  }
-  const data = response?.data;
-  const parsed = typeof data === 'string' ? parseJson(data, {}) : (data || {});
-  const address = String(parsed?.wallet_address || parsed?.address || '').trim();
-  if (!address) throw apiError('BAD_PROVIDER_RESPONSE', typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200));
-  return {
-    providerId: id,
-    providerName: provider.name,
-    address,
-    coin: 'USDT',
-    network: 'TRC20',
-    minimumDepositUsd: id === 'grizzly' ? 50 : null,
-    balance: await providerBalance(id).catch(() => null)
-  };
-}
-
-async function providerStatuses() {
-  return Promise.all(['smsbower', 'grizzly'].map(id => providerStatus(id)));
-}
-
-function parseJson(text, fallback = null) {
-  try { return JSON.parse(text); }
-  catch { return fallback; }
-}
-
-async function getBalance() {
-  return providerBalance('smsbower');
-}
-
-async function listServices(force = false) {
-  const now = Date.now();
-  if (!force && servicesCache.value.length && now - servicesCache.at < SERVICES_TTL_MS) return servicesCache.value;
-  const text = await apiRequest('getServicesList');
-  const json = parseJson(text);
-  let rows = [];
-  if (json && Array.isArray(json.services)) rows = json.services;
-  else if (Array.isArray(json)) rows = json;
-  rows = rows
-    .map(row => ({
-      code: String(row?.code ?? row?.id ?? '').trim(),
-      name: String(row?.name ?? row?.title ?? row?.code ?? '').trim()
-    }))
-    .filter(row => row.code && row.name)
-    .filter(row => /^[A-Za-z0-9_-]{1,24}$/.test(row.code));
-  const seen = new Set();
-  rows = rows.filter(row => {
-    if (seen.has(row.code)) return false;
-    seen.add(row.code);
-    return true;
-  }).sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
-  if (!rows.length) throw apiError('NO_SERVICES_AVAILABLE', text.slice(0, 200));
-  servicesCache.at = now;
-  servicesCache.value = rows;
-  return rows;
-}
-
-function flattenCountries(json) {
-  if (!json) return [];
-  if (Array.isArray(json)) return json;
-  if (Array.isArray(json.countries)) return json.countries;
-  if (Array.isArray(json.data)) return json.data;
-  if (typeof json === 'object') {
-    return Object.entries(json).map(([key, value]) => {
-      if (value && typeof value === 'object') return { id: value.id ?? key, ...value };
-      return { id: key, eng: String(value ?? key) };
-    });
-  }
-  return [];
-}
-
-async function listCountries(force = false) {
-  const now = Date.now();
-  if (!force && countriesCache.value.length && now - countriesCache.at < COUNTRIES_TTL_MS) return countriesCache.value;
-  const text = await apiRequest('getCountries');
-  const json = parseJson(text);
-  let rows = flattenCountries(json).map(row => ({
-    id: String(row?.id ?? row?.country ?? row?.code ?? '').trim(),
-    name: String(row?.eng ?? row?.en ?? row?.name ?? row?.rus ?? row?.id ?? '').trim()
-  })).filter(row => row.id && row.name);
-  const seen = new Set();
-  rows = rows.filter(row => {
-    if (seen.has(row.id)) return false;
-    seen.add(row.id);
-    return true;
-  });
-  if (!rows.length) throw apiError('NO_COUNTRIES_AVAILABLE', text.slice(0, 200));
-  countriesCache.at = now;
-  countriesCache.value = rows;
-  return rows;
-}
-
-function extractPriceRows(json, serviceCode) {
-  const out = [];
-  if (!json || typeof json !== 'object') return out;
-  for (const [countryId, countryData] of Object.entries(json)) {
-    if (!countryData || typeof countryData !== 'object') continue;
-    let serviceData = countryData[serviceCode];
-    if (!serviceData && String(countryId) === String(serviceCode)) continue;
-    if (!serviceData && ('cost' in countryData || 'price' in countryData)) serviceData = countryData;
-    if (!serviceData || typeof serviceData !== 'object') continue;
-
-    let cost = Number(serviceData.cost ?? serviceData.price);
-    let count = Number(serviceData.count ?? 0);
-    if (!Number.isFinite(cost)) {
-      const priceTiers = Object.entries(serviceData)
-        .map(([price, amount]) => ({ price: Number(price), count: Number(amount) }))
-        .filter(row => Number.isFinite(row.price) && Number.isFinite(row.count) && row.count > 0)
-        .sort((a, b) => a.price - b.price);
-      if (priceTiers.length) {
-        cost = priceTiers[0].price;
-        count = priceTiers.reduce((sum, row) => sum + row.count, 0);
-      }
-    }
-    if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) continue;
-    out.push({ countryId: String(countryId), providerCost: cost, count: Math.floor(count) });
-  }
-  return out;
-}
-
-function parseServicePriceData(serviceData) {
-  if (!serviceData || typeof serviceData !== 'object') return null;
-  let cost = Number(serviceData.cost ?? serviceData.price);
-  let count = Number(serviceData.count ?? 0);
-  if (!Number.isFinite(cost)) {
-    const priceTiers = Object.entries(serviceData)
-      .map(([price, amount]) => ({ price: Number(price), count: Number(amount) }))
-      .filter(row => Number.isFinite(row.price) && Number.isFinite(row.count) && row.count > 0)
-      .sort((a, b) => a.price - b.price);
-    if (priceTiers.length) {
-      cost = priceTiers[0].price;
-      count = priceTiers.reduce((sum, row) => sum + row.count, 0);
-    }
-  }
-  if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
-  return { providerCost: cost, count: Math.floor(count), retailPrice: retailPrice(cost) };
-}
-
-// One getPrices call without service returns availability for the whole catalog.
-// This is used to hide dead service buttons before the customer taps them.
-async function availableServicesSummary(force = false) {
-  const now = Date.now();
-  if (!force && allPricesCache.value.length && now - allPricesCache.at < PRICES_TTL_MS) return allPricesCache.value;
-  const text = await apiRequest('getPrices');
-  const json = parseJson(text);
-  const byService = new Map();
-  if (json && typeof json === 'object') {
-    for (const countryData of Object.values(json)) {
-      if (!countryData || typeof countryData !== 'object') continue;
-      for (const [serviceCode, serviceData] of Object.entries(countryData)) {
-        const parsed = parseServicePriceData(serviceData);
-        if (!parsed) continue;
-        const key = String(serviceCode || '').trim();
-        if (!/^[A-Za-z0-9_-]{1,24}$/.test(key)) continue;
-        const current = byService.get(key) || { serviceCode: key, count: 0, providerCost: Infinity, retailPrice: Infinity };
-        current.count += parsed.count;
-        if (parsed.retailPrice < current.retailPrice || (parsed.retailPrice === current.retailPrice && parsed.providerCost < current.providerCost)) {
-          current.providerCost = parsed.providerCost;
-          current.retailPrice = parsed.retailPrice;
-        }
-        byService.set(key, current);
-      }
-    }
-  }
-  const value = [...byService.values()]
-    .filter(row => row.count > 0 && Number.isFinite(row.retailPrice))
-    .sort((a, b) => Number(a.retailPrice) - Number(b.retailPrice) || String(a.serviceCode).localeCompare(String(b.serviceCode)));
-  allPricesCache.at = now;
-  allPricesCache.value = value;
-  return value;
-}
-
-async function availabilityForService(serviceCode, force = false) {
-  const code = String(serviceCode || '').trim();
-  if (!/^[A-Za-z0-9_-]{1,24}$/.test(code)) throw apiError('BAD_SERVICE');
-  const cached = pricesCache.get(code);
-  if (!force && cached && Date.now() - cached.at < PRICES_TTL_MS) return cached.value;
-  const text = await apiRequest('getPrices', { service: code });
-  const json = parseJson(text);
-  const rows = extractPriceRows(json, code);
-  const countries = await listCountries().catch(() => []);
-  const countryMap = new Map(countries.map(row => [String(row.id), row.name]));
-  const value = rows.map(row => ({
-    ...row,
-    countryName: countryMap.get(String(row.countryId)) || `Country ${row.countryId}`,
-    retailPrice: retailPrice(row.providerCost)
-  })).sort((a, b) =>
-    Number(a.retailPrice || 0) - Number(b.retailPrice || 0) ||
-    Number(a.providerCost || 0) - Number(b.providerCost || 0) ||
-    a.countryName.localeCompare(b.countryName, 'en', { sensitivity: 'base' })
-  );
-  pricesCache.set(code, { at: Date.now(), value });
-  return value;
-}
-
-async function quote(serviceCode, countryId, force = false) {
-  const rows = await availabilityForService(serviceCode, force);
-  return rows.find(row => String(row.countryId) === String(countryId)) || null;
-}
-
-async function getNumberV2(serviceCode, countryId, maxPrice) {
-  const text = await apiRequest('getNumberV2', {
-    service: serviceCode,
-    country: countryId,
-    maxPrice: Number(maxPrice).toFixed(4)
-  });
-  const json = parseJson(text);
-  if (json && (json.activationId || json.phoneNumber)) {
-    return {
-      activationId: String(json.activationId || '').trim(),
-      phoneNumber: String(json.phoneNumber || '').trim(),
-      activationCost: Number(json.activationCost),
-      raw: json
-    };
-  }
-  if (text.startsWith('ACCESS_NUMBER:')) {
-    const parts = text.split(':');
-    return {
-      activationId: String(parts[1] || '').trim(),
-      phoneNumber: String(parts[2] || '').trim(),
-      activationCost: Number(maxPrice),
-      raw: { legacy: text }
-    };
-  }
-  if (/^(NO_NUMBERS|NO_NUMBER|NO_BALANCE|NO_MONEY|ERROR_SQL|WRONG_MAX_PRICE|BAD_SERVICE|BAD_COUNTRY)/i.test(text)) {
-    throw apiError(text.split(':')[0].trim().toUpperCase(), text);
-  }
-  throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
-}
-
-async function getStatus(activationId) {
-  return apiRequest('getStatus', { id: activationId });
-}
-
-async function setStatus(activationId, status) {
-  return apiRequest('setStatus', { id: activationId, status });
-}
-
-function currentShopIdForAccounting() {
-  if (String(config.network?.role || '').toLowerCase() === 'client') return String(config.network?.shopId || '').trim();
-  return 'master';
-}
-
-async function markAccounting(order, fields) {
-  Object.assign(order, fields);
-  await order.save({ fields: Object.keys(fields) });
-  return order;
-}
-
-async function syncProviderCostAccounting(order) {
-  if (!order || order.providerCostAccounted) return { accounted: Boolean(order?.providerCostAccounted), skipped: true };
-  // A provider cost exists only after a real activation was allocated. If the
-  // provider rejected the purchase before returning activationId, there is no
-  // inter-shop cost to charge.
-  if (!String(order.activationId || '').trim()) {
-    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
-    return { accounted: true, skipped: true };
-  }
-  const amountUsd = Number(order.providerCostUsd || 0);
-  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
-    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
-    return { accounted: true, skipped: true };
-  }
-
-  // Master/standalone storefront pays the provider directly, so there is no
-  // inter-shop debt to create. Client storefronts owe Master only the real
-  // provider cost; the retail margin remains with the client storefront.
-  let network;
-  try { network = require('../network'); }
-  catch { network = null; }
-  if (!network?.enabledClient?.()) {
-    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
-    return { accounted: true, skipped: true };
-  }
-
-  try {
-    await network.recordVirtualNumberProviderCost({
-      orderId: String(order.id),
-      activationId: String(order.activationId || ''),
-      amountUsd,
-      salePriceUsd: Number(order.salePriceUsd || 0),
-      customerId: String(order.userId || ''),
-      serviceCode: String(order.serviceCode || ''),
-      countryId: String(order.countryId || '')
-    });
-    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
-    return { accounted: true };
-  } catch (error) {
-    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
+async function removeProviderApiKey(providerId) {
+  const provider = providerRecord(providerId);
+  const active = await VirtualNumberOrder.count({ where: { providerId: provider.id, status: 'waiting_sms' } });
+  if (active > 0) {
+    const error = apiError('ACTIVE_ORDERS');
+    error.active = active;
     throw error;
   }
+  await setSetting(provider.apiSetting, '__DISABLED__');
+  return { configured: false };
 }
 
-async function syncProviderCostReversal(order) {
-  if (!order || !order.refundApplied || order.providerCostReversed) {
-    return { reversed: Boolean(order?.providerCostReversed), skipped: true };
-  }
-
-  // Never create a refund obligation before the original provider-cost debt
-  // exists. If the original write failed, retry it first; both writes are
-  // idempotent on Master, so repeated background attempts are safe.
-  if (!order.providerCostAccounted) await syncProviderCostAccounting(order);
-  if (!String(order.activationId || '').trim()) {
-    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
-    return { reversed: true, skipped: true };
-  }
-
-  const amountUsd = Number(order.providerCostUsd || 0);
-  let network;
-  try { network = require('../network'); }
-  catch { network = null; }
-  if (!network?.enabledClient?.() || !Number.isFinite(amountUsd) || amountUsd <= 0) {
-    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
-    return { reversed: true, skipped: true };
-  }
-
-  try {
-    await network.reverseVirtualNumberProviderCost({
-      orderId: String(order.id),
-      activationId: String(order.activationId || ''),
-      amountUsd,
-      salePriceUsd: Number(order.salePriceUsd || 0),
-      customerId: String(order.userId || ''),
-      serviceCode: String(order.serviceCode || ''),
-      countryId: String(order.countryId || '')
-    });
-    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
-    return { reversed: true };
-  } catch (error) {
-    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
-    throw error;
-  }
-}
-
-async function syncAccountingBacklog(limit = 60) {
-  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 60));
-  const rows = await VirtualNumberOrder.findAll({
+async function providerStats(providerId) {
+  const completed = await VirtualNumberOrder.count({ where: { providerId, status: 'completed' } });
+  const purchased = await VirtualNumberOrder.count({
     where: {
-      [Op.or]: [
-        { providerCostAccounted: false, activationId: { [Op.ne]: null } },
-        { refundApplied: true, providerCostReversed: false }
-      ]
-    },
-    order: [['createdAt', 'ASC']],
-    limit: safeLimit
-  });
-  let accounted = 0;
-  let reversed = 0;
-  for (const order of rows) {
-    try {
-      if (!order.providerCostAccounted && order.activationId) {
-        await syncProviderCostAccounting(order);
-        accounted += 1;
-      }
-      if (order.refundApplied && !order.providerCostReversed) {
-        await syncProviderCostReversal(order);
-        reversed += 1;
-      }
-    } catch (error) {
-      console.error('Virtual number accounting retry:', order.id, error.message);
+      providerId,
+      activationId: { [Op.ne]: null },
+      status: { [Op.notIn]: ['failed', 'reserving'] }
     }
+  });
+  const active = await VirtualNumberOrder.count({ where: { providerId, status: 'waiting_sms' } });
+  return { completed, purchased, active };
+}
+
+async function getConfiguredProviders() {
+  const rows = [];
+  for (const provider of Object.values(PROVIDERS)) {
+    const apiKey = await getProviderApiKey(provider.id);
+    if (!apiKey) continue;
+    const [profit, stats] = await Promise.all([getProviderProfit(provider.id), providerStats(provider.id)]);
+    rows.push({
+      id: provider.id,
+      adminName: provider.adminName,
+      profit,
+      ...stats
+    });
   }
-  return { scanned: rows.length, accounted, reversed };
+  rows.sort((a, b) => b.purchased - a.purchased || b.completed - a.completed || a.id.localeCompare(b.id));
+  return rows.map((row, index) => ({
+    ...row,
+    rank: index + 1,
+    publicLabelAr: index === 0 ? 'خدمة 1 🔥' : `خدمة ${index + 1}`,
+    publicLabelEn: index === 0 ? 'Service 1 🔥' : `Service ${index + 1}`
+  }));
+}
+
+async function getAllProviderAdminRows() {
+  const configured = new Map((await getConfiguredProviders()).map(row => [row.id, row]));
+  const rows = [];
+  for (const provider of Object.values(PROVIDERS)) {
+    const existing = configured.get(provider.id);
+    const [profit, stats] = await Promise.all([getProviderProfit(provider.id), providerStats(provider.id)]);
+    rows.push({
+      id: provider.id,
+      adminName: provider.adminName,
+      configured: Boolean(await getProviderApiKey(provider.id)),
+      profit,
+      ...stats,
+      rank: existing?.rank || null,
+      publicLabelAr: existing?.publicLabelAr || null
+    });
+  }
+  return rows;
+}
+
+async function getPublicProvider(providerId) {
+  return (await getConfiguredProviders()).find(row => row.id === providerId) || null;
+}
+
+async function listServices(providerId, force = false) {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  return provider.adapter.listServices(apiKey, force);
+}
+
+async function availableServicesSummary(providerId, force = false) {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  return provider.adapter.availableServicesSummary(apiKey, force);
+}
+
+async function availabilityForService(providerId, serviceCode, force = false) {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  const profit = await getProviderProfit(providerId);
+  const rows = await provider.adapter.availabilityForService(apiKey, serviceCode, force);
+  return rows.map(row => ({
+    ...row,
+    profit,
+    retailPrice: salePrice(row.providerCost, profit)
+  })).sort((a, b) => a.retailPrice - b.retailPrice || a.providerCost - b.providerCost || a.countryName.localeCompare(b.countryName, 'en'));
+}
+
+async function quote(providerId, serviceCode, countryId, force = false) {
+  const rows = await availabilityForService(providerId, serviceCode, force);
+  return rows.find(row => String(row.countryId) === String(countryId)) || null;
 }
 
 async function reserveCustomerWallet(userId, orderData) {
@@ -575,25 +237,26 @@ async function reserveCustomerWallet(userId, orderData) {
     }
     const order = await VirtualNumberOrder.create({
       userId,
+      providerId: orderData.providerId,
       serviceCode: orderData.serviceCode,
       serviceName: orderData.serviceName,
       countryId: String(orderData.countryId),
       countryName: orderData.countryName,
       providerCostUsd: orderData.providerCost,
+      profitUsd: orderData.profit,
       salePriceUsd: price,
       status: 'reserving',
-      expiresAt: new Date(Date.now() + config.virtualNumbers.activationTimeoutMinutes * 60_000)
+      expiresAt: new Date(Date.now() + ACTIVATION_TIMEOUT_MINUTES * 60_000)
     }, { transaction: tx });
-    user.balance = balance - price;
+    user.balance = roundMoney(balance - price, 2);
     await user.save({ transaction: tx, fields: ['balance'] });
     await BalanceTransaction.create({
       userId,
       amount: -price,
       type: 'virtual_number_purchase',
-      txid: `VN:${order.id}`,
+      txid: `VN:${providerRecord(orderData.providerId).id}:${order.id}`,
       status: 'completed',
-      caption: `${orderData.serviceName} / ${orderData.countryName}`,
-      paymentOrigin: 'wallet'
+      caption: `${orderData.serviceName} / ${orderData.countryName}`
     }, { transaction: tx });
     await tx.commit();
     return order;
@@ -613,8 +276,9 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
       return { order, refunded: 0, alreadyRefunded: true };
     }
     const user = await User.findByPk(order.userId, { transaction: tx, lock: tx.LOCK.UPDATE });
+    if (!user) throw apiError('USER_NOT_FOUND');
     const amount = Number(order.salePriceUsd || 0);
-    user.balance = Number(user.balance || 0) + amount;
+    user.balance = roundMoney(Number(user.balance || 0) + amount, 2);
     await user.save({ transaction: tx, fields: ['balance'] });
     order.refundApplied = true;
     order.refundedAt = new Date();
@@ -625,15 +289,11 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
       userId: order.userId,
       amount,
       type: 'virtual_number_refund',
-      txid: `VN-REFUND:${order.id}`,
+      txid: `VN-REFUND:${order.providerId}:${order.id}`,
       status: 'completed',
-      caption: `${order.serviceName} / ${order.countryName}`,
-      paymentOrigin: 'wallet'
+      caption: `${order.serviceName} / ${order.countryName}`
     }, { transaction: tx });
     await tx.commit();
-    await syncProviderCostReversal(order).catch(error => {
-      console.error('Virtual number provider-cost reversal:', order.id, error.message);
-    });
     return { order, refunded: amount, alreadyRefunded: false };
   } catch (error) {
     await tx.rollback();
@@ -641,13 +301,16 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
   }
 }
 
-async function purchase({ userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
-  const lockKey = String(userId);
+async function purchase({ providerId, userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  const lockKey = `${providerId}:${userId}`;
   if (purchaseLocks.has(lockKey)) throw apiError('PURCHASE_IN_PROGRESS');
   purchaseLocks.add(lockKey);
   let order = null;
   try {
-    const freshQuote = await quote(serviceCode, countryId, true);
+    const freshQuote = await quote(providerId, serviceCode, countryId, true);
     if (!freshQuote || freshQuote.count < 1) throw apiError('NO_NUMBERS');
     const currentCents = Math.round(Number(freshQuote.retailPrice) * 100);
     if (Number(expectedRetailCents) !== currentCents) {
@@ -656,42 +319,63 @@ async function purchase({ userId, serviceCode, serviceName, countryId, countryNa
       throw error;
     }
     order = await reserveCustomerWallet(userId, {
+      providerId,
       serviceCode,
       serviceName,
       countryId,
       countryName: countryName || freshQuote.countryName,
       providerCost: freshQuote.providerCost,
+      profit: freshQuote.profit,
       salePrice: freshQuote.retailPrice
     });
 
-    let provider;
+    let allocated;
     try {
-      provider = await getNumberV2(serviceCode, countryId, freshQuote.providerCost);
+      allocated = await provider.adapter.purchase(apiKey, {
+        serviceCode,
+        countryId,
+        maxProviderCost: freshQuote.providerCost
+      });
     } catch (error) {
       await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
       throw error;
     }
-    if (!provider.activationId || !provider.phoneNumber) {
-      await refundOrder(order.id, 'failed', 'BAD_NUMBER_RESPONSE').catch(() => {});
-      throw apiError('BAD_PROVIDER_RESPONSE');
+    if (!allocated?.activationId || !allocated?.phoneNumber) {
+      await refundOrder(order.id, 'failed', 'NO_NUMBERS').catch(() => {});
+      throw apiError('NO_NUMBERS');
     }
-    order.activationId = provider.activationId;
-    order.phoneNumber = provider.phoneNumber;
-    if (Number.isFinite(provider.activationCost) && provider.activationCost >= 0) order.providerCostUsd = provider.activationCost;
+
+    order.activationId = allocated.activationId;
+    order.phoneNumber = allocated.phoneNumber;
+    if (Number.isFinite(allocated.activationCost) && allocated.activationCost >= 0) order.providerCostUsd = allocated.activationCost;
     order.status = 'waiting_sms';
-    order.rawProvider = provider.raw || {};
+    order.rawProvider = allocated.raw || {};
     order.lastProviderStatus = 'STATUS_WAIT_CODE';
-    // Start the five-minute protection window from the moment the real number
-    // is allocated, not from the earlier wallet-reservation step.
-    order.expiresAt = new Date(Date.now() + 5 * 60_000);
+    order.expiresAt = new Date(Date.now() + ACTIVATION_TIMEOUT_MINUTES * 60_000);
     await order.save();
-    await syncProviderCostAccounting(order).catch(error => {
-      console.error('Virtual number provider-cost accounting:', order.id, error.message);
-    });
     return order;
+  } catch (error) {
+    if (order && !order.activationId && !order.refundApplied) await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
+    throw error;
   } finally {
     purchaseLocks.delete(lockKey);
   }
+}
+
+async function markCompletedFromStatus(order, status) {
+  const code = String(status || '').startsWith('STATUS_OK:') ? String(status).slice('STATUS_OK:'.length).trim() : '';
+  if (!code) return null;
+  const fresh = await VirtualNumberOrder.findByPk(order.id);
+  if (!fresh || fresh.status !== 'waiting_sms') return null;
+  fresh.smsCode = code;
+  fresh.status = 'completed';
+  fresh.completedAt = new Date();
+  fresh.lastProviderStatus = String(status).slice(0, 255);
+  await fresh.save();
+  const provider = providerRecord(fresh.providerId);
+  const apiKey = await getProviderApiKey(fresh.providerId);
+  if (apiKey) provider.adapter.finish(apiKey, fresh.activationId).catch(() => {});
+  return { type: 'sms', order: fresh, code };
 }
 
 async function cancelCustomerOrder(userId, orderId) {
@@ -701,26 +385,31 @@ async function cancelCustomerOrder(userId, orderId) {
     return { order, alreadyDone: true, refunded: Number(order.refundApplied ? order.salePriceUsd : 0) };
   }
   if (order.status === 'completed') throw apiError('ORDER_ALREADY_COMPLETED');
-  if (!order.activationId) {
-    const refunded = await refundOrder(order.id, 'cancelled', 'LOCAL_CANCEL');
-    return { ...refunded, providerResponse: 'LOCAL_CANCEL' };
-  }
-  const response = await setStatus(order.activationId, 8);
-  if (response === 'EARLY_CANCEL_DENIED') throw apiError('EARLY_CANCEL_DENIED', response);
-  if (!['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(response)) {
-    if (/EARLY_CANCEL_DENIED/i.test(response)) throw apiError('EARLY_CANCEL_DENIED', response);
-    throw apiError('CANCEL_NOT_CONFIRMED', response);
-  }
+  if (!order.activationId) return refundOrder(order.id, 'cancelled', 'LOCAL_CANCEL');
+
+  const provider = providerRecord(order.providerId);
+  const apiKey = await getProviderApiKey(order.providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+
+  const currentStatus = await provider.adapter.getStatus(apiKey, order.activationId);
+  order.lastProviderStatus = String(currentStatus || '').slice(0, 255);
+  await order.save({ fields: ['lastProviderStatus'] });
+  const completed = await markCompletedFromStatus(order, currentStatus);
+  if (completed) throw apiError('ORDER_ALREADY_COMPLETED');
+  if (currentStatus === 'STATUS_CANCEL') return refundOrder(order.id, 'provider_cancelled', currentStatus);
+
+  const response = await provider.adapter.cancel(apiKey, order.activationId);
+  if (/EARLY_CANCEL_DENIED/i.test(String(response))) throw apiError('EARLY_CANCEL_DENIED', response);
+  if (!['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(String(response))) throw apiError('CANCEL_NOT_CONFIRMED', String(response));
   const refunded = await refundOrder(order.id, 'cancelled', response);
   return { ...refunded, providerResponse: response };
 }
 
-async function pollPendingOrders(limit = 40) {
-  if (!enabled()) return [];
+async function pollPendingOrders(limit = 60) {
   const rows = await VirtualNumberOrder.findAll({
     where: { status: 'waiting_sms', activationId: { [Op.ne]: null } },
     order: [['createdAt', 'ASC']],
-    limit: Math.max(1, Math.min(100, Number(limit) || 40))
+    limit: Math.max(1, Math.min(150, Number(limit) || 60))
   });
   const events = [];
   const concurrency = 8;
@@ -728,50 +417,34 @@ async function pollPendingOrders(limit = 40) {
     const chunk = rows.slice(offset, offset + concurrency);
     const results = await Promise.all(chunk.map(async order => {
       try {
-        // Always check for an SMS first. This avoids cancelling at the five-minute
-        // boundary when the provider already has the code waiting for us.
-        const status = await getStatus(order.activationId);
-        order.lastProviderStatus = String(status).slice(0, 255);
+        const provider = providerRecord(order.providerId);
+        const apiKey = await getProviderApiKey(order.providerId);
+        if (!apiKey) return null;
+        const status = await provider.adapter.getStatus(apiKey, order.activationId);
+        order.lastProviderStatus = String(status || '').slice(0, 255);
         await order.save({ fields: ['lastProviderStatus'] });
-        if (status.startsWith('STATUS_OK:')) {
-          const code = status.slice('STATUS_OK:'.length).trim();
-          const fresh = await VirtualNumberOrder.findByPk(order.id);
-          if (!fresh || fresh.status !== 'waiting_sms') return null;
-          fresh.smsCode = code;
-          fresh.status = 'completed';
-          fresh.completedAt = new Date();
-          fresh.lastProviderStatus = status.slice(0, 255);
-          await fresh.save();
-          setStatus(fresh.activationId, 6).catch(error => console.error('Virtual number close activation:', fresh.id, error.message));
-          return { type: 'sms', order: fresh, code };
-        }
+        const completed = await markCompletedFromStatus(order, status);
+        if (completed) return completed;
         if (status === 'STATUS_CANCEL') {
           const refund = await refundOrder(order.id, 'provider_cancelled', status);
           return { type: 'provider_cancelled', order: refund.order, refunded: refund.refunded };
         }
-
-        // No code arrived. Once five minutes pass, ask the provider to cancel.
-        // Refund only after the provider confirms cancellation, so wallet money
-        // and provider money can never diverge. If the provider/API is briefly
-        // unavailable, the order remains waiting_sms and the watcher retries.
         if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) {
           try {
-            const cancelResponse = await setStatus(order.activationId, 8);
-            if (['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(cancelResponse)) {
-              const refund = await refundOrder(order.id, 'auto_cancelled', cancelResponse);
+            const response = await provider.adapter.cancel(apiKey, order.activationId);
+            if (['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(String(response))) {
+              const refund = await refundOrder(order.id, 'auto_cancelled', response);
               return { type: 'expired_refund', order: refund.order, refunded: refund.refunded };
             }
-            order.lastProviderStatus = String(cancelResponse || status).slice(0, 255);
+            order.lastProviderStatus = String(response || status).slice(0, 255);
             await order.save({ fields: ['lastProviderStatus'] });
           } catch (error) {
-            console.error('Virtual number expiry cancel:', order.id, error.message);
+            if (error.code !== 'PROVIDER_UNAVAILABLE') console.error('Virtual number expiry cancel:', order.id, error.code || error.message);
           }
         }
         return null;
       } catch (error) {
-        if (!['PROVIDER_UNAVAILABLE'].includes(error.code)) {
-          console.error('Virtual number poll:', order.id, error.code || error.message, error.detail || '');
-        }
+        if (error.code !== 'PROVIDER_UNAVAILABLE') console.error('Virtual number poll:', order.id, error.code || error.message, error.detail || '');
         return null;
       }
     }));
@@ -789,25 +462,28 @@ async function listUserOrders(userId, limit = 10) {
 }
 
 module.exports = {
-  enabled,
-  retailPrice,
-  getBalance,
-  providerStatus,
-  providerStatuses,
-  providerWallet,
+  DEFAULT_PROFIT,
+  ACTIVATION_TIMEOUT_MINUTES,
+  providerRecord,
+  salePrice,
   getProviderApiKey,
+  hasProviderApi,
+  hasAnyConfiguredProvider,
+  getProviderProfit,
+  setProviderProfit,
+  testProviderApi,
   setProviderApiKey,
-  clearAvailabilityCaches,
+  removeProviderApiKey,
+  providerStats,
+  getConfiguredProviders,
+  getAllProviderAdminRows,
+  getPublicProvider,
   listServices,
-  listCountries,
   availableServicesSummary,
   availabilityForService,
   quote,
   purchase,
   cancelCustomerOrder,
   pollPendingOrders,
-  syncAccountingBacklog,
-  syncProviderCostAccounting,
-  syncProviderCostReversal,
   listUserOrders
 };
