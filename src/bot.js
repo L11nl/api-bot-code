@@ -483,101 +483,90 @@ function canSeeVirtualProviderCost(user) {
   );
 }
 
+function canManageVirtualProviders(user) {
+  // Provider API keys and provider balances are owner-only secrets.
+  return canSeeVirtualProviderCost(user);
+}
+
+function providerAdminStatusIcon(status) {
+  if (!status?.configured) return '⚠️';
+  if (status?.keyValid) return '✅';
+  return '❌';
+}
+
+function providerBalanceAdminText(status) {
+  return Number.isFinite(Number(status?.balance)) ? `$${Number(status.balance).toFixed(2)}` : 'غير معروف';
+}
+
+async function showVirtualProviderAdmin(chatId, user) {
+  if (!canManageVirtualProviders(user)) {
+    return bot.sendMessage(chatId, '⛔ إعدادات مزودي الأرقام ومفاتيح API متاحة للمالك الرئيسي فقط.');
+  }
+
+  let statuses = [];
+  try { statuses = await virtualNumbers.providerStatuses(); }
+  catch (error) { console.error('Virtual provider admin statuses:', error.message); }
+  const byId = new Map(statuses.map(row => [String(row.id), row]));
+  const sms = byId.get('smsbower') || { id: 'smsbower', name: 'SMSBower', configured: false, keyValid: false };
+  const grizzly = byId.get('grizzly') || { id: 'grizzly', name: 'GrizzlySMS', configured: false, keyValid: false };
+
+  const serviceLine = status => {
+    if (!status?.configured) return 'قائمة الخدمات: ⚪ لم تُفحص';
+    if (status?.servicesOk) return `قائمة الخدمات: ✅ تعمل (${Number(status.serviceCount || 0)} خدمة)`;
+    if (status?.keyValid) return 'قائمة الخدمات: ⚠️ المفتاح يعمل لكن فحص القائمة غير متاح حالياً';
+    return 'قائمة الخدمات: ❌ لم تعمل';
+  };
+
+  const lines = [
+    '📱 <b>إعدادات مزود الأرقام الافتراضية</b>',
+    '',
+    `الحالة العامة: ${sms.keyValid ? '✅ SMSBower جاهز للبيع' : '⚠️ يحتاج إعداد SMSBower'}`,
+    '',
+    '1️⃣ <b>الموقع الأساسي — SMSBower</b>',
+    `• مفتاح الدخول: ${sms.configured ? (sms.keyValid ? '✅ موجود وصالح' : '❌ موجود لكن الفحص فشل') : '⚠️ غير مضاف'}`,
+    `• رابط الـAPI: ${sms.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
+    `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(sms))}</b>`,
+    `• ${serviceLine(sms)}`,
+    '• الاستخدام: <b>المزود الأساسي المستخدم للشراء</b>',
+    '',
+    '2️⃣ <b>الموقع الثاني — GrizzlySMS</b>',
+    `• مفتاح الدخول: ${grizzly.configured ? (grizzly.keyValid ? '✅ موجود وصالح' : '❌ موجود لكن الفحص فشل') : '⚠️ غير مضاف'}`,
+    `• رابط الـAPI: ${grizzly.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
+    `• رابط المحفظة: ${grizzly.walletUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
+    `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(grizzly))}</b>`,
+    `• ${serviceLine(grizzly)}`,
+    '• الاستخدام: <b>مجهز للفحص والشحن، ولا يدخل بالشراء حالياً</b>',
+    '',
+    '🔐 مفاتيح API لا تُعرض هنا نهائياً، والزر يحفظ المفتاح مشفراً ويحذف رسالتك بعد قراءتها.'
+  ];
+
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [
+        { text: sms.configured ? '🔑 تغيير API SMSBower' : '➕ إضافة API SMSBower', callback_data: 'adm:vnprovider:key:smsbower', style: 'primary' },
+        { text: '💰 شحن SMSBower', callback_data: 'adm:vnprovider:topup:smsbower', style: 'success' }
+      ],
+      [
+        { text: grizzly.configured ? '🔑 تغيير API GrizzlySMS' : '➕ إضافة API GrizzlySMS', callback_data: 'adm:vnprovider:key:grizzly', style: 'primary' },
+        { text: '💰 شحن GrizzlySMS', callback_data: 'adm:vnprovider:topup:grizzly', style: 'success' }
+      ],
+      [
+        { text: '🧪 فحص الموقعين', callback_data: 'adm:vnprovider:test', style: 'primary' }
+      ],
+      [
+        { text: '🗑 حذف API SMSBower', callback_data: 'adm:vnprovider:clear:smsbower', style: 'danger' },
+        { text: '🗑 حذف API Grizzly', callback_data: 'adm:vnprovider:clear:grizzly', style: 'danger' }
+      ],
+      [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
+    ] }
+  });
+}
+
 function virtualProviderCostText(providerCost, retail) {
   const provider = Number(providerCost || 0);
   const providerText = provider.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') || '0';
   return `$${providerText} 👈🏻 $${Number(retail || 0).toFixed(2)}`;
-}
-
-
-function virtualProviderSetupText() {
-  const vn = config.virtualNumbers || {};
-  const secondary = vn.secondaryProvider || {};
-  const primaryReady = Boolean(vn.enabled && vn.apiKey && vn.baseUrl);
-  const secondaryKeyReady = Boolean(secondary.apiKey && secondary.baseUrl);
-  const cancelMinutes = Math.max(1, Number(vn.activationTimeoutMinutes || 5));
-  return [
-    '📱 <b>إعدادات مزود الأرقام الافتراضية</b>',
-    '',
-    `الحالة العامة: <b>${primaryReady ? '✅ جاهز للبيع' : '⚠️ يحتاج إعداد'}</b>`,
-    '',
-    '1️⃣ <b>الموقع الأساسي — SMSBower</b>',
-    `• مفتاح الدخول: <b>${vn.apiKey ? '✅ موجود' : '❌ غير موجود'}</b>`,
-    `• رابط الـAPI: <b>${vn.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}</b>`,
-    '• الاستخدام: <b>هو الموقع المستخدم حالياً لشراء الأرقام</b>',
-    '',
-    '2️⃣ <b>الموقع الثاني — GrizzlySMS</b>',
-    `• مفتاح الدخول الخاص به: <b>${secondaryKeyReady ? '✅ موجود' : '⚠️ غير مضاف'}</b>`,
-    `• رابط الـAPI: <b>${secondary.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}</b>`,
-    `• رابط المحفظة: <b>${secondary.walletUrl ? '✅ موجود' : '⚪ غير مضاف'}</b>`,
-    '• الاستخدام: <b>مجهز للفحص، ولا يدخل بعملية شراء الأرقام حالياً</b>',
-    '',
-    `⏱ الإلغاء التلقائي: <b>بعد ${cancelMinutes} دقائق</b> إذا ما وصل كود.`,
-    '💰 التسعير: <b>يُحسب تلقائياً حسب القواعد المحددة داخل البوت</b>.',
-    '',
-    '🔐 ما نعرض أي مفتاح سري هنا. اضغط <b>فحص المواقع</b> حتى تعرف بصورة فعلية إذا كل موقع يرد، وهل مفتاحه مقبول، وهل قائمة الخدمات تعمل.'
-  ].join('\n');
-}
-
-function virtualProviderHealthLine(report, { primary = false } = {}) {
-  const lines = [`${primary ? '1️⃣' : '2️⃣'} <b>${escapeHtml(report?.name || (primary ? 'SMSBower' : 'GrizzlySMS'))}</b>`];
-  if (!report?.siteReachable) {
-    lines.push('• الموقع: <b>❌ لا يرد حالياً</b>');
-  } else {
-    lines.push('• الموقع: <b>✅ متصل</b>');
-  }
-
-  if (report?.keyState === 'missing') {
-    lines.push('• مفتاح الدخول: <b>⚠️ غير مضاف</b>');
-    lines.push('• API الحساب: <b>⚪ ما نكدر نختبره بدون مفتاح خاص بهذا الموقع</b>');
-  } else if (report?.keyState === 'invalid') {
-    lines.push('• مفتاح الدخول: <b>❌ الموقع رفض المفتاح</b>');
-    lines.push('• API الحساب: <b>❌ غير جاهز</b>');
-  } else if (report?.apiWorking) {
-    lines.push('• مفتاح الدخول: <b>✅ مقبول</b>');
-    lines.push(`• API الحساب: <b>✅ يعمل${Number.isFinite(Number(report.balance)) ? ` — الرصيد $${Number(report.balance).toFixed(2)}` : ''}</b>`);
-  } else if (report?.siteReachable) {
-    lines.push('• API الحساب: <b>⚠️ الموقع يرد لكن الفحص ما اكتمل</b>');
-  }
-
-  if (report?.apiWorking) {
-    lines.push(report.servicesWorking
-      ? `• قائمة الخدمات: <b>✅ تعمل — ${Number(report.servicesCount || 0)} خدمة</b>`
-      : '• قائمة الخدمات: <b>❌ ما رجعت خدمات صالحة</b>');
-  }
-
-  if (report?.walletConfigured) {
-    lines.push(`• رابط المحفظة: <b>${report.walletReachable ? '✅ يرد' : '❌ لا يرد'}</b>`);
-  } else if (!primary) {
-    lines.push('• رابط المحفظة: <b>⚪ غير مضاف</b>');
-  }
-
-  if (Number.isFinite(Number(report?.latencyMs))) {
-    lines.push(`• وقت الفحص: <b>${Number(report.latencyMs)}ms</b>`);
-  }
-
-  if (report?.errorCode && !['BAD_KEY'].includes(String(report.errorCode))) {
-    const simpleErrors = {
-      UNREACHABLE: 'تعذر الوصول للموقع',
-      NO_BASE_URL: 'رابط الموقع غير مضبوط',
-      UNEXPECTED_BALANCE_RESPONSE: 'رد الموقع غير متوقع',
-      SERVICES_EMPTY: 'الموقع رد بدون قائمة خدمات',
-      SERVICES_CHECK_FAILED: 'فشل فحص الخدمات'
-    };
-    lines.push(`• الملاحظة: <b>${escapeHtml(simpleErrors[report.errorCode] || 'يحتاج مراجعة')}</b>`);
-  }
-  return lines.join('\n');
-}
-
-async function showVirtualProviderSetup(chatId) {
-  return bot.sendMessage(chatId, virtualProviderSetupText(), {
-    parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [
-      [{ text: '🔍 فحص المواقع', callback_data: 'adm:virtual_provider_check', style: 'primary' }],
-      [{ text: 'ℹ️ معرفة أكثر', callback_data: 'adm:virtual_provider_help' }],
-      [{ text: '⬅️ رجوع للإعدادات', callback_data: 'adm:menu:settings' }]
-    ] }
-  });
 }
 
 const VIRTUAL_SERVICE_AR_NAMES = new Map([
@@ -1792,14 +1781,19 @@ async function adminSectionMenu(section) {
 
   if (section === 'settings') {
     const open = await isStoreOpen();
+    const keyboard = [
+      [{ text: '⚙️ الإعدادات العامة', callback_data: 'adm:settings', style: 'primary' }]
+    ];
+    if (network.isMaster()) {
+      keyboard.push([{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]);
+    }
+    keyboard.push(
+      [{ text: open ? '🔒 إغلاق المتجر' : '🔓 فتح المتجر', callback_data: 'adm:store_toggle', style: open ? 'danger' : 'success' }],
+      back
+    );
     return {
       title: '⚙️ <b>إعدادات المتجر</b>\nالإعدادات العامة وحالة فتح المتجر.',
-      keyboard: [
-        [{ text: '⚙️ الإعدادات العامة', callback_data: 'adm:settings', style: 'primary' }],
-        [{ text: '📱 مزود الأرقام الافتراضية', callback_data: 'adm:virtual_provider', style: 'primary' }],
-        [{ text: open ? '🔒 إغلاق المتجر' : '🔓 فتح المتجر', callback_data: 'adm:store_toggle', style: open ? 'danger' : 'success' }],
-        back
-      ]
+      keyboard
     };
   }
 
@@ -4540,6 +4534,39 @@ async function handleStateMessage(msg, user, state) {
     }
   }
 
+  if (state.action === 'admin_virtual_provider_api_key' && isAdmin(user.id)) {
+    if (!canManageVirtualProviders(user)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
+      return true;
+    }
+    const providerId = String(state.providerId || '').trim().toLowerCase();
+    if (!['smsbower', 'grizzly'].includes(providerId)) {
+      await clearState(user.id);
+      return true;
+    }
+    const apiKey = String(msg.text || '').trim();
+    if (apiKey.length < 8 || apiKey.length > 512 || /\s/.test(apiKey)) {
+      await bot.sendMessage(user.id, '❌ مفتاح API غير صحيح. انسخه كامل بدون مسافات، أو اكتب إغلاق للإلغاء.');
+      return true;
+    }
+    // The Telegram message containing the secret should disappear immediately.
+    await bot.deleteMessage(user.id, msg.message_id).catch(() => {});
+    await virtualNumbers.setProviderApiKey(providerId, apiKey);
+    await clearState(user.id);
+    const providerName = providerId === 'grizzly' ? 'GrizzlySMS' : 'SMSBower';
+    let checkText = 'تم الحفظ، لكن تعذر الفحص الآن.';
+    try {
+      const status = await virtualNumbers.providerStatus(providerId);
+      checkText = status.keyValid
+        ? `✅ تم حفظ API ${providerName} بشكل مشفر وفحصه بنجاح. الرصيد الحالي: ${providerBalanceAdminText(status)}`
+        : `⚠️ تم حفظ API ${providerName}، لكن الموقع لم يقبل المفتاح أو تعذر الوصول إليه حالياً.`;
+    } catch {}
+    await bot.sendMessage(user.id, checkText);
+    await showVirtualProviderAdmin(user.id, user);
+    return true;
+  }
+
   if (state.action === 'admin_binance_setup' && isAdmin(user.id)) {
     const text = String(msg.text || '').trim();
     const data = { ...(state.data || {}) };
@@ -6202,6 +6229,84 @@ async function handleAdminCallback(query, user, data) {
 
 
 
+  if (data === 'adm:vnproviders') {
+    await answerCallback(query.id);
+    if (!canManageVirtualProviders(user)) return bot.sendMessage(user.id, '⛔ إعدادات مزودي الأرقام متاحة للمالك الرئيسي فقط.');
+    return showVirtualProviderAdmin(query.message.chat.id, user);
+  }
+
+  if (data.startsWith('adm:vnprovider:key:')) {
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const providerId = String(data.split(':')[3] || '').toLowerCase();
+    if (!['smsbower', 'grizzly'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    const providerName = providerId === 'grizzly' ? 'GrizzlySMS' : 'SMSBower';
+    await setState(user.id, { action: 'admin_virtual_provider_api_key', providerId });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      `🔑 أرسل الآن API Key الخاص بـ <b>${providerName}</b>.`,
+      '',
+      '🔐 لن أعرض المفتاح بعد حفظه، وراح أحاول حذف رسالتك مباشرة بعد قراءتها.',
+      'اكتب إغلاق للإلغاء.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:vnprovider:clear:')) {
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const providerId = String(data.split(':')[3] || '').toLowerCase();
+    if (!['smsbower', 'grizzly'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    await virtualNumbers.setProviderApiKey(providerId, '');
+    await answerCallback(query.id, providerId === 'grizzly' ? 'تم حذف API GrizzlySMS المحفوظ داخل البوت.' : 'تم حذف API SMSBower المحفوظ داخل البوت.');
+    return showVirtualProviderAdmin(query.message.chat.id, user);
+  }
+
+  if (data === 'adm:vnprovider:test') {
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await answerCallback(query.id, 'جاري فحص الموقعين...');
+    return showVirtualProviderAdmin(query.message.chat.id, user);
+  }
+
+  if (data.startsWith('adm:vnprovider:topup:')) {
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const providerId = String(data.split(':')[3] || '').toLowerCase();
+    if (!['smsbower', 'grizzly'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    const providerName = providerId === 'grizzly' ? 'GrizzlySMS' : 'SMSBower';
+    await answerCallback(query.id, `جاري جلب محفظة ${providerName}...`);
+    try {
+      const wallet = await virtualNumbers.providerWallet(providerId);
+      const lines = [
+        `💰 <b>شحن ${escapeHtml(providerName)}</b>`,
+        '',
+        `الشبكة: <b>${escapeHtml(wallet.network)}</b>`,
+        `العملة: <b>${escapeHtml(wallet.coin)}</b>`,
+        '',
+        'عنوان المحفظة:',
+        `<code>${escapeHtml(wallet.address)}</code>`,
+        '',
+        Number.isFinite(Number(wallet.balance)) ? `الرصيد الحالي بالموقع: <b>$${Number(wallet.balance).toFixed(2)}</b>` : ''
+      ].filter(Boolean);
+      if (providerId === 'grizzly' && Number(wallet.minimumDepositUsd || 0) > 0) {
+        lines.push('', `⚠️ حسب API الخاص بـ GrizzlySMS، الإيداع التلقائي عبر هذه المحفظة يبدأ من <b>$${Number(wallet.minimumDepositUsd).toFixed(0)}</b>.`);
+      }
+      lines.push('', '⚠️ تأكد من الشبكة قبل التحويل. البوت يعرض عنوان الشحن من API الرسمي للمزود ولا ينفذ التحويل بنفسه.');
+      return bot.sendMessage(query.message.chat.id, lines.join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: '🔄 تحديث المحفظة والرصيد', callback_data: `adm:vnprovider:topup:${providerId}` }],
+          [{ text: '⬅️ رجوع لمزودي الأرقام', callback_data: 'adm:vnproviders' }]
+        ] }
+      });
+    } catch (error) {
+      const detail = String(error?.code || error?.message || 'UNKNOWN');
+      return bot.sendMessage(query.message.chat.id, [
+        `❌ تعذر جلب محفظة شحن ${providerName}.`,
+        detail === 'VIRTUAL_NUMBERS_NOT_CONFIGURED' ? 'أضف API Key أولاً من زر إضافة API.' : `الخطأ: <code>${escapeHtml(detail)}</code>`
+      ].join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '⬅️ رجوع لمزودي الأرقام', callback_data: 'adm:vnproviders' }]] }
+      });
+    }
+  }
+
   if (data === 'adm:binance_setup') {
     await setState(user.id, { action: 'admin_binance_setup', step: 'apiKey', data: {} });
     await answerCallback(query.id);
@@ -6564,71 +6669,6 @@ async function handleAdminCallback(query, user, data) {
     ].join('\n'));
   }
 
-  if (data === 'adm:virtual_provider') {
-    await answerCallback(query.id);
-    return showVirtualProviderSetup(query.message.chat.id);
-  }
-
-  if (data === 'adm:virtual_provider_help') {
-    await answerCallback(query.id);
-    return bot.sendMessage(query.message.chat.id, [
-      'ℹ️ <b>شرح مبسط</b>',
-      '',
-      '• <b>الموقع الأساسي</b>: هو المزود الذي يشتري منه البوت الأرقام فعلياً الآن.',
-      '• <b>الموقع الثاني</b>: وجود رابط أو محفظة وحده ما يعني أن API الشراء مربوط. لازم يكون عنده مفتاحه الخاص ويجتاز فحص الحساب والخدمات.',
-      '• <b>فحص المواقع</b>: يتأكد من وصول الموقع، قبول المفتاح، جلب الرصيد، وجلب قائمة الخدمات. ما يشتري أي رقم وما يخصم أي مبلغ.',
-      '• إذا ظهر <b>✅ متصل + المفتاح مقبول + قائمة الخدمات تعمل</b> فـ API لذلك الموقع جاهز فنياً.',
-      '• إذا ظهر <b>⚠️ المفتاح غير مضاف</b> فالموقع نفسه قد يكون شغال، لكن حسابك داخل هذا الموقع غير مربوط بالبوت بعد.',
-      '',
-      '🔐 المفاتيح تبقى في Railway ولا تظهر داخل الرسائل.'
-    ].join('\n'), {
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [
-        [{ text: '🔍 فحص المواقع الآن', callback_data: 'adm:virtual_provider_check', style: 'primary' }],
-        [{ text: '⬅️ رجوع', callback_data: 'adm:virtual_provider' }]
-      ] }
-    });
-  }
-
-  if (data === 'adm:virtual_provider_check') {
-    await answerCallback(query.id, 'جاري فحص الموقعين…');
-    const waiting = await bot.sendMessage(query.message.chat.id, '⏳ <b>جاري فحص SMSBower وGrizzlySMS فعلياً…</b>\nما راح يتم شراء أي رقم أو خصم أي رصيد.', { parse_mode: 'HTML' });
-    try {
-      const report = await virtualNumbers.diagnoseProviders();
-      const primaryOk = Boolean(report.primary?.siteReachable && report.primary?.apiWorking && report.primary?.servicesWorking);
-      const secondaryOk = Boolean(report.secondary?.siteReachable && report.secondary?.apiWorking && report.secondary?.servicesWorking);
-      const text = [
-        '🔍 <b>نتيجة فحص المواقع</b>',
-        '',
-        virtualProviderHealthLine(report.primary, { primary: true }),
-        '',
-        virtualProviderHealthLine(report.secondary),
-        '',
-        `<b>الخلاصة:</b> ${primaryOk ? '✅ الموقع الأساسي جاهز لشراء الأرقام.' : '❌ الموقع الأساسي يحتاج مراجعة قبل الاعتماد عليه.'}`,
-        secondaryOk
-          ? '✅ الموقع الثاني API ماله جاهز فنياً، لكنه ما يزال غير مستخدم بعملية الشراء الحالية.'
-          : 'ℹ️ الموقع الثاني مو جاهز كـAPI شراء حالياً؛ النتيجة أعلاه تبين هل السبب اتصال، مفتاح، أو خدمات.'
-      ].join('\n');
-      return bot.editMessageText(text, {
-        chat_id: waiting.chat.id,
-        message_id: waiting.message_id,
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [
-          [{ text: '🔄 إعادة الفحص', callback_data: 'adm:virtual_provider_check', style: 'primary' }],
-          [{ text: 'ℹ️ معرفة أكثر', callback_data: 'adm:virtual_provider_help' }],
-          [{ text: '⬅️ رجوع لإعدادات المزود', callback_data: 'adm:virtual_provider' }]
-        ] }
-      });
-    } catch (error) {
-      console.error('Virtual provider diagnostics:', error.message);
-      return bot.editMessageText('❌ صار خطأ داخلي أثناء الفحص. ما تم شراء أي رقم ولا خصم أي رصيد.', {
-        chat_id: waiting.chat.id,
-        message_id: waiting.message_id,
-        reply_markup: { inline_keyboard: [[{ text: '🔄 حاول مرة ثانية', callback_data: 'adm:virtual_provider_check' }]] }
-      });
-    }
-  }
-
   if (data === 'adm:settings') {
     await answerCallback(query.id);
     const [rate, egpRate, number, channel, open, binanceReady, binanceRuntime] = await Promise.all([
@@ -6673,6 +6713,7 @@ async function handleAdminCallback(query, user, data) {
           { text: '📢 القناة الإجبارية', callback_data: 'adm:set:required_channel' },
           { text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }
         ],
+        ...(network.isMaster() ? [[{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]] : []),
         [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
       ] }
     });
