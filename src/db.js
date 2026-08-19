@@ -388,6 +388,23 @@ async function normalizeProductDescriptions() {
 
 async function initializeDatabase() {
   await sequelize.authenticate();
+
+  // The previous single-provider schema did not have these columns. Add them
+  // before sync() because Sequelize creates model indexes during sync, and an
+  // index that references providerId would otherwise fail on legacy Railway
+  // databases before the normal compatibility migrations can run.
+  // All pre-upgrade virtual-number orders came from SMSBower.
+  await addColumnIfMissing('VirtualNumberOrders', 'providerId', {
+    type: DataTypes.STRING(24),
+    allowNull: false,
+    defaultValue: 'smsbower'
+  });
+  await addColumnIfMissing('VirtualNumberOrders', 'profitUsd', {
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: false,
+    defaultValue: 0.15
+  });
+
   await sequelize.sync({ alter: false });
 
   await addColumnIfMissing('Users', 'blocked', { type: DataTypes.BOOLEAN, defaultValue: false });
