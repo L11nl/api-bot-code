@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder } = require('../db');
+const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSetting, setSetting, getSecureSetting, setSecureSetting } = require('../db');
 const config = require('../config');
 
 const servicesCache = { at: 0, value: [] };
@@ -7,13 +7,81 @@ const countriesCache = { at: 0, value: [] };
 const pricesCache = new Map();
 const allPricesCache = { at: 0, value: [] };
 const purchaseLocks = new Set();
+let runtimeProviderCache = { at: 0, value: null };
 
 const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERVICES_CACHE_MS || 10 * 60_000));
 const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
 const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
+const PROVIDER_CONFIG_TTL_MS = 5000;
 
+function clearProviderCaches() {
+  runtimeProviderCache = { at: 0, value: null };
+  servicesCache.at = 0; servicesCache.value = [];
+  countriesCache.at = 0; countriesCache.value = [];
+  pricesCache.clear();
+  allPricesCache.at = 0; allPricesCache.value = [];
+}
+
+async function getProviderConfig(force = false) {
+  if (!force && runtimeProviderCache.value && Date.now() - runtimeProviderCache.at < PROVIDER_CONFIG_TTL_MS) return runtimeProviderCache.value;
+  const envEnabled = Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
+  const [enabledRaw, dbKey, dbBaseUrl] = await Promise.all([
+    getSetting('virtual_numbers_enabled', envEnabled ? 'true' : 'false'),
+    getSecureSetting('virtual_numbers_api_key', ''),
+    getSetting('virtual_numbers_base_url', '')
+  ]);
+  const value = {
+    enabled: String(enabledRaw || '').toLowerCase() === 'true',
+    apiKey: String(dbKey || config.virtualNumbers?.apiKey || '').trim(),
+    baseUrl: String(dbBaseUrl || config.virtualNumbers?.baseUrl || '').trim(),
+    timeoutMs: Number(config.virtualNumbers?.timeoutMs || 15000),
+    source: dbKey ? 'database' : (config.virtualNumbers?.apiKey ? 'environment' : 'none')
+  };
+  runtimeProviderCache = { at: Date.now(), value };
+  return value;
+}
+
+// Backward-compatible quick check for old call-sites. DB-backed enablement is
+// authoritative through isEnabled(), which bot UI now uses asynchronously.
 function enabled() {
+  if (runtimeProviderCache.value) return Boolean(runtimeProviderCache.value.enabled && runtimeProviderCache.value.apiKey && runtimeProviderCache.value.baseUrl);
   return Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
+}
+
+async function isEnabled() {
+  const provider = await getProviderConfig();
+  return Boolean(provider.enabled && provider.apiKey && provider.baseUrl);
+}
+
+async function configureProvider({ apiKey, baseUrl, enabled: shouldEnable = true } = {}) {
+  if (apiKey !== undefined) {
+    const clean = String(apiKey || '').trim();
+    if (!clean) throw apiError('API_KEY_REQUIRED');
+    await setSecureSetting('virtual_numbers_api_key', clean);
+  }
+  if (baseUrl !== undefined) {
+    const cleanUrl = String(baseUrl || '').trim();
+    if (cleanUrl && !/^https:\/\//i.test(cleanUrl)) throw apiError('INVALID_PROVIDER_URL');
+    await setSetting('virtual_numbers_base_url', cleanUrl);
+  }
+  await setSetting('virtual_numbers_enabled', shouldEnable ? 'true' : 'false');
+  clearProviderCaches();
+  return getProviderConfig(true);
+}
+
+async function setEnabled(shouldEnable) {
+  await setSetting('virtual_numbers_enabled', shouldEnable ? 'true' : 'false');
+  clearProviderCaches();
+  return getProviderConfig(true);
+}
+
+async function clearProvider() {
+  await Promise.all([
+    setSecureSetting('virtual_numbers_api_key', ''),
+    setSetting('virtual_numbers_enabled', 'false')
+  ]);
+  clearProviderCaches();
+  return getProviderConfig(true);
 }
 
 function roundMoney(value, decimals = 2) {
@@ -21,16 +89,11 @@ function roundMoney(value, decimals = 2) {
   return Math.round((Number(value || 0) + Number.EPSILON) * factor) / factor;
 }
 
-// Virtual-number pricing requested by the store owner:
-// <= $0.03       -> $0.30
-// > $0.03 < $0.30 -> $0.50
-// >= $0.30       -> provider cost + a fixed $0.30 margin.
-// This guarantees that higher-cost numbers never sell below provider cost.
+// v13: every storefront using its own provider API gets a fixed $0.30 gross
+// margin on every virtual number. This never sells below provider cost.
 function retailPrice(providerCost) {
   const cost = Number(providerCost || 0);
   if (!Number.isFinite(cost) || cost < 0) return 0;
-  if (cost <= 0.03 + 1e-9) return 0.30;
-  if (cost < 0.30 - 1e-9) return 0.50;
   return roundMoney(cost + 0.30, 2);
 }
 
@@ -42,17 +105,18 @@ function apiError(code, detail = '') {
 }
 
 async function apiRequest(action, extra = {}, options = {}) {
-  if (!enabled()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  const provider = await getProviderConfig();
+  if ((!provider.enabled && !options.allowDisabled) || !provider.apiKey || !provider.baseUrl) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
   const params = {
-    api_key: config.virtualNumbers.apiKey,
+    api_key: provider.apiKey,
     action,
     ...extra
   };
   let response;
   try {
-    response = await axios.get(config.virtualNumbers.baseUrl, {
+    response = await axios.get(provider.baseUrl, {
       params,
-      timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
+      timeout: options.timeoutMs || provider.timeoutMs,
       responseType: 'text',
       transformResponse: [data => data]
     });
@@ -71,11 +135,38 @@ function parseJson(text, fallback = null) {
   catch { return fallback; }
 }
 
-async function getBalance() {
-  const text = await apiRequest('getBalance');
+async function getBalance(options = {}) {
+  const text = await apiRequest('getBalance', {}, options);
   if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text);
   const amount = Number(text.slice('ACCESS_BALANCE:'.length));
   if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
+  return amount;
+}
+
+// Validate a replacement provider before overwriting the currently working
+// encrypted configuration. This makes the admin setup flow transactional from
+// the operator's point of view: bad credentials never disable a good provider.
+async function testProviderCredentials(apiKey, baseUrl) {
+  const cleanKey = String(apiKey || '').trim();
+  const cleanUrl = String(baseUrl || '').trim();
+  if (!cleanKey) throw apiError('API_KEY_REQUIRED');
+  if (!/^https:\/\//i.test(cleanUrl)) throw apiError('INVALID_PROVIDER_URL');
+  let response;
+  try {
+    response = await axios.get(cleanUrl, {
+      params: { api_key: cleanKey, action: 'getBalance' },
+      timeout: Number(config.virtualNumbers?.timeoutMs || 15000),
+      responseType: 'text',
+      transformResponse: [data => data]
+    });
+  } catch (error) {
+    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+  }
+  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
+  if (/^(BAD_KEY|BAD_ACTION)/i.test(text)) throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+  if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
+  const amount = Number(text.slice('ACCESS_BALANCE:'.length));
+  if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text.slice(0, 300));
   return amount;
 }
 
@@ -319,7 +410,7 @@ async function syncProviderCostAccounting(order) {
   let network;
   try { network = require('../network'); }
   catch { network = null; }
-  if (!network?.enabledClient?.()) {
+  if (!network?.enabledClient?.() || String(order.providerSource || '') === 'local_api') {
     await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
     return { accounted: true, skipped: true };
   }
@@ -360,7 +451,7 @@ async function syncProviderCostReversal(order) {
   let network;
   try { network = require('../network'); }
   catch { network = null; }
-  if (!network?.enabledClient?.() || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+  if (!network?.enabledClient?.() || String(order.providerSource || '') === 'local_api' || !Number.isFinite(amountUsd) || amountUsd <= 0) {
     await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
     return { reversed: true, skipped: true };
   }
@@ -436,7 +527,9 @@ async function reserveCustomerWallet(userId, orderData) {
       providerCostUsd: orderData.providerCost,
       salePriceUsd: price,
       status: 'reserving',
-      expiresAt: new Date(Date.now() + config.virtualNumbers.activationTimeoutMinutes * 60_000)
+      providerOwnerShopId: currentShopIdForAccounting(),
+      providerSource: 'local_api',
+      expiresAt: new Date(Date.now() + 5 * 60_000)
     }, { transaction: tx });
     user.balance = balance - price;
     await user.save({ transaction: tx, fields: ['balance'] });
@@ -570,7 +663,7 @@ async function cancelCustomerOrder(userId, orderId) {
 }
 
 async function pollPendingOrders(limit = 40) {
-  if (!enabled()) return [];
+  if (!await isEnabled()) return [];
   const rows = await VirtualNumberOrder.findAll({
     where: { status: 'waiting_sms', activationId: { [Op.ne]: null } },
     order: [['createdAt', 'ASC']],
@@ -644,8 +737,14 @@ async function listUserOrders(userId, limit = 10) {
 
 module.exports = {
   enabled,
+  isEnabled,
+  getProviderConfig,
+  configureProvider,
+  setEnabled,
+  clearProvider,
   retailPrice,
   getBalance,
+  testProviderCredentials,
   listServices,
   listCountries,
   availableServicesSummary,

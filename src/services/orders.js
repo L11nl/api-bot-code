@@ -1,6 +1,6 @@
 const { QueryTypes } = require('sequelize');
 const crypto = require('crypto');
-const { sequelize, User, Merchant, Code, PurchaseOrder, DeliveryRecord } = require('../db');
+const { sequelize, User, Merchant, Code, PurchaseOrder, DeliveryRecord, BalanceTransaction } = require('../db');
 const { parseDescription } = require('../utils');
 const { decryptPayload } = require('../cryptoStore');
 const config = require('../config');
@@ -23,12 +23,20 @@ function currentShopId() {
   return String(config.network.shopId || 'master');
 }
 
-function productVisibleInCurrentShop(product) {
+function productAccessibleInCurrentShop(product) {
   if (!product) return false;
-  if (String(product.type || '') !== 'service') return true;
+  const scope = String(product.visibilityScope || (product.type === 'service' ? 'private' : 'public')).toLowerCase();
+  if (scope !== 'private') return true;
   const owner = String(product.networkOwnerShopId || '').trim();
   if (!owner) return !product.networkManaged;
   return owner === currentShopId();
+}
+
+function productVisibleInCurrentShop(product) {
+  if (!productAccessibleInCurrentShop(product)) return false;
+  if (product.isActive === false) return false;
+  const status = String(product.localPublicationStatus || 'published').toLowerCase();
+  return status === 'published';
 }
 
 async function getProductStock(merchantId) {
@@ -506,6 +514,17 @@ async function reserveWalletForOrder(orderId) {
     if (walletApplied > 0) {
       user.balance = balance - walletApplied;
       await user.save({ transaction });
+      await BalanceTransaction.create({
+        userId: user.id,
+        amount: -walletApplied,
+        type: 'wallet_reservation',
+        txid: `ORDER-RESERVE:${order.id}`,
+        caption: `Wallet reserved for order #${order.id} / merchant ${order.merchantId}`,
+        status: 'completed',
+        paymentOrigin: 'wallet',
+        networkMethod: 'order_checkout',
+        approvalSource: 'system_checkout'
+      }, { transaction });
     }
     order.walletApplied = walletApplied;
     order.externalAmount = externalAmount;
@@ -532,6 +551,17 @@ async function refundWalletReservation(orderId) {
     const user = await User.findByPk(order.userId, { transaction, lock: transaction.LOCK.UPDATE });
     user.balance = Number(user.balance || 0) + amount;
     await user.save({ transaction });
+    await BalanceTransaction.create({
+      userId: user.id,
+      amount,
+      type: 'wallet_reservation_refund',
+      txid: `ORDER-RESERVE-REFUND:${order.id}`,
+      caption: `Wallet reservation refunded for order #${order.id} / merchant ${order.merchantId}`,
+      status: 'completed',
+      paymentOrigin: 'wallet',
+      networkMethod: 'order_checkout',
+      approvalSource: 'system_refund'
+    }, { transaction });
     order.walletApplied = 0;
     order.externalAmount = Number(order.totalAmount || 0);
     order.status = 'cancelled';
@@ -571,6 +601,17 @@ async function payFromWallet(orderId) {
     if (balance + 1e-9 < total) throw new Error('INSUFFICIENT_BALANCE');
     user.balance = balance - total;
     await user.save({ transaction });
+    await BalanceTransaction.create({
+      userId: user.id,
+      amount: -total,
+      type: 'wallet_purchase',
+      txid: `ORDER-WALLET:${order.id}`,
+      caption: `Wallet purchase for order #${order.id} / merchant ${order.merchantId}`,
+      status: 'completed',
+      paymentOrigin: 'wallet',
+      networkMethod: 'order_purchase',
+      approvalSource: 'system_checkout'
+    }, { transaction });
     order.status = 'paid';
     order.paidAt = new Date();
     await order.save({ transaction });
@@ -590,6 +631,17 @@ async function payFromWallet(orderId) {
       if (order.status === 'paid' && order.paymentRef !== 'wallet_refunded') {
         user.balance = Number(user.balance || 0) + Number(order.totalAmount || 0);
         await user.save({ transaction: refundTx });
+        await BalanceTransaction.create({
+          userId: user.id,
+          amount: Number(order.totalAmount || 0),
+          type: 'wallet_purchase_refund',
+          txid: `ORDER-WALLET-REFUND:${order.id}`,
+          caption: `Automatic wallet refund after fulfillment failure for order #${order.id}`,
+          status: 'completed',
+          paymentOrigin: 'wallet',
+          networkMethod: 'order_purchase',
+          approvalSource: 'system_refund'
+        }, { transaction: refundTx });
         order.status = 'payment_error';
         order.paymentRef = 'wallet_refunded';
         await order.save({ transaction: refundTx });
@@ -624,6 +676,17 @@ async function refundServiceOrderToWallet(orderId, reason = 'service_refund_wall
     if (!user) throw new Error('USER_NOT_FOUND');
     user.balance = Number(user.balance || 0) + amount;
     await user.save({ transaction, fields: ['balance'] });
+    await BalanceTransaction.create({
+      userId: user.id,
+      amount,
+      type: 'service_refund',
+      txid: `SERVICE-REFUND:${order.id}`,
+      caption: `Service order #${order.id} refunded to wallet (${String(reason || 'service_refund_wallet')})`,
+      status: 'completed',
+      paymentOrigin: 'wallet',
+      networkMethod: 'service_order',
+      approvalSource: String(reason || '').startsWith('admin_') ? 'admin_service_refund' : 'system_service_refund'
+    }, { transaction });
 
     order.status = 'refunded_service';
     order.paymentRef = String(reason || 'service_refund_wallet');
@@ -668,6 +731,7 @@ async function addWaitingCode(orderId, code) {
 module.exports = {
   getProductStock,
   getProductStocksMap,
+  productAccessibleInCurrentShop,
   productVisibleInCurrentShop,
   normalizeProductFamilyName,
   sortProductStockRows,
