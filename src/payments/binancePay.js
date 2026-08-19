@@ -7,14 +7,25 @@ const {
   User,
   BalanceTransaction,
   PurchaseOrder,
-  BinanceTransfer
+  BinanceTransfer,
+  NetworkPaymentIntent,
+  getSetting,
+  getSecureSetting
 } = require('../db');
 const { fulfillOrder } = require('../services/orders');
 
 let serverTimeOffsetMs = 0;
 
-function configured() {
-  return Boolean(config.binance.apiKey && config.binance.secretKey && config.binance.payId);
+async function getRuntimeConfig() {
+  const apiKey = await getSecureSetting('binance_api_key', config.binance.apiKey);
+  const secretKey = await getSecureSetting('binance_api_secret', config.binance.secretKey);
+  const payId = await getSetting('binance_pay_id', config.binance.payId);
+  return { ...config.binance, apiKey, secretKey, payId };
+}
+
+async function configured() {
+  const runtime = await getRuntimeConfig();
+  return Boolean(runtime.apiKey && runtime.secretKey && runtime.payId);
 }
 
 function generateVerificationCode() {
@@ -132,14 +143,14 @@ function isIncoming(item) {
   return amountUsdt(item) > 0;
 }
 
-function signedQuery(params) {
+function signedQuery(params, secretKey) {
   const query = new URLSearchParams(params).toString();
-  const signature = crypto.createHmac('sha256', config.binance.secretKey).update(query).digest('hex');
+  const signature = crypto.createHmac('sha256', secretKey).update(query).digest('hex');
   return `${query}&signature=${signature}`;
 }
 
-async function syncServerTime() {
-  const response = await axios.get(`${config.binance.baseUrl}/api/v3/time`, { timeout: 10000 });
+async function syncServerTime(runtime) {
+  const response = await axios.get(`${runtime.baseUrl}/api/v3/time`, { timeout: 10000 });
   const serverTime = Number(response.data?.serverTime || 0);
   if (serverTime > 0) serverTimeOffsetMs = serverTime - Date.now();
 }
@@ -149,7 +160,8 @@ function isTimestampError(error) {
   return text.includes('-1021') || text.includes('outside of the recvwindow') || text.includes('outside of the time window');
 }
 
-async function fetchTransactions(startTime, endTime) {
+async function fetchTransactions(startTime, endTime, runtime = null) {
+  const cfg = runtime || await getRuntimeConfig();
   const perform = async () => {
     const params = {
       limit: '100',
@@ -159,10 +171,10 @@ async function fetchTransactions(startTime, endTime) {
       endTime: String(endTime)
     };
     const response = await axios.get(
-      `${config.binance.baseUrl}/sapi/v1/pay/transactions?${signedQuery(params)}`,
+      `${cfg.baseUrl}/sapi/v1/pay/transactions?${signedQuery(params, cfg.secretKey)}`,
       {
         timeout: 20000,
-        headers: { 'X-MBX-APIKEY': config.binance.apiKey }
+        headers: { 'X-MBX-APIKEY': cfg.apiKey }
       }
     );
     return Array.isArray(response.data?.data) ? response.data.data : [];
@@ -172,7 +184,7 @@ async function fetchTransactions(startTime, endTime) {
     return await perform();
   } catch (error) {
     if (isTimestampError(error)) {
-      await syncServerTime();
+      await syncServerTime(cfg);
       return perform();
     }
     throw error;
@@ -180,7 +192,7 @@ async function fetchTransactions(startTime, endTime) {
 }
 
 async function createForTopup(userId, amount) {
-  if (!configured()) return { success: false, reason: 'NOT_CONFIGURED' };
+  if (!(await configured())) return { success: false, reason: 'NOT_CONFIGURED' };
   const normalized = Number(amount);
   if (!Number.isFinite(normalized) || normalized < config.binance.minAmount || normalized > config.binance.maxAmount) {
     return { success: false, reason: 'INVALID_AMOUNT' };
@@ -192,6 +204,8 @@ async function createForTopup(userId, amount) {
     txid: null,
     caption: 'Binance ID wallet topup',
     status: 'awaiting_binance_id',
+    paymentOrigin: 'local',
+    networkMethod: 'binance',
     lastReminderAt: new Date()
   });
   const transfer = await BinanceTransfer.create({
@@ -206,7 +220,7 @@ async function createForTopup(userId, amount) {
 }
 
 async function createForOrder(orderId) {
-  if (!configured()) return { success: false, reason: 'NOT_CONFIGURED' };
+  if (!(await configured())) return { success: false, reason: 'NOT_CONFIGURED' };
   const order = await PurchaseOrder.findByPk(orderId);
   if (!order) return { success: false, reason: 'ORDER_NOT_FOUND' };
   if (order.status !== 'pending_payment') return { success: false, reason: 'ORDER_ALREADY_PROCESSED' };
@@ -214,7 +228,7 @@ async function createForOrder(orderId) {
     userId: order.userId,
     orderId: order.id,
     verificationCode: generateVerificationCode(),
-    expectedAmount: Number(order.totalAmount),
+    expectedAmount: Number(order.externalAmount || order.totalAmount),
     currency: 'USDT',
     status: 'WAITING'
   });
@@ -222,7 +236,8 @@ async function createForOrder(orderId) {
   return { success: true, transfer, order };
 }
 
-function instructions(transfer, lang = 'ar') {
+async function instructions(transfer, lang = 'ar') {
+  const runtime = await getRuntimeConfig();
   const amount = Number(transfer.expectedAmount).toFixed(2);
   if (lang === 'en') {
     return [
@@ -230,7 +245,7 @@ function instructions(transfer, lang = 'ar') {
       '',
       `💰 Send: <b>${amount} USDT</b>`,
       '🆔 To Binance ID:',
-      `<code>${config.binance.payId}</code>`,
+      `<code>${runtime.payId}</code>`,
       '',
       'After sending, send the Binance Order ID here:'
     ].join('\n');
@@ -240,7 +255,7 @@ function instructions(transfer, lang = 'ar') {
     '',
     `💰 حوّل: <b>${amount} USDT</b>`,
     '🆔 إلى Binance ID:',
-    `<code>${config.binance.payId}</code>`,
+    `<code>${runtime.payId}</code>`,
     '',
     'بعد التحويل ارسل معرف الطلب هنا:'
   ].join('\n');
@@ -396,6 +411,8 @@ async function approveManualReview(transferId, adminId) {
     ledger.status = 'completed';
     ledger.txid = submitted;
     ledger.caption = `Binance ID manual verification by admin ${adminId} | ${submitted}`;
+    ledger.approvedByTelegramId = adminId;
+    ledger.approvalSource = 'binance_manual_admin';
     await ledger.save({ transaction });
     lockedTransfer.status = 'VERIFIED';
     lockedTransfer.transactionId = submitted;
@@ -447,7 +464,8 @@ async function rejectManualReview(transferId, adminId) {
 }
 
 async function verify(transferId, submittedOrderId) {
-  if (!configured()) return { success: false, reason: 'NOT_CONFIGURED' };
+  if (!(await configured())) return { success: false, reason: 'NOT_CONFIGURED' };
+  const runtime = await getRuntimeConfig();
   const transfer = await BinanceTransfer.findByPk(transferId);
   if (!transfer) return { success: false, reason: 'NOT_FOUND' };
   if (transfer.status === 'VERIFIED') {
@@ -483,12 +501,12 @@ async function verify(transferId, submittedOrderId) {
   if (duplicate) return { success: false, reason: 'DUPLICATE_TRANSACTION' };
 
   const createdMs = new Date(transfer.createdAt).getTime();
-  const oldestAllowed = Date.now() - config.binance.verificationWindowHours * 60 * 60 * 1000;
+  const oldestAllowed = Date.now() - runtime.verificationWindowHours * 60 * 60 * 1000;
   const startTime = Math.max(0, oldestAllowed, createdMs - 30 * 60 * 1000);
   const endTime = Date.now() + 60 * 1000;
   let rows;
   try {
-    rows = await fetchTransactions(startTime, endTime);
+    rows = await fetchTransactions(startTime, endTime, runtime);
   } catch (error) {
     const detail = friendlyError(error);
     if (detail === 'REGION_RESTRICTED') {
@@ -563,6 +581,7 @@ async function verify(transferId, submittedOrderId) {
     ledger.status = 'completed';
     ledger.txid = transactionId;
     ledger.caption = `Binance ID verified | ${submitted}`;
+    ledger.approvalSource = 'binance_auto';
     await ledger.save({ transaction });
     lockedTransfer.status = 'VERIFIED';
     lockedTransfer.submittedOrderId = submitted;
@@ -589,12 +608,63 @@ async function verify(transferId, submittedOrderId) {
   }
 }
 
+
+async function verifyStandalone({ submittedOrderId, expectedAmount, createdAt }) {
+  if (!(await configured())) return { success: false, reason: 'NOT_CONFIGURED' };
+  const runtime = await getRuntimeConfig();
+  const submitted = String(submittedOrderId || '').trim();
+  if (!validSubmittedOrderId(submitted)) return { success: false, reason: 'INVALID_ORDER_ID' };
+  const expected = Number(expectedAmount || 0);
+  if (!Number.isFinite(expected) || expected <= 0) return { success: false, reason: 'INVALID_AMOUNT' };
+
+  const duplicateTransfer = await BinanceTransfer.findOne({
+    where: {
+      status: { [Op.in]: ['VERIFIED', 'PAYMENT_CONFIRMED'] },
+      [Op.or]: [{ submittedOrderId: submitted }, { transactionId: submitted }]
+    }
+  });
+  const duplicateNetwork = await NetworkPaymentIntent.findOne({
+    where: {
+      status: 'verified',
+      [Op.or]: [{ submittedOrderId: submitted }, { transactionId: submitted }]
+    }
+  });
+  if (duplicateTransfer || duplicateNetwork) return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+
+  const createdMs = new Date(createdAt || Date.now()).getTime();
+  const oldestAllowed = Date.now() - runtime.verificationWindowHours * 60 * 60 * 1000;
+  const startTime = Math.max(0, oldestAllowed, createdMs - 30 * 60 * 1000);
+  const endTime = Date.now() + 60 * 1000;
+  let rows;
+  try {
+    rows = await fetchTransactions(startTime, endTime, runtime);
+  } catch (error) {
+    const detail = friendlyError(error);
+    return { success: false, reason: detail === 'REGION_RESTRICTED' ? 'REGION_RESTRICTED' : 'API_ERROR', detail };
+  }
+  const candidates = rows.filter(row => itemMatchesSubmittedId(row, submitted));
+  if (!candidates.length) return { success: false, reason: 'NO_MATCH' };
+  const matched = candidates.find(row => {
+    const amount = amountUsdt(row);
+    const time = transactionTime(row);
+    return isIncoming(row) && Math.abs(amount - expected) <= 0.0001 && (!time || time >= startTime);
+  });
+  if (!matched) return { success: false, reason: 'AMOUNT_OR_RECEIVER_MISMATCH' };
+  const transactionId = uniqueTransactionId(matched);
+  const alreadyUsedTransfer = await BinanceTransfer.findOne({ where: { transactionId, status: { [Op.in]: ['VERIFIED', 'PAYMENT_CONFIRMED'] } } });
+  const alreadyUsedNetwork = await NetworkPaymentIntent.findOne({ where: { transactionId, status: 'verified' } });
+  if (alreadyUsedTransfer || alreadyUsedNetwork) return { success: false, reason: 'DUPLICATE_TRANSACTION' };
+  return { success: true, transactionId, rawPayload: matched };
+}
+
 module.exports = {
   configured,
+  getRuntimeConfig,
   createForTopup,
   createForOrder,
   instructions,
   verify,
+  verifyStandalone,
   queueManualReview,
   approveManualReview,
   rejectManualReview
