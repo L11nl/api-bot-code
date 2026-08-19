@@ -12,6 +12,13 @@ const SERVICES_TTL = 10 * 60_000;
 const COUNTRIES_TTL = 24 * 60 * 60_000;
 const PRICES_TTL = 5_000;
 
+function clearCaches() {
+  servicesCache.at = 0; servicesCache.value = [];
+  countriesCache.at = 0; countriesCache.value = [];
+  allPricesCache.at = 0; allPricesCache.value = [];
+  pricesCache.clear();
+}
+
 function apiError(code, detail = '') {
   const error = new Error(code);
   error.code = code;
@@ -245,4 +252,4 @@ async function getStatus(apiKey, activationId) { return request(apiKey, 'getStat
 async function cancel(apiKey, activationId) { return request(apiKey, 'setStatus', { id: activationId, status: 8 }); }
 async function finish(apiKey, activationId) { return request(apiKey, 'setStatus', { id: activationId, status: 6 }); }
 
-module.exports = { ID, NAME, BASE_URL, getBalance, listServices, listCountries, availableServicesSummary, availabilityForService, quote, purchase, getStatus, cancel, finish };
+module.exports = { ID, NAME, BASE_URL, clearCaches, getBalance, listServices, listCountries, availableServicesSummary, availabilityForService, quote, purchase, getStatus, cancel, finish };

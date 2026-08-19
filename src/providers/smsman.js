@@ -12,6 +12,13 @@ const SERVICES_TTL = 10 * 60_000;
 const COUNTRIES_TTL = 24 * 60 * 60_000;
 const PRICES_TTL = 5_000;
 
+function clearCaches() {
+  servicesCache.at = 0; servicesCache.value = [];
+  countriesCache.at = 0; countriesCache.value = [];
+  allPricesCache.at = 0; allPricesCache.value = [];
+  pricesCache.clear();
+}
+
 function apiError(code, detail = '') { const error = new Error(code); error.code = code; error.detail = detail; return error; }
 function parseJson(text, fallback = null) { try { return JSON.parse(text); } catch { return fallback; } }
 
@@ -81,7 +88,10 @@ async function listCountries(apiKey, force = false) {
 
 async function availableServicesSummary(apiKey, force = false) {
   if (!force && allPricesCache.value.length && Date.now() - allPricesCache.at < PRICES_TTL) return allPricesCache.value;
-  const json = parseJson(await request(apiKey, 'getPrices'));
+  // Keep summary prices in the same currency used for quote and purchase.
+  // Otherwise SMS-MAN may return account-default prices while the bot treats
+  // them as USD when ranking services.
+  const json = parseJson(await request(apiKey, 'getPrices', { currency: 'USD' }));
   const map = new Map();
   if (json && typeof json === 'object') {
     for (const countryData of Object.values(json)) {
@@ -160,4 +170,4 @@ async function getStatus(apiKey, activationId) { return request(apiKey, 'getStat
 async function cancel(apiKey, activationId) { return request(apiKey, 'setStatus', { id: activationId, status: -1 }); }
 async function finish(apiKey, activationId) { return request(apiKey, 'setStatus', { id: activationId, status: 6 }); }
 
-module.exports = { ID, NAME, BASE_URL, getBalance, listServices, listCountries, availableServicesSummary, availabilityForService, quote, purchase, getStatus, cancel, finish };
+module.exports = { ID, NAME, BASE_URL, clearCaches, getBalance, listServices, listCountries, availableServicesSummary, availabilityForService, quote, purchase, getStatus, cancel, finish };
