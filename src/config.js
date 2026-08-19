@@ -91,19 +91,22 @@ module.exports = {
   },
   virtualNumbers: {
     enabled: String(process.env.VIRTUAL_NUMBERS_ENABLED || 'true').toLowerCase() !== 'false',
-    // GrizzlySMS is the preferred provider naming. Legacy SMSBOWER_* / VIRTUAL_NUMBERS_*
-    // variables are still accepted so existing Railway deployments keep working.
-    apiKey: String(process.env.GRIZZLYSMS_API_KEY || process.env.SMSBOWER_API_KEY || process.env.VIRTUAL_NUMBERS_API_KEY || '').trim(),
-    baseUrl: String(process.env.GRIZZLYSMS_BASE_URL || process.env.SMSBOWER_BASE_URL || process.env.VIRTUAL_NUMBERS_BASE_URL || 'https://api.grizzlysms.com/stubs/handler_api.php').trim(),
-    walletUrl: String(process.env.GRIZZLYSMS_WALLET_URL || 'https://api.grizzlysms.com/public/crypto/wallet').trim(),
-    cancelDelaySeconds: Math.max(0, Number(process.env.GRIZZLYSMS_CANCEL_DELAY_SECONDS || 120)),
-    fallbackMinMarginUsd: Math.max(0, Number(process.env.VIRTUAL_NUMBERS_FALLBACK_MIN_MARGIN_USD || 0.20)),
-    providerRetries: Math.max(0, Math.min(10, Number(process.env.VIRTUAL_NUMBERS_PROVIDER_RETRIES || 2))),
+    // Primary provider used by the live purchase flow.
+    apiKey: String(process.env.SMSBOWER_API_KEY || process.env.VIRTUAL_NUMBERS_API_KEY || '').trim(),
+    baseUrl: String(process.env.SMSBOWER_BASE_URL || process.env.VIRTUAL_NUMBERS_BASE_URL || 'https://smsbower.page/stubs/handler_api.php').trim(),
     timeoutMs: Math.min(30000, Math.max(3000, Number(process.env.VIRTUAL_NUMBERS_TIMEOUT_MS || 12000))),
     pollIntervalMs: Math.max(5000, Number(process.env.VIRTUAL_NUMBERS_POLL_INTERVAL_MS || 7000)),
     // Virtual numbers are auto-cancelled after exactly 5 minutes if no SMS code arrives.
     activationTimeoutMinutes: 5,
-    costViewerIds: virtualNumberCostViewerIds
+    costViewerIds: virtualNumberCostViewerIds,
+    // Secondary provider is kept separate on purpose. API keys are provider-specific,
+    // so never silently reuse the SMSBower key for GrizzlySMS.
+    secondaryProvider: {
+      name: 'GrizzlySMS',
+      apiKey: String(process.env.GRIZZLYSMS_API_KEY || '').trim(),
+      baseUrl: String(process.env.GRIZZLYSMS_BASE_URL || 'https://api.grizzlysms.com/stubs/handler_api.php').trim(),
+      walletUrl: String(process.env.GRIZZLYSMS_WALLET_URL || '').trim()
+    }
   },
   binance: {
     // Normal Binance account API keys with read permission only.
