@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder } = require('../db');
+const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSecureSetting, setSecureSetting } = require('../db');
 const config = require('../config');
 
 const servicesCache = { at: 0, value: [] };
@@ -12,9 +12,69 @@ const SERVICES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_SERV
 const COUNTRIES_TTL_MS = Math.max(60_000, Number(process.env.VIRTUAL_NUMBERS_COUNTRIES_CACHE_MS || 24 * 60 * 60_000));
 const PRICES_TTL_MS = Math.max(5_000, Number(process.env.VIRTUAL_NUMBERS_PRICES_CACHE_MS || 30_000));
 
-function enabled() {
-  return Boolean(config.virtualNumbers?.enabled && config.virtualNumbers?.apiKey && config.virtualNumbers?.baseUrl);
+const PROVIDERS = {
+  smsbower: {
+    id: 'smsbower',
+    name: 'SMSBower',
+    baseUrl: () => String(config.virtualNumbers?.baseUrl || 'https://smsbower.page/stubs/handler_api.php').trim(),
+    walletUrl: () => String(config.virtualNumbers?.smsBowerWalletUrl || 'https://smsbower.page/api/payment/getActualWalletAddress').trim(),
+    envKey: () => String(config.virtualNumbers?.apiKey || '').trim(),
+    secureKey: 'virtual_numbers_smsbower_api_key',
+    purchaseEnabled: true
+  },
+  grizzly: {
+    id: 'grizzly',
+    name: 'GrizzlySMS',
+    baseUrl: () => String(config.virtualNumbers?.grizzlyBaseUrl || 'https://api.grizzlysms.com/stubs/handler_api.php').trim(),
+    walletUrl: () => String(config.virtualNumbers?.grizzlyWalletUrl || 'https://api.grizzlysms.com/public/crypto/wallet').trim(),
+    envKey: () => String(config.virtualNumbers?.grizzlyApiKey || '').trim(),
+    secureKey: 'virtual_numbers_grizzly_api_key',
+    purchaseEnabled: false
+  }
+};
+
+const providerKeyPresence = new Map([['smsbower', Boolean(PROVIDERS.smsbower.envKey())], ['grizzly', Boolean(PROVIDERS.grizzly.envKey())]]);
+
+function normalizeProviderId(providerId) {
+  const id = String(providerId || '').trim().toLowerCase();
+  if (!PROVIDERS[id]) throw apiError('BAD_PROVIDER');
+  return id;
 }
+
+async function getProviderApiKey(providerId) {
+  const id = normalizeProviderId(providerId);
+  const provider = PROVIDERS[id];
+  const stored = String(await getSecureSetting(provider.secureKey, '') || '').trim();
+  const value = stored || provider.envKey();
+  providerKeyPresence.set(id, Boolean(value));
+  return value;
+}
+
+async function setProviderApiKey(providerId, value) {
+  const id = normalizeProviderId(providerId);
+  const clean = String(value || '').trim();
+  await setSecureSetting(PROVIDERS[id].secureKey, clean);
+  providerKeyPresence.set(id, Boolean(clean || PROVIDERS[id].envKey()));
+  if (id === 'smsbower') clearAvailabilityCaches();
+  return Boolean(clean);
+}
+
+function clearAvailabilityCaches() {
+  servicesCache.at = 0; servicesCache.value = [];
+  countriesCache.at = 0; countriesCache.value = [];
+  allPricesCache.at = 0; allPricesCache.value = [];
+  pricesCache.clear();
+}
+
+function enabled() {
+  // A key may be stored encrypted in PostgreSQL instead of Railway Variables.
+  // apiRequest() performs the authoritative async key check.
+  return Boolean(config.virtualNumbers?.enabled && PROVIDERS.smsbower.baseUrl() && (providerKeyPresence.get('smsbower') || PROVIDERS.smsbower.envKey()));
+}
+
+// Prime encrypted-key presence after startup without blocking module loading.
+getProviderApiKey('smsbower').catch(() => {});
+getProviderApiKey('grizzly').catch(() => {});
 
 function roundMoney(value, decimals = 2) {
   const factor = 10 ** decimals;
@@ -41,16 +101,15 @@ function apiError(code, detail = '') {
   return error;
 }
 
-async function apiRequest(action, extra = {}, options = {}) {
-  if (!enabled()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
-  const params = {
-    api_key: config.virtualNumbers.apiKey,
-    action,
-    ...extra
-  };
+async function providerApiRequest(providerId, action, extra = {}, options = {}) {
+  const id = normalizeProviderId(providerId);
+  const provider = PROVIDERS[id];
+  const apiKey = await getProviderApiKey(id);
+  if (!apiKey || !provider.baseUrl()) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  const params = { api_key: apiKey, action, ...extra };
   let response;
   try {
-    response = await axios.get(config.virtualNumbers.baseUrl, {
+    response = await axios.get(provider.baseUrl(), {
       params,
       timeout: options.timeoutMs || config.virtualNumbers.timeoutMs,
       responseType: 'text',
@@ -66,138 +125,104 @@ async function apiRequest(action, extra = {}, options = {}) {
   return text;
 }
 
-function parseJson(text, fallback = null) {
-  try { return JSON.parse(text); }
-  catch { return fallback; }
+async function apiRequest(action, extra = {}, options = {}) {
+  return providerApiRequest('smsbower', action, extra, options);
 }
 
-async function getBalance() {
-  const text = await apiRequest('getBalance');
+async function providerBalance(providerId) {
+  const text = await providerApiRequest(providerId, 'getBalance');
   if (!text.startsWith('ACCESS_BALANCE:')) throw apiError('BAD_PROVIDER_RESPONSE', text);
   const amount = Number(text.slice('ACCESS_BALANCE:'.length));
   if (!Number.isFinite(amount)) throw apiError('BAD_PROVIDER_RESPONSE', text);
   return amount;
 }
 
-
-function safeProviderErrorText(value) {
-  const text = String(value || '').replace(/api_key=[^&\s]+/gi, 'api_key=***').trim();
-  return text.slice(0, 180);
+async function providerServicesProbe(providerId) {
+  const text = await providerApiRequest(providerId, 'getServicesList');
+  const json = parseJson(text);
+  const rows = Array.isArray(json?.services) ? json.services : (Array.isArray(json) ? json : []);
+  return rows.filter(row => String(row?.code ?? row?.id ?? '').trim()).length;
 }
 
-async function probeProvider({ name, baseUrl, apiKey, walletUrl = '' }) {
-  const startedAt = Date.now();
+async function providerStatus(providerId) {
+  const id = normalizeProviderId(providerId);
+  const provider = PROVIDERS[id];
+  const apiKey = await getProviderApiKey(id);
   const result = {
-    name: String(name || 'Provider'),
-    configured: Boolean(apiKey && baseUrl),
-    siteReachable: false,
-    apiWorking: false,
-    keyState: apiKey ? 'unknown' : 'missing',
+    id,
+    name: provider.name,
+    configured: Boolean(apiKey),
+    baseUrl: provider.baseUrl(),
+    walletUrl: provider.walletUrl(),
+    purchaseEnabled: Boolean(provider.purchaseEnabled),
     balance: null,
-    servicesWorking: false,
-    servicesCount: null,
-    walletConfigured: Boolean(walletUrl),
-    walletReachable: null,
-    latencyMs: null,
+    keyValid: false,
+    servicesOk: false,
+    serviceCount: null,
     errorCode: '',
     errorDetail: ''
   };
-
-  if (!baseUrl) {
-    result.errorCode = 'NO_BASE_URL';
-    result.latencyMs = Date.now() - startedAt;
+  if (!apiKey) return result;
+  try {
+    result.balance = await providerBalance(id);
+    result.keyValid = true;
+  } catch (error) {
+    result.errorCode = String(error.code || 'PROVIDER_UNAVAILABLE');
+    result.errorDetail = String(error.detail || error.message || '');
     return result;
   }
-
-  const timeout = Math.min(10_000, Math.max(3_000, Number(config.virtualNumbers?.timeoutMs || 8_000)));
-  const request = async action => {
-    const response = await axios.get(baseUrl, {
-      params: { api_key: apiKey || '__missing_api_key__', action },
-      timeout,
-      responseType: 'text',
-      transformResponse: [data => data],
-      validateStatus: status => status >= 200 && status < 500
-    });
-    return {
-      status: Number(response.status || 0),
-      text: typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim()
-    };
-  };
-
   try {
-    const balanceResponse = await request('getBalance');
-    result.siteReachable = true;
-    const text = balanceResponse.text;
-    if (!apiKey) {
-      result.keyState = 'missing';
-    } else if (/^ACCESS_BALANCE:/i.test(text)) {
-      const balance = Number(text.slice(text.indexOf(':') + 1));
-      result.keyState = 'valid';
-      result.apiWorking = true;
-      result.balance = Number.isFinite(balance) ? balance : null;
-    } else if (/^BAD_KEY/i.test(text)) {
-      result.keyState = 'invalid';
-      result.errorCode = 'BAD_KEY';
-    } else {
-      result.errorCode = 'UNEXPECTED_BALANCE_RESPONSE';
-      result.errorDetail = safeProviderErrorText(text);
-    }
+    result.serviceCount = await providerServicesProbe(id);
+    result.servicesOk = result.serviceCount > 0;
   } catch (error) {
-    result.errorCode = 'UNREACHABLE';
-    result.errorDetail = safeProviderErrorText(error?.message || 'request failed');
+    // Balance is enough to prove the API key works. Some compatible providers
+    // do not expose getServicesList on every account/API version.
+    result.servicesOk = false;
+    result.servicesErrorCode = String(error.code || 'SERVICES_PROBE_FAILED');
   }
-
-  if (result.apiWorking && result.keyState === 'valid') {
-    try {
-      const servicesResponse = await request('getServicesList');
-      const parsed = parseJson(servicesResponse.text);
-      const rows = Array.isArray(parsed?.services) ? parsed.services : (Array.isArray(parsed) ? parsed : []);
-      result.servicesCount = rows.filter(row => row && (row.code || row.id) && (row.name || row.title || row.code)).length;
-      result.servicesWorking = result.servicesCount > 0;
-      if (!result.servicesWorking && !result.errorCode) {
-        result.errorCode = 'SERVICES_EMPTY';
-        result.errorDetail = safeProviderErrorText(servicesResponse.text);
-      }
-    } catch (error) {
-      if (!result.errorCode) result.errorCode = 'SERVICES_CHECK_FAILED';
-      if (!result.errorDetail) result.errorDetail = safeProviderErrorText(error?.message || 'services request failed');
-    }
-  }
-
-  if (walletUrl) {
-    try {
-      const walletResponse = await axios.get(walletUrl, {
-        timeout,
-        responseType: 'text',
-        transformResponse: [data => data],
-        validateStatus: status => status >= 200 && status < 500
-      });
-      result.walletReachable = Number(walletResponse.status || 0) >= 200 && Number(walletResponse.status || 0) < 400;
-    } catch {
-      result.walletReachable = false;
-    }
-  }
-
-  result.latencyMs = Date.now() - startedAt;
   return result;
 }
 
-async function diagnoseProviders() {
-  const secondary = config.virtualNumbers?.secondaryProvider || {};
-  const [primary, second] = await Promise.all([
-    probeProvider({
-      name: 'SMSBower',
-      baseUrl: config.virtualNumbers?.baseUrl,
-      apiKey: config.virtualNumbers?.apiKey
-    }),
-    probeProvider({
-      name: secondary.name || 'GrizzlySMS',
-      baseUrl: secondary.baseUrl,
-      apiKey: secondary.apiKey,
-      walletUrl: secondary.walletUrl
-    })
-  ]);
-  return { primary, secondary: second, checkedAt: new Date() };
+async function providerWallet(providerId) {
+  const id = normalizeProviderId(providerId);
+  const provider = PROVIDERS[id];
+  const apiKey = await getProviderApiKey(id);
+  if (!apiKey) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  let response;
+  try {
+    response = await axios.get(provider.walletUrl(), {
+      params: { api_key: apiKey, coin: 'usdt', network: 'tron' },
+      timeout: config.virtualNumbers.timeoutMs
+    });
+  } catch (error) {
+    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'wallet request failed');
+  }
+  const data = response?.data;
+  const parsed = typeof data === 'string' ? parseJson(data, {}) : (data || {});
+  const address = String(parsed?.wallet_address || parsed?.address || '').trim();
+  if (!address) throw apiError('BAD_PROVIDER_RESPONSE', typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200));
+  return {
+    providerId: id,
+    providerName: provider.name,
+    address,
+    coin: 'USDT',
+    network: 'TRC20',
+    minimumDepositUsd: id === 'grizzly' ? 50 : null,
+    balance: await providerBalance(id).catch(() => null)
+  };
+}
+
+async function providerStatuses() {
+  return Promise.all(['smsbower', 'grizzly'].map(id => providerStatus(id)));
+}
+
+function parseJson(text, fallback = null) {
+  try { return JSON.parse(text); }
+  catch { return fallback; }
+}
+
+async function getBalance() {
+  return providerBalance('smsbower');
 }
 
 async function listServices(force = false) {
@@ -767,7 +792,12 @@ module.exports = {
   enabled,
   retailPrice,
   getBalance,
-  diagnoseProviders,
+  providerStatus,
+  providerStatuses,
+  providerWallet,
+  getProviderApiKey,
+  setProviderApiKey,
+  clearAvailabilityCaches,
   listServices,
   listCountries,
   availableServicesSummary,
