@@ -2,11 +2,11 @@ const express = require('express');
 const config = require('./config');
 const { initializeDatabase, sequelize } = require('./db');
 const binancePay = require('./payments/binancePay');
-const network = require('./network');
 
 let startupState = 'starting';
 let startupError = '';
 let bot = null;
+let startVirtualNumbersWatcher = null;
 
 // Start the HTTP server immediately so Railway health checks do not time out
 // while database migrations / inventory cleanup are still running.
@@ -23,8 +23,6 @@ app.get('/health', (_req, res) => {
   // may still be migrating old inventory; readiness is available at /ready.
   return res.json({ ok: true, state: startupState, bot: 'CD Store' });
 });
-if (network.isMaster()) network.installMasterRoutes(app, () => bot);
-
 app.get('/ready', async (_req, res) => {
   if (startupState !== 'ready') {
     return res.status(503).json({ ok: false, state: startupState, error: startupError || undefined });
@@ -35,8 +33,7 @@ app.get('/ready', async (_req, res) => {
       ok: true,
       state: startupState,
       bot: 'CD Store',
-      binanceTransferVerification: await binancePay.configured(),
-      networkRole: network.role()
+      binanceTransferVerification: binancePay.configured()
     });
   } catch (error) {
     return res.status(503).json({ ok: false, state: startupState, error: error.message });
@@ -72,11 +69,7 @@ async function main() {
   console.log('Database ready');
 
   startupState = 'telegram';
-  const botModule = require('./bot');
-  ({ bot } = botModule);
-  if (typeof botModule.loadPersistentRuntimeConfig === 'function') {
-    await botModule.loadPersistentRuntimeConfig();
-  }
+  ({ bot, startVirtualNumbersWatcher } = require('./bot'));
 
   // Polling and webhooks cannot be active together. Clear any old webhook.
   try {
@@ -89,11 +82,10 @@ async function main() {
   await bot.startPolling({ restart: true });
   console.log('Telegram bot polling started');
   await setupTelegramCommands(bot);
-  if (typeof botModule.startNetworkAccountWatcher === 'function') botModule.startNetworkAccountWatcher();
-  if (typeof botModule.startVirtualNumbersWatcher === 'function') botModule.startVirtualNumbersWatcher();
+  if (typeof startVirtualNumbersWatcher === 'function') startVirtualNumbersWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v12.8.3 is ready');
+  console.log('CD Store v7 virtual-numbers edition is ready');
 }
 
 main().catch(error => {
