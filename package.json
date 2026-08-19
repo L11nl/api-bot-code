@@ -1,13 +1,12 @@
 {
   "name": "my-bot-store-clean",
-  "version": "12.8.3",
+  "version": "7.0.0",
   "private": true,
-  "description": "Telegram digital store v12.8.3: owner-only virtual-number provider control panel with encrypted API keys, live provider checks, and provider top-up wallet buttons.",
+  "description": "Easy Telegram digital store v7 with two fully independent virtual-number providers, dynamic service ranking, 10-minute SMS timeout, per-provider profit, admin API management, notifications, direct Binance Order ID verification, translation, and Premium custom emoji support",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/payments/binancePay.js && node scripts/button-audit.js",
-    "button-audit": "node scripts/button-audit.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/payments/binancePay.js"
   },
   "engines": {
     "node": ">=20"
