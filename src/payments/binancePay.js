@@ -204,6 +204,8 @@ async function createForTopup(userId, amount) {
     txid: null,
     caption: 'Binance ID wallet topup',
     status: 'awaiting_binance_id',
+    paymentOrigin: 'local',
+    networkMethod: 'binance',
     lastReminderAt: new Date()
   });
   const transfer = await BinanceTransfer.create({
@@ -409,6 +411,8 @@ async function approveManualReview(transferId, adminId) {
     ledger.status = 'completed';
     ledger.txid = submitted;
     ledger.caption = `Binance ID manual verification by admin ${adminId} | ${submitted}`;
+    ledger.approvedByTelegramId = adminId;
+    ledger.approvalSource = 'binance_manual_admin';
     await ledger.save({ transaction });
     lockedTransfer.status = 'VERIFIED';
     lockedTransfer.transactionId = submitted;
@@ -577,6 +581,7 @@ async function verify(transferId, submittedOrderId) {
     ledger.status = 'completed';
     ledger.txid = transactionId;
     ledger.caption = `Binance ID verified | ${submitted}`;
+    ledger.approvalSource = 'binance_auto';
     await ledger.save({ transaction });
     lockedTransfer.status = 'VERIFIED';
     lockedTransfer.submittedOrderId = submitted;
