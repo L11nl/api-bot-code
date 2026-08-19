@@ -2,7 +2,7 @@
   "name": "my-bot-store-clean",
   "version": "12.8.3",
   "private": true,
-  "description": "Telegram digital store v12.8.3: simple virtual-number provider settings plus live SMSBower/GrizzlySMS API diagnostics without exposing secrets.",
+  "description": "Telegram digital store v12.8.3: owner-only virtual-number provider control panel with encrypted API keys, live provider checks, and provider top-up wallet buttons.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
