@@ -92,7 +92,10 @@ async function finalizeReferral(userId) {
       type: 'referral_reward',
       txid: `REF-${user.id}`,
       caption: `Referral reward for user ${user.id}`,
-      status: 'completed'
+      status: 'completed',
+      paymentOrigin: 'referral',
+      networkMethod: 'referral_reward',
+      approvalSource: 'system_referral'
     }, { transaction });
 
     user.referralProcessed = true;
@@ -128,6 +131,7 @@ async function getReferralStats(userId) {
     ? await GiftClaim.findOne({ where: { userId, campaignKey } })
     : null;
   const product = settings.giftProductId ? await Merchant.findByPk(settings.giftProductId) : null;
+  const giftProductValid = Boolean(product && product.isActive !== false && String(product.type || '') !== 'service');
 
   return {
     count,
@@ -139,6 +143,7 @@ async function getReferralStats(userId) {
       settings.enabled &&
       settings.giftEnabled &&
       settings.giftProductId &&
+      giftProductValid &&
       count >= settings.target &&
       (!claim || claim.status === 'failed')
     )
@@ -149,6 +154,7 @@ async function claimReferralGift(userId) {
   const stats = await getReferralStats(userId);
   if (!stats.settings.enabled || !stats.settings.giftEnabled) throw new Error('GIFT_DISABLED');
   if (!stats.settings.giftProductId) throw new Error('GIFT_PRODUCT_NOT_SET');
+  if (!stats.giftProduct || stats.giftProduct.isActive === false || String(stats.giftProduct.type || '') === 'service') throw new Error('GIFT_PRODUCT_INVALID');
   if (stats.count < stats.settings.target) throw new Error('NOT_ENOUGH_REFERRALS');
 
   const campaignKey = `${stats.settings.giftProductId}:${stats.settings.target}`;

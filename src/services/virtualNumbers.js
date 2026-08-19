@@ -1,10 +1,21 @@
-const { sequelize, Op, User, BalanceTransaction, VirtualNumberOrder, getSetting, setSetting } = require('../db');
-const { encryptPayload, decryptPayload, isEncrypted } = require('../cryptoStore');
+const {
+  sequelize,
+  Op,
+  User,
+  BalanceTransaction,
+  VirtualNumberOrder,
+  getSetting,
+  setSetting,
+  getSecureSetting,
+  setSecureSetting
+} = require('../db');
+const axios = require('axios');
+const config = require('../config');
 const smsbower = require('../providers/smsbower');
 const smsman = require('../providers/smsman');
 
 const DEFAULT_PROFIT = 0.15;
-const ACTIVATION_TIMEOUT_MINUTES = 10;
+const ACTIVATION_TIMEOUT_MINUTES = Math.max(1, Number(config.virtualNumbers?.activationTimeoutMinutes || 10));
 const purchaseLocks = new Set();
 
 const PROVIDERS = {
@@ -12,19 +23,21 @@ const PROVIDERS = {
     id: 'smsbower',
     adminName: 'SMSBower',
     adapter: smsbower,
-    apiSetting: 'virtual_numbers_smsbower_api',
+    secureKey: 'virtual_numbers_smsbower_api_key',
     profitSetting: 'virtual_numbers_smsbower_profit',
-    envKey: 'SMSBOWER_API_KEY'
+    envKey: () => String(config.virtualNumbers?.apiKey || '').trim()
   },
   smsman: {
     id: 'smsman',
     adminName: 'SMS-MAN',
     adapter: smsman,
-    apiSetting: 'virtual_numbers_smsman_api',
+    secureKey: 'virtual_numbers_smsman_api_key',
     profitSetting: 'virtual_numbers_smsman_profit',
-    envKey: 'SMSMAN_API_KEY'
+    envKey: () => String(config.virtualNumbers?.smsmanApiKey || '').trim()
   }
 };
+
+const providerKeyPresence = new Map(Object.values(PROVIDERS).map(provider => [provider.id, Boolean(provider.envKey())]));
 
 function providerRecord(providerId) {
   const row = PROVIDERS[String(providerId || '').toLowerCase()];
@@ -55,26 +68,38 @@ function salePrice(providerCost, profit) {
   return roundMoney(cost + margin, 2);
 }
 
-function decodeStoredSecret(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (!isEncrypted(raw)) return raw;
-  try {
-    const payload = decryptPayload(raw);
-    return String(payload?.value || payload?.apiKey || '').trim();
-  } catch {
-    return '';
-  }
+// Compatibility helper for older callers that used the former single-provider
+// module. New customer quotes use each provider's stored profit instead.
+function retailPrice(providerCost) {
+  return salePrice(providerCost, DEFAULT_PROFIT);
+}
+
+function clearAvailabilityCaches(providerId = null) {
+  const providers = providerId ? [providerRecord(providerId)] : Object.values(PROVIDERS);
+  for (const provider of providers) provider.adapter.clearCaches?.();
 }
 
 async function getProviderApiKey(providerId) {
   const provider = providerRecord(providerId);
-  const storedRaw = String(await getSetting(provider.apiSetting, '') || '').trim();
-  if (storedRaw === '__DISABLED__') return '';
-  const stored = decodeStoredSecret(storedRaw);
-  if (stored) return stored;
-  return String(process.env[provider.envKey] || '').trim();
+  const stored = String(await getSecureSetting(provider.secureKey, '') || '').trim();
+  if (stored === '__DISABLED__') {
+    providerKeyPresence.set(provider.id, false);
+    return '';
+  }
+  const value = stored || provider.envKey();
+  providerKeyPresence.set(provider.id, Boolean(value));
+  return value;
 }
+
+function enabled() {
+  // Stored API keys are loaded asynchronously after the database is ready.
+  // Keep the feature entry point available and let the async provider menu
+  // decide whether at least one provider is actually configured.
+  return Boolean(config.virtualNumbers?.enabled);
+}
+
+// Prime encrypted-key presence without blocking module loading.
+Promise.all(Object.keys(PROVIDERS).map(id => getProviderApiKey(id).catch(() => ''))).catch(() => {});
 
 async function hasProviderApi(providerId) {
   return Boolean(await getProviderApiKey(providerId));
@@ -112,11 +137,15 @@ async function setProviderApiKey(providerId, apiKey) {
   const provider = providerRecord(providerId);
   const key = String(apiKey || '').trim();
   if (!key) {
-    await setSetting(provider.apiSetting, '__DISABLED__');
+    await setSecureSetting(provider.secureKey, '__DISABLED__');
+    providerKeyPresence.set(provider.id, false);
+    provider.adapter.clearCaches?.();
     return { configured: false, removed: true };
   }
   const test = await testProviderApi(providerId, key);
-  await setSetting(provider.apiSetting, encryptPayload({ value: key }));
+  await setSecureSetting(provider.secureKey, key);
+  providerKeyPresence.set(provider.id, true);
+  provider.adapter.clearCaches?.();
   return { configured: true, balance: test.balance };
 }
 
@@ -128,8 +157,69 @@ async function removeProviderApiKey(providerId) {
     error.active = active;
     throw error;
   }
-  await setSetting(provider.apiSetting, '__DISABLED__');
+  await setSecureSetting(provider.secureKey, '__DISABLED__');
+  providerKeyPresence.set(provider.id, false);
+  provider.adapter.clearCaches?.();
   return { configured: false };
+}
+
+async function providerStatus(providerId) {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(provider.id);
+  const result = {
+    id: provider.id,
+    name: provider.adminName,
+    configured: Boolean(apiKey),
+    baseUrl: provider.adapter.BASE_URL,
+    keyValid: false,
+    servicesOk: false,
+    serviceCount: null,
+    balance: null,
+    errorCode: '',
+    errorDetail: ''
+  };
+  if (!apiKey) return result;
+  try {
+    result.balance = await provider.adapter.getBalance(apiKey);
+    result.keyValid = true;
+  } catch (error) {
+    result.errorCode = String(error.code || 'PROVIDER_UNAVAILABLE');
+    result.errorDetail = String(error.detail || error.message || '');
+    return result;
+  }
+  try {
+    const services = await provider.adapter.listServices(apiKey, true);
+    result.serviceCount = services.length;
+    result.servicesOk = services.length > 0;
+  } catch (error) {
+    result.servicesErrorCode = String(error.code || 'SERVICES_PROBE_FAILED');
+  }
+  return result;
+}
+
+async function providerStatuses() {
+  return Promise.all(Object.keys(PROVIDERS).map(providerStatus));
+}
+
+async function providerWallet(providerId) {
+  const provider = providerRecord(providerId);
+  if (provider.id !== 'smsbower') throw apiError('WALLET_NOT_AVAILABLE');
+  const apiKey = await getProviderApiKey(provider.id);
+  if (!apiKey) throw apiError('VIRTUAL_NUMBERS_NOT_CONFIGURED');
+  let response;
+  try {
+    response = await axios.get(config.virtualNumbers.smsBowerWalletUrl, {
+      params: { api_key: apiKey, coin: 'usdt', network: 'tron' },
+      timeout: config.virtualNumbers.timeoutMs
+    });
+  } catch (error) {
+    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'wallet request failed');
+  }
+  const data = response?.data;
+  const parsed = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch { return {}; } })() : (data || {});
+  const address = String(parsed?.wallet_address || parsed?.address || '').trim();
+  if (!address) throw apiError('BAD_PROVIDER_RESPONSE');
+  return { providerId: provider.id, providerName: provider.adminName, address, coin: 'USDT', network: 'TRC20', balance: await provider.adapter.getBalance(apiKey).catch(() => null) };
 }
 
 async function providerStats(providerId) {
@@ -158,7 +248,7 @@ async function getConfiguredProviders() {
       ...stats
     });
   }
-  rows.sort((a, b) => b.purchased - a.purchased || b.completed - a.completed || a.id.localeCompare(b.id));
+  rows.sort((a, b) => b.completed - a.completed || b.purchased - a.purchased || a.id.localeCompare(b.id));
   return rows.map((row, index) => ({
     ...row,
     rank: index + 1,
@@ -190,21 +280,54 @@ async function getPublicProvider(providerId) {
   return (await getConfiguredProviders()).find(row => row.id === providerId) || null;
 }
 
-async function listServices(providerId, force = false) {
+async function getBalance(providerId = 'smsbower') {
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(provider.id);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  return provider.adapter.getBalance(apiKey);
+}
+
+async function listServices(providerId = 'smsbower', force = false) {
+  if (typeof providerId === 'boolean') {
+    force = providerId;
+    providerId = 'smsbower';
+  }
   const provider = providerRecord(providerId);
   const apiKey = await getProviderApiKey(providerId);
   if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
   return provider.adapter.listServices(apiKey, force);
 }
 
-async function availableServicesSummary(providerId, force = false) {
+async function listCountries(providerId = 'smsbower', force = false) {
+  if (typeof providerId === 'boolean') {
+    force = providerId;
+    providerId = 'smsbower';
+  }
   const provider = providerRecord(providerId);
   const apiKey = await getProviderApiKey(providerId);
   if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
-  return provider.adapter.availableServicesSummary(apiKey, force);
+  return provider.adapter.listCountries(apiKey, force);
+}
+
+async function availableServicesSummary(providerId = 'smsbower', force = false) {
+  if (typeof providerId === 'boolean') {
+    force = providerId;
+    providerId = 'smsbower';
+  }
+  const provider = providerRecord(providerId);
+  const apiKey = await getProviderApiKey(providerId);
+  if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
+  const profit = await getProviderProfit(providerId);
+  const rows = await provider.adapter.availableServicesSummary(apiKey, force);
+  return rows.map(row => ({ ...row, profit, retailPrice: salePrice(row.providerCost, profit) }));
 }
 
 async function availabilityForService(providerId, serviceCode, force = false) {
+  if (serviceCode === undefined || typeof serviceCode === 'boolean') {
+    force = Boolean(serviceCode);
+    serviceCode = providerId;
+    providerId = 'smsbower';
+  }
   const provider = providerRecord(providerId);
   const apiKey = await getProviderApiKey(providerId);
   if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
@@ -218,9 +341,143 @@ async function availabilityForService(providerId, serviceCode, force = false) {
 }
 
 async function quote(providerId, serviceCode, countryId, force = false) {
+  if (countryId === undefined || typeof countryId === 'boolean') {
+    force = Boolean(countryId);
+    countryId = serviceCode;
+    serviceCode = providerId;
+    providerId = 'smsbower';
+  }
   const rows = await availabilityForService(providerId, serviceCode, force);
   return rows.find(row => String(row.countryId) === String(countryId)) || null;
 }
+
+function currentShopIdForAccounting() {
+  if (String(config.network?.role || '').toLowerCase() === 'client') return String(config.network?.shopId || '').trim();
+  return 'master';
+}
+
+async function markAccounting(order, fields) {
+  Object.assign(order, fields);
+  await order.save({ fields: Object.keys(fields) });
+  return order;
+}
+
+async function syncProviderCostAccounting(order) {
+  if (!order || order.providerCostAccounted) return { accounted: Boolean(order?.providerCostAccounted), skipped: true };
+  // A provider cost exists only after a real activation was allocated. If the
+  // provider rejected the purchase before returning activationId, there is no
+  // inter-shop cost to charge.
+  if (!String(order.activationId || '').trim()) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+  const amountUsd = Number(order.providerCostUsd || 0);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+
+  // Master/standalone storefront pays the provider directly, so there is no
+  // inter-shop debt to create. Client storefronts owe Master only the real
+  // provider cost; the retail margin remains with the client storefront.
+  let network;
+  try { network = require('../network'); }
+  catch { network = null; }
+  if (!network?.enabledClient?.()) {
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true, skipped: true };
+  }
+
+  try {
+    await network.recordVirtualNumberProviderCost({
+      orderId: String(order.id),
+      activationId: String(order.activationId || ''),
+      amountUsd,
+      salePriceUsd: Number(order.salePriceUsd || 0),
+      customerId: String(order.userId || ''),
+      serviceCode: String(order.serviceCode || ''),
+      countryId: String(order.countryId || '')
+    });
+    await markAccounting(order, { providerCostAccounted: true, accountingLastError: null });
+    return { accounted: true };
+  } catch (error) {
+    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
+    throw error;
+  }
+}
+
+async function syncProviderCostReversal(order) {
+  if (!order || !order.refundApplied || order.providerCostReversed) {
+    return { reversed: Boolean(order?.providerCostReversed), skipped: true };
+  }
+
+  // Never create a refund obligation before the original provider-cost debt
+  // exists. If the original write failed, retry it first; both writes are
+  // idempotent on Master, so repeated background attempts are safe.
+  if (!order.providerCostAccounted) await syncProviderCostAccounting(order);
+  if (!String(order.activationId || '').trim()) {
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true, skipped: true };
+  }
+
+  const amountUsd = Number(order.providerCostUsd || 0);
+  let network;
+  try { network = require('../network'); }
+  catch { network = null; }
+  if (!network?.enabledClient?.() || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true, skipped: true };
+  }
+
+  try {
+    await network.reverseVirtualNumberProviderCost({
+      orderId: String(order.id),
+      activationId: String(order.activationId || ''),
+      amountUsd,
+      salePriceUsd: Number(order.salePriceUsd || 0),
+      customerId: String(order.userId || ''),
+      serviceCode: String(order.serviceCode || ''),
+      countryId: String(order.countryId || '')
+    });
+    await markAccounting(order, { providerCostReversed: true, accountingLastError: null });
+    return { reversed: true };
+  } catch (error) {
+    await markAccounting(order, { accountingLastError: String(error?.message || error).slice(0, 255) }).catch(() => {});
+    throw error;
+  }
+}
+
+async function syncAccountingBacklog(limit = 60) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 60));
+  const rows = await VirtualNumberOrder.findAll({
+    where: {
+      [Op.or]: [
+        { providerCostAccounted: false, activationId: { [Op.ne]: null } },
+        { refundApplied: true, providerCostReversed: false }
+      ]
+    },
+    order: [['createdAt', 'ASC']],
+    limit: safeLimit
+  });
+  let accounted = 0;
+  let reversed = 0;
+  for (const order of rows) {
+    try {
+      if (!order.providerCostAccounted && order.activationId) {
+        await syncProviderCostAccounting(order);
+        accounted += 1;
+      }
+      if (order.refundApplied && !order.providerCostReversed) {
+        await syncProviderCostReversal(order);
+        reversed += 1;
+      }
+    } catch (error) {
+      console.error('Virtual number accounting retry:', order.id, error.message);
+    }
+  }
+  return { scanned: rows.length, accounted, reversed };
+}
+
 
 async function reserveCustomerWallet(userId, orderData) {
   const tx = await sequelize.transaction();
@@ -248,7 +505,7 @@ async function reserveCustomerWallet(userId, orderData) {
       status: 'reserving',
       expiresAt: new Date(Date.now() + ACTIVATION_TIMEOUT_MINUTES * 60_000)
     }, { transaction: tx });
-    user.balance = roundMoney(balance - price, 2);
+    user.balance = balance - price;
     await user.save({ transaction: tx, fields: ['balance'] });
     await BalanceTransaction.create({
       userId,
@@ -256,6 +513,7 @@ async function reserveCustomerWallet(userId, orderData) {
       type: 'virtual_number_purchase',
       txid: `VN:${providerRecord(orderData.providerId).id}:${order.id}`,
       status: 'completed',
+      paymentOrigin: 'wallet',
       caption: `${orderData.serviceName} / ${orderData.countryName}`
     }, { transaction: tx });
     await tx.commit();
@@ -278,7 +536,7 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
     const user = await User.findByPk(order.userId, { transaction: tx, lock: tx.LOCK.UPDATE });
     if (!user) throw apiError('USER_NOT_FOUND');
     const amount = Number(order.salePriceUsd || 0);
-    user.balance = roundMoney(Number(user.balance || 0) + amount, 2);
+    user.balance = Number(user.balance || 0) + amount;
     await user.save({ transaction: tx, fields: ['balance'] });
     order.refundApplied = true;
     order.refundedAt = new Date();
@@ -291,9 +549,13 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
       type: 'virtual_number_refund',
       txid: `VN-REFUND:${order.providerId}:${order.id}`,
       status: 'completed',
+      paymentOrigin: 'wallet',
       caption: `${order.serviceName} / ${order.countryName}`
     }, { transaction: tx });
     await tx.commit();
+    await syncProviderCostReversal(order).catch(error => {
+      console.error('Virtual number accounting reversal:', order.id, error.message);
+    });
     return { order, refunded: amount, alreadyRefunded: false };
   } catch (error) {
     await tx.rollback();
@@ -301,7 +563,7 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
   }
 }
 
-async function purchase({ providerId, userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
+async function purchase({ providerId = 'smsbower', userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
   const provider = providerRecord(providerId);
   const apiKey = await getProviderApiKey(providerId);
   if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
@@ -353,6 +615,9 @@ async function purchase({ providerId, userId, serviceCode, serviceName, countryI
     order.lastProviderStatus = 'STATUS_WAIT_CODE';
     order.expiresAt = new Date(Date.now() + ACTIVATION_TIMEOUT_MINUTES * 60_000);
     await order.save();
+    await syncProviderCostAccounting(order).catch(error => {
+      console.error('Virtual number provider-cost accounting:', order.id, error.message);
+    });
     return order;
   } catch (error) {
     if (order && !order.activationId && !order.refundApplied) await refundOrder(order.id, 'failed', error.code || error.message).catch(() => {});
@@ -464,8 +729,11 @@ async function listUserOrders(userId, limit = 10) {
 module.exports = {
   DEFAULT_PROFIT,
   ACTIVATION_TIMEOUT_MINUTES,
+  enabled,
   providerRecord,
   salePrice,
+  retailPrice,
+  clearAvailabilityCaches,
   getProviderApiKey,
   hasProviderApi,
   hasAnyConfiguredProvider,
@@ -474,16 +742,24 @@ module.exports = {
   testProviderApi,
   setProviderApiKey,
   removeProviderApiKey,
+  providerStatus,
+  providerStatuses,
+  providerWallet,
   providerStats,
   getConfiguredProviders,
   getAllProviderAdminRows,
   getPublicProvider,
+  getBalance,
   listServices,
+  listCountries,
   availableServicesSummary,
   availabilityForService,
   quote,
   purchase,
   cancelCustomerOrder,
   pollPendingOrders,
-  listUserOrders
+  listUserOrders,
+  syncProviderCostAccounting,
+  syncProviderCostReversal,
+  syncAccountingBacklog
 };
