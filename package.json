@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "13.0.0",
+  "version": "12.8.3",
   "private": true,
-  "description": "Telegram digital store v13.0.0: scoped public/private catalog, per-bot publication approval/pricing, owner inventory controls, per-bot virtual-number providers, and network-wide balance audit.",
+  "description": "Telegram digital store v12.8.3: in-bot GrizzlySMS setup with Railway fallback, encrypted provider key, live availability filtering, and safe provider retries.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
