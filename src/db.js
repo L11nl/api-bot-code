@@ -72,7 +72,12 @@ const PaymentMethod = sequelize.define('PaymentMethod', {
   sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
   settlementCurrency: { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'USD' },
   ratePerUsd: { type: DataTypes.DECIMAL(18, 4), allowNull: true },
-  minimumTransferAmount: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 }
+  minimumTransferAmount: { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 },
+  // v13: a payment rail may stay private to this storefront or be shared
+  // with the network. Existing methods default to public for compatibility.
+  visibilityScope: { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' },
+  createdByAdminId: { type: DataTypes.BIGINT, allowNull: true },
+  createdByDisplayName: { type: DataTypes.STRING(160), allowNull: true }
 });
 
 const Merchant = sequelize.define('Merchant', {
@@ -98,7 +103,15 @@ const Merchant = sequelize.define('Merchant', {
   networkProductId: { type: DataTypes.STRING(64), allowNull: true, unique: true },
   networkManaged: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   networkOwnerShopId: { type: DataTypes.STRING(80), allowNull: true },
-  networkStock: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
+  networkStock: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  // v13: public/private source scope plus a storefront-local publication
+  // decision. The source catalog stays independent from each bot's choice to
+  // publish, hide, reject or locally delete the product.
+  visibilityScope: { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' },
+  localPublicationStatus: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'published' },
+  createdByAdminId: { type: DataTypes.BIGINT, allowNull: true },
+  createdByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
+  localReviewNotifiedAt: { type: DataTypes.DATE, allowNull: true }
 });
 
 const Code = sequelize.define('Code', {
@@ -156,7 +169,13 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   adminMessageId: { type: DataTypes.BIGINT, allowNull: true },
   lastReminderAt: { type: DataTypes.DATE, allowNull: true },
   paymentOrigin: { type: DataTypes.STRING(24), allowNull: true },
-  networkMethod: { type: DataTypes.STRING(80), allowNull: true }
+  networkMethod: { type: DataTypes.STRING(80), allowNull: true },
+  // Durable audit trail for wallet credits. These fields are intentionally
+  // stored on the balance ledger rather than inferred from Telegram messages.
+  approvedByTelegramId: { type: DataTypes.BIGINT, allowNull: true },
+  approvedByUsername: { type: DataTypes.STRING(64), allowNull: true },
+  approvedByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
+  approvalSource: { type: DataTypes.STRING(48), allowNull: true }
 });
 
 const BinanceTransfer = sequelize.define('BinanceTransfer', {
@@ -195,11 +214,16 @@ const VirtualNumberOrder = sequelize.define('VirtualNumberOrder', {
   smsCode: { type: DataTypes.TEXT, allowNull: true },
   status: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'reserving' },
   refundApplied: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  providerCostAccounted: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  providerCostReversed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  accountingLastError: { type: DataTypes.STRING(255), allowNull: true },
   refundedAt: { type: DataTypes.DATE, allowNull: true },
   expiresAt: { type: DataTypes.DATE, allowNull: true },
   completedAt: { type: DataTypes.DATE, allowNull: true },
   lastProviderStatus: { type: DataTypes.STRING(255), allowNull: true },
-  rawProvider: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }
+  rawProvider: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+  providerOwnerShopId: { type: DataTypes.STRING(80), allowNull: true },
+  providerSource: { type: DataTypes.STRING(24), allowNull: true }
 }, {
   indexes: [
     { fields: ['userId', 'createdAt'] },
@@ -644,6 +668,11 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'networkStock', { type: DataTypes.INTEGER, defaultValue: 0 });
   await addColumnIfMissing('Merchants', 'networkBasePriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
   await addColumnIfMissing('Merchants', 'localPriceOverrideUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Merchants', 'visibilityScope', { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' });
+  await addColumnIfMissing('Merchants', 'localPublicationStatus', { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'published' });
+  await addColumnIfMissing('Merchants', 'createdByAdminId', { type: DataTypes.BIGINT, allowNull: true });
+  await addColumnIfMissing('Merchants', 'createdByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
+  await addColumnIfMissing('Merchants', 'localReviewNotifiedAt', { type: DataTypes.DATE, allowNull: true });
 
   await addColumnIfMissing('PurchaseOrders', 'walletApplied', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
   await addColumnIfMissing('PurchaseOrders', 'externalAmount', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
@@ -651,6 +680,10 @@ async function initializeDatabase() {
   await addColumnIfMissing('PurchaseOrders', 'remoteOrderRef', { type: DataTypes.STRING(96), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'paymentOrigin', { type: DataTypes.STRING(24), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'networkMethod', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'approvedByTelegramId', { type: DataTypes.BIGINT, allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'approvedByUsername', { type: DataTypes.STRING(64), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'approvedByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'approvalSource', { type: DataTypes.STRING(48), allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'inventoryOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'unitPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'supplierValueUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
@@ -658,6 +691,9 @@ async function initializeDatabase() {
   await addColumnIfMissing('PaymentMethods', 'settlementCurrency', { type: DataTypes.STRING(8), defaultValue: 'USD' });
   await addColumnIfMissing('PaymentMethods', 'ratePerUsd', { type: DataTypes.DECIMAL(18, 4), allowNull: true });
   await addColumnIfMissing('PaymentMethods', 'minimumTransferAmount', { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 });
+  await addColumnIfMissing('PaymentMethods', 'visibilityScope', { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' });
+  await addColumnIfMissing('PaymentMethods', 'createdByAdminId', { type: DataTypes.BIGINT, allowNull: true });
+  await addColumnIfMissing('PaymentMethods', 'createdByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
   await addColumnIfMissing('NetworkSharedPaymentMethods', 'minimumTransferAmount', { type: DataTypes.DECIMAL(18, 4), allowNull: false, defaultValue: 0.01 });
 
   await addColumnIfMissing('NetworkPaymentIntents', 'customerName', { type: DataTypes.STRING(160), allowNull: true });
@@ -676,6 +712,21 @@ async function initializeDatabase() {
   await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByTelegramId', { type: DataTypes.BIGINT, allowNull: true });
   await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByUsername', { type: DataTypes.STRING(64), allowNull: true });
   await addColumnIfMissing('NetworkSharedPaymentRequests', 'approvedByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
+
+  // v12.7.1: durable accounting state for provider-funded virtual-number sales.
+  // Existing rows are preserved; only new columns are added. Client shops owe
+  // Master the real provider cost, while refunds reverse that debt exactly once.
+  await addColumnIfMissing('VirtualNumberOrders', 'providerCostAccounted', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+  await addColumnIfMissing('VirtualNumberOrders', 'providerCostReversed', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+  await addColumnIfMissing('VirtualNumberOrders', 'accountingLastError', { type: DataTypes.STRING(255), allowNull: true });
+  await addColumnIfMissing('VirtualNumberOrders', 'providerOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('VirtualNumberOrders', 'providerSource', { type: DataTypes.STRING(24), allowNull: true });
+
+  // Historical service products were explicitly local-only before v13. Keep
+  // that promise on upgrade; only newly-created services can be chosen public.
+  await Merchant.update({ visibilityScope: 'private', localPublicationStatus: 'published' }, {
+    where: { type: 'service', networkManaged: false, ownerNote: 'Local service' }
+  }).catch(error => console.error('Legacy local service scope migration:', error.message));
 
   await addColumnIfMissing('Codes', 'maxUses', { type: DataTypes.INTEGER, defaultValue: 1 });
   await addColumnIfMissing('Codes', 'usedCount', { type: DataTypes.INTEGER, defaultValue: 0 });
@@ -828,6 +879,10 @@ async function initializeDatabase() {
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "pm_active_sort_idx"
     ON ${tableSql('PaymentMethods')} ("isActive", "sortOrder", "id")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "vno_accounting_backlog_idx"
+    ON ${tableSql('VirtualNumberOrders')} ("providerCostAccounted", "providerCostReversed", "refundApplied", "createdAt")
   `);
 
   await sequelize.query(`

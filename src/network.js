@@ -19,7 +19,7 @@ const {
   getSetting
 } = require('./db');
 const { encryptPayload, decryptPayload } = require('./cryptoStore');
-const { inventoryFingerprint, escapeHtml } = require('./utils');
+const { inventoryFingerprint, inventoryPayloadIsValid, escapeHtml } = require('./utils');
 const { getProductStock, getProductStocksMap, fulfillOrder } = require('./services/orders');
 const binancePay = require('./payments/binancePay');
 const ledger = require('./services/networkLedger');
@@ -150,25 +150,35 @@ async function catalogSnapshot() {
   if (masterCatalogSnapshotCache.products && Date.now() - masterCatalogSnapshotCache.at < 5000) {
     return masterCatalogSnapshotCache.products;
   }
-  const products = await Merchant.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-  const sharedProducts = products.filter(product => String(product.type || '') !== 'service');
-  const stocks = await getProductStocksMap(sharedProducts);
-  const snapshot = sharedProducts.map(product => ({
-    networkProductId: product.networkProductId,
-    nameAr: product.nameAr,
-    nameEn: product.nameEn,
-    price: Number(product.price),
-    category: product.category,
-    type: product.type,
-    description: product.description || {},
-    image: product.image || null,
-    isActive: Boolean(product.isActive),
-    sharedLimit: Number(product.sharedLimit || 1),
-    deliveryMode: product.deliveryMode,
-    sortOrder: Number(product.sortOrder || 0),
-    stock: Number(stocks.get(Number(product.id)) || 0),
-    networkOwnerShopId: product.networkOwnerShopId || 'master'
-  }));
+  // Only PUBLIC source products belong to the shared catalog. A storefront's
+  // local publish/hide/reject decision is intentionally not exported here.
+  const products = await Merchant.findAll({
+    where: { isActive: true, visibilityScope: 'public' },
+    order: [['sortOrder', 'ASC'], ['id', 'ASC']]
+  });
+  const stocks = await getProductStocksMap(products);
+  const snapshot = products.map(product => {
+    const basePrice = Number(product.networkBasePriceUsd ?? product.price ?? 0);
+    return {
+      networkProductId: product.networkProductId,
+      nameAr: product.nameAr,
+      nameEn: product.nameEn,
+      price: basePrice,
+      category: product.category,
+      type: product.type,
+      description: product.description || {},
+      image: product.image || null,
+      isActive: Boolean(product.isActive),
+      sharedLimit: Number(product.sharedLimit || 1),
+      deliveryMode: product.deliveryMode,
+      sortOrder: Number(product.sortOrder || 0),
+      stock: Number(stocks.get(Number(product.id)) || 0),
+      networkOwnerShopId: product.networkOwnerShopId || 'master',
+      visibilityScope: 'public',
+      createdByAdminId: product.createdByAdminId || null,
+      createdByDisplayName: product.createdByDisplayName || null
+    };
+  });
   masterCatalogSnapshotCache = { at: Date.now(), products: snapshot };
   return snapshot;
 }
@@ -195,46 +205,25 @@ async function productStockProtection(merchantId, productOwnerShopId = 'master')
 async function syncCatalogToLocalNow() {
   if (!enabledClient()) return null;
   const thisShopId = String(config.network.shopId || '');
-
-  // Service products are local-only. This compatibility pass is small and only
-  // updates legacy rows when their ownership flags are actually wrong.
-  const localServices = await Merchant.findAll({ where: { type: 'service' } });
-  for (const service of localServices) {
-    const owner = String(service.networkOwnerShopId || '').trim();
-    if (!owner || owner === thisShopId) {
-      if (service.networkManaged || service.ownerNote !== 'Local service') {
-        await service.update({
-          networkManaged: false,
-          networkOwnerShopId: thisShopId,
-          isActive: true,
-          ownerNote: 'Local service'
-        });
-      }
-    } else if (service.isActive) {
-      await service.update({ isActive: false });
-    }
-  }
-
   const data = await clientRequest('get', '/api/v1/catalog');
-  const remoteProducts = (data.products || []).filter(remote => String(remote.type || '') !== 'service');
+  const remoteProducts = Array.isArray(data.products) ? data.products : [];
 
-  // Preserve a reseller's local markup while refreshing the shared catalog.
-  // The master price is always the floor. If the owner raises the floor above
-  // an old local override, the override is cleared automatically.
+  // Preserve every storefront-local decision while refreshing shared metadata.
+  // New remote products are PENDING until this bot's admin explicitly publishes
+  // them. Existing rows keep their prior published/hidden/rejected/deleted state.
   const remoteIds = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
   const existingRows = remoteIds.length ? await Merchant.findAll({
     where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
-    attributes: ['networkProductId', 'localPriceOverrideUsd'],
+    attributes: ['networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt'],
     raw: true
   }) : [];
-  const existingOverride = new Map(existingRows.map(row => [String(row.networkProductId), row.localPriceOverrideUsd]));
+  const existing = new Map(existingRows.map(row => [String(row.networkProductId), row]));
 
   const values = remoteProducts.map(remote => {
     const basePrice = Number(remote.price || 0);
-    const ownerShopId = String(remote.networkOwnerShopId || '');
-    const rawOverride = existingOverride.get(String(remote.networkProductId || ''));
-    const parsedOverride = rawOverride == null ? null : Number(rawOverride);
-    const canKeepOverride = ownerShopId !== thisShopId && Number.isFinite(parsedOverride) && parsedOverride > basePrice + 1e-9;
+    const prior = existing.get(String(remote.networkProductId || '')) || null;
+    const parsedOverride = prior?.localPriceOverrideUsd == null ? null : Number(prior.localPriceOverrideUsd);
+    const canKeepOverride = Number.isFinite(parsedOverride) && parsedOverride > basePrice + 1e-9;
     const localOverride = canKeepOverride ? parsedOverride : null;
     return {
       nameAr: remote.nameAr,
@@ -253,27 +242,35 @@ async function syncCatalogToLocalNow() {
       networkProductId: remote.networkProductId,
       networkManaged: true,
       networkOwnerShopId: remote.networkOwnerShopId || null,
-      networkStock: Number(remote.stock || 0)
+      networkStock: Number(remote.stock || 0),
+      visibilityScope: 'public',
+      localPublicationStatus: prior?.localPublicationStatus || 'pending',
+      localReviewNotifiedAt: prior?.localReviewNotifiedAt || null,
+      createdByAdminId: remote.createdByAdminId || null,
+      createdByDisplayName: remote.createdByDisplayName || null
     };
   }).filter(row => row.networkProductId);
 
-  // One PostgreSQL upsert replaces N findOne + N update queries.
   if (values.length) {
     await Merchant.bulkCreate(values, {
       updateOnDuplicate: [
         'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'localPriceOverrideUsd',
         'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
-        'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock'
+        'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock',
+        'visibilityScope', 'localPublicationStatus', 'localReviewNotifiedAt',
+        'createdByAdminId', 'createdByDisplayName'
       ]
     });
   }
 
   const seen = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
   const { Op } = require('sequelize');
-  const staleWhere = { networkManaged: true, type: { [Op.ne]: 'service' } };
+  const staleWhere = { networkManaged: true };
   if (seen.length) staleWhere.networkProductId = { [Op.notIn]: seen };
+  // Source withdrawal hides the row but never destroys the local publication
+  // decision or audit metadata.
   await Merchant.update({ isActive: false }, { where: staleWhere });
-  return data.products || [];
+  return remoteProducts;
 }
 
 async function syncCatalogToLocal(options = {}) {
@@ -324,6 +321,28 @@ async function addRemoteInventory(networkProductId, items, options = {}) {
   });
   invalidateCatalogCache();
   return result;
+}
+
+async function listMyRemoteInventory(networkProductId) {
+  return clientRequest('get', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/mine`);
+}
+
+async function updateMyRemoteInventory(networkProductId, codeId, payload) {
+  const result = await clientRequest('patch', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/${encodeURIComponent(codeId)}`, { payload });
+  invalidateCatalogCache();
+  return result;
+}
+
+async function deleteMyRemoteInventory(networkProductId, codeId) {
+  const result = await clientRequest('delete', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/${encodeURIComponent(codeId)}`);
+  invalidateCatalogCache();
+  return result;
+}
+
+async function auditNetworkUser(identifier) {
+  if (isMaster()) return auditUserAcrossNetwork(identifier);
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/audit/user', { identifier: String(identifier || '').trim() });
 }
 
 async function fulfillRemote({ networkProductId, quantity, localOrderId, customerId, retailUnitPriceUsd, resellerPriceOverride }) {
@@ -547,6 +566,7 @@ async function discoverSharedPaymentMethodsFromClientSchemasNow() {
       const nameAr = String(method.nameAr || '').trim();
       const paymentNumber = String(method.paymentNumber || '').trim();
       if (!nameAr || !paymentNumber) continue;
+      if (String(method.visibilityScope || 'public').toLowerCase() !== 'public') continue;
       const id = sharedPaymentMethodId(ownerShopId, localId);
       seenIds.push(id);
       values.push({
@@ -781,6 +801,16 @@ async function recordFallbackSettlement({ amountUsd, method, sourceRef, customer
   return clientRequest('post', '/api/v1/settlements', { amountUsd, method, sourceRef, customerName, activity });
 }
 
+async function recordVirtualNumberProviderCost(payload = {}) {
+  if (!enabledClient()) return { skipped: true };
+  return clientRequest('post', '/api/v1/virtual-numbers/provider-cost', payload);
+}
+
+async function reverseVirtualNumberProviderCost(payload = {}) {
+  if (!enabledClient()) return { skipped: true };
+  return clientRequest('post', '/api/v1/virtual-numbers/provider-cost/refund', payload);
+}
+
 async function getMySettlementSummary() {
   if (!enabledClient()) return null;
   return clientRequest('get', '/api/v1/settlements/me');
@@ -959,6 +989,84 @@ async function repairLegacyFreeFragmentsNetwork(product, rawText, ownerShopId) {
   return ids.length;
 }
 
+function safeSqlIdentifier(value) {
+  return `"${String(value || '').replace(/"/g, '""')}"`;
+}
+
+async function auditUserAcrossNetwork(identifierRaw) {
+  if (!isMaster()) throw new Error('MASTER_ONLY');
+  const identifier = String(identifierRaw || '').trim().replace(/^@/, '');
+  if (!identifier) throw new Error('USER_IDENTIFIER_REQUIRED');
+  const numericId = /^\d{4,20}$/.test(identifier) ? identifier : null;
+  const shops = [{ shopId: 'master', name: config.network.ownerName || config.network.shopName || 'Master', schema: config.databaseSchema }];
+  const clients = await NetworkClient.findAll({ where: { isActive: true }, attributes: ['shopId', 'name'] });
+  for (const client of clients) shops.push({ shopId: String(client.shopId), name: client.name, schema: clientDatabaseSchema(client.shopId) });
+  const results = [];
+  for (const shop of shops) {
+    const schema = safeSqlIdentifier(shop.schema);
+    let users = [];
+    try {
+      const where = numericId ? 'u.\"id\"::text = :identifier' : `LOWER(COALESCE(u.\"username\", '')) = LOWER(:identifier)`;
+      [users] = await sequelize.query(`SELECT u.* FROM ${schema}."Users" u WHERE ${where} LIMIT 5`, { replacements: { identifier: numericId || identifier } });
+    } catch { continue; }
+    for (const user of users || []) {
+      let transactions = [];
+      try {
+        [transactions] = await sequelize.query(`
+          SELECT bt."id", bt."amount", bt."type", bt."status", bt."txid", bt."caption", bt."paymentOrigin", bt."networkMethod",
+                 bt."approvedByTelegramId", bt."approvedByUsername", bt."approvedByDisplayName", bt."approvalSource", bt."createdAt",
+                 pm."nameAr" AS "paymentMethodNameAr", pm."nameEn" AS "paymentMethodNameEn", pm."settlementCurrency" AS "paymentCurrency"
+          FROM ${schema}."BalanceTransactions" bt
+          LEFT JOIN ${schema}."PaymentMethods" pm ON pm."id" = bt."paymentMethodId"
+          WHERE bt."userId" = :userId
+          ORDER BY bt."createdAt" DESC, bt."id" DESC
+          LIMIT 100
+        `, { replacements: { userId: String(user.id) } });
+      } catch {
+        // During rolling deploys an older client schema may not have the new
+        // audit columns yet. Keep the network-wide lookup usable and return
+        // legacy rows with explicit null approver fields until that bot boots
+        // v13 and runs its additive migration.
+        try {
+          [transactions] = await sequelize.query(`
+            SELECT bt."id", bt."amount", bt."type", bt."status", bt."txid", bt."caption", bt."paymentOrigin", bt."networkMethod",
+                   NULL::bigint AS "approvedByTelegramId", NULL::text AS "approvedByUsername", NULL::text AS "approvedByDisplayName",
+                   NULL::text AS "approvalSource", bt."createdAt",
+                   pm."nameAr" AS "paymentMethodNameAr", pm."nameEn" AS "paymentMethodNameEn", pm."settlementCurrency" AS "paymentCurrency"
+            FROM ${schema}."BalanceTransactions" bt
+            LEFT JOIN ${schema}."PaymentMethods" pm ON pm."id" = bt."paymentMethodId"
+            WHERE bt."userId" = :userId
+            ORDER BY bt."createdAt" DESC, bt."id" DESC
+            LIMIT 100
+          `, { replacements: { userId: String(user.id) } });
+        } catch { transactions = []; }
+      }
+      // Older ledger rows may not have approver metadata. For shared top-ups,
+      // recover the approver from the durable Master request when possible.
+      for (const tx of transactions) {
+        if (tx.approvedByTelegramId || tx.approvedByUsername || tx.approvedByDisplayName) continue;
+        const shared = await NetworkSharedPaymentRequest.findOne({
+          where: { sourceShopId: shop.shopId, sourceRef: `topup:${tx.id}`, status: 'approved' },
+          order: [['resolvedAt', 'DESC']]
+        }).catch(() => null);
+        if (shared) {
+          tx.approvedByTelegramId = shared.approvedByTelegramId;
+          tx.approvedByUsername = shared.approvedByUsername;
+          tx.approvedByDisplayName = shared.approvedByDisplayName;
+          tx.approvalSource = 'shared_payment_owner';
+        }
+      }
+      results.push({
+        shopId: shop.shopId,
+        shopName: shop.name,
+        user: { id: String(user.id), username: user.username || null, firstName: user.firstName || null, balance: Number(user.balance || 0), lang: user.lang || 'ar' },
+        transactions
+      });
+    }
+  }
+  return { identifier, results };
+}
+
 function installMasterRoutes(app, getBot) {
   const route = async (req, res, handler) => {
     try {
@@ -973,14 +1081,14 @@ function installMasterRoutes(app, getBot) {
   };
 
   app.get('/api/v1/catalog', (req, res) => route(req, res, async () => ({
-    // "service" is a local-only product type. Never expose it through the
-    // shared network catalog, even if an old database row still exists.
-    products: (await catalogSnapshot()).filter(product => String(product.type || '') !== 'service')
+    products: await catalogSnapshot()
   })));
 
   app.get('/api/v1/status/me', (req, res) => route(req, res, async client => ({
     status: await ledger.commerceStatusForShop(client.shopId)
   })));
+
+  app.post('/api/v1/audit/user', (req, res) => route(req, res, async () => auditUserAcrossNetwork(req.body?.identifier)));
 
   app.get('/api/v1/notifications/events', (req, res) => route(req, res, async () => {
     const latestId = await ledger.latestNotificationEventId();
@@ -995,10 +1103,10 @@ function installMasterRoutes(app, getBot) {
     const nameAr = String(body.nameAr || '').trim();
     const price = Number(body.price);
     const type = String(body.type || 'free');
-    if (type === 'service') throw new Error('SERVICE_PRODUCTS_ARE_LOCAL_ONLY');
     if (!nameAr || nameAr.length > 160) throw new Error('INVALID_PRODUCT_NAME');
     if (!Number.isFinite(price) || price < 0 || price > 1000000) throw new Error('INVALID_PRODUCT_PRICE');
-    if (!['code', 'account', 'free', 'private', 'shared'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
+    if (!['code', 'account', 'free', 'private', 'shared', 'service'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
+    if (String(body.visibilityScope || 'public').toLowerCase() !== 'public') throw new Error('NETWORK_PRODUCT_MUST_BE_PUBLIC');
     const networkProductId = newProductId();
     const [product] = await Merchant.findOrCreate({
       where: { networkProductId },
@@ -1006,28 +1114,37 @@ function installMasterRoutes(app, getBot) {
         nameAr,
         nameEn: String(body.nameEn || nameAr).trim(),
         price,
+        networkBasePriceUsd: price,
+        localPriceOverrideUsd: null,
         category: body.category || 'general',
         type,
         description: body.description || {},
         image: body.image || null,
         sharedLimit: Number(body.sharedLimit || 1),
-        deliveryMode: body.deliveryMode || 'instant',
+        deliveryMode: body.deliveryMode || (type === 'service' ? 'service_request' : 'instant'),
         isActive: true,
+        visibilityScope: 'public',
+        localPublicationStatus: 'pending',
+        createdByAdminId: body.createdByAdminId || null,
+        createdByDisplayName: String(body.createdByDisplayName || client.name || '').slice(0, 160) || null,
         networkManaged: false,
         networkOwnerShopId: client.shopId,
         ownerNote: `Added via ${client.shopId}`
       }
     });
-    if (!product.nameAr) throw new Error('INVALID_PRODUCT');
     const event = await ledger.publishNotificationEvent({
       eventType: 'new_product',
       networkProductId: product.networkProductId,
       actorShopId: client.shopId,
-      actorName: client.name,
-      payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+      actorName: body.createdByDisplayName || client.name,
+      payload: {
+        nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.networkBasePriceUsd ?? product.price),
+        type: product.type, description: product.description || {}, createdByAdminId: product.createdByAdminId,
+        createdByDisplayName: product.createdByDisplayName
+      }
     });
     invalidateCatalogCache();
-    return { product: { ...(product.toJSON()), stock: await getProductStock(product.id) }, eventId: Number(event.id) };
+    return { product: { ...(product.toJSON()), price: Number(product.networkBasePriceUsd ?? product.price), stock: await getProductStock(product.id) }, eventId: Number(event.id) };
   }));
 
   app.patch('/api/v1/products/:networkProductId', (req, res) => route(req, res, async client => {
@@ -1035,7 +1152,6 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
     const body = req.body || {};
-    if (String(body.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_ARE_LOCAL_ONLY');
     const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
@@ -1048,6 +1164,13 @@ function installMasterRoutes(app, getBot) {
     }
     if (protection.externalAvailable > 0 && ['type','sharedLimit','deliveryMode'].some(key => changes[key] !== undefined && changes[key] !== product[key])) {
       throw new Error(`STRUCTURE_LOCKED_BY_EXTERNAL_STOCK:${protection.externalAvailable}`);
+    }
+    if (changes.price !== undefined) {
+      const nextBase = Number(changes.price);
+      changes.networkBasePriceUsd = nextBase;
+      // Master's own storefront may have a local override; do not overwrite it.
+      if (!(Number(product.localPriceOverrideUsd) > nextBase + 1e-9)) changes.localPriceOverrideUsd = null;
+      changes.price = Number(product.localPriceOverrideUsd) > nextBase + 1e-9 ? Number(product.localPriceOverrideUsd) : nextBase;
     }
     await product.update(changes);
     invalidateCatalogCache();
@@ -1109,7 +1232,7 @@ function installMasterRoutes(app, getBot) {
         buyers: [],
         fingerprint,
         stockOwnerShopId: client.shopId,
-        contributionPriceUsd: Number(product.price || 0)
+        contributionPriceUsd: Number(product.networkBasePriceUsd ?? product.price ?? 0)
       });
     }
     if (newRows.length) await Code.bulkCreate(newRows);
@@ -1130,6 +1253,54 @@ function installMasterRoutes(app, getBot) {
     return { added, repairedLegacyFragments, stock: await getProductStock(product.id), sourceShopId: client.shopId, eventId };
   }));
 
+  app.get('/api/v1/products/:networkProductId/inventory/mine', (req, res) => route(req, res, async client => {
+    const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    const rows = await Code.findAll({
+      where: { merchantId: product.id, stockOwnerShopId: client.shopId },
+      order: [['id', 'DESC']],
+      limit: 200
+    });
+    return { items: rows.map(row => ({
+      id: Number(row.id),
+      payload: decryptPayload(row.value, row.extra),
+      usedCount: Number(row.usedCount || 0),
+      maxUses: Number(row.maxUses || 1),
+      isUsed: Boolean(row.isUsed),
+      soldAt: row.soldAt || null,
+      buyers: Array.isArray(row.buyers) ? row.buyers : [],
+      remaining: Math.max(0, Number(row.maxUses || 1) - Number(row.usedCount || 0)),
+      editable: !row.isUsed && Number(row.usedCount || 0) === 0
+    })) };
+  }));
+
+  app.patch('/api/v1/products/:networkProductId/inventory/:codeId', (req, res) => route(req, res, async client => {
+    const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    const row = await Code.findOne({ where: { id: Number(req.params.codeId), merchantId: product.id, stockOwnerShopId: client.shopId } });
+    if (!row) throw new Error('INVENTORY_NOT_OWNED');
+    if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
+    const payload = req.body?.payload;
+    if (!inventoryPayloadIsValid(product.type, payload)) throw new Error('INVALID_INVENTORY_PAYLOAD');
+    const fingerprint = inventoryFingerprint(product.type, payload);
+    const duplicate = await Code.findOne({ where: { merchantId: product.id, fingerprint, id: { [require('sequelize').Op.ne]: row.id } } });
+    if (duplicate) throw new Error('DUPLICATE_INVENTORY');
+    await row.update({ value: encryptPayload(payload), extra: null, fingerprint });
+    invalidateCatalogCache();
+    return { item: { id: Number(row.id), payload, editable: true } };
+  }));
+
+  app.delete('/api/v1/products/:networkProductId/inventory/:codeId', (req, res) => route(req, res, async client => {
+    const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    const row = await Code.findOne({ where: { id: Number(req.params.codeId), merchantId: product.id, stockOwnerShopId: client.shopId } });
+    if (!row) throw new Error('INVENTORY_NOT_OWNED');
+    if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
+    await row.destroy();
+    invalidateCatalogCache();
+    return { deleted: true, codeId: Number(req.params.codeId) };
+  }));
+
   app.get('/api/v1/products/:networkProductId/contributors', (req, res) => route(req, res, async () => {
     const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
@@ -1143,7 +1314,7 @@ function installMasterRoutes(app, getBot) {
     const remoteRef = `${client.shopId}:${String(body.localOrderId)}`;
     const quantity = Math.max(1, Math.min(100, Number(body.quantity || 1)));
     if (!Number.isInteger(quantity)) throw new Error('INVALID_QUANTITY');
-    const basePrice = Number(product.price || 0);
+    const basePrice = Number(product.networkBasePriceUsd ?? product.price ?? 0);
     const wantsOverride = Boolean(body.resellerPriceOverride);
     const requestedRetail = Number(body.retailUnitPriceUsd);
     if (wantsOverride && (!Number.isFinite(requestedRetail) || requestedRetail + 1e-9 < basePrice || requestedRetail > 1000000)) {
@@ -1380,6 +1551,55 @@ function installMasterRoutes(app, getBot) {
     return { verified: true, transactionId: result.transactionId };
   }));
 
+  app.post('/api/v1/virtual-numbers/provider-cost', (req, res) => route(req, res, async client => {
+    const amountUsd = Number(req.body?.amountUsd || 0);
+    const orderId = String(req.body?.orderId || '').trim();
+    const activationId = String(req.body?.activationId || '').trim();
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error('INVALID_AMOUNT');
+    if (!orderId) throw new Error('ORDER_ID_REQUIRED');
+    const sourceRef = `vn:${client.shopId}:${orderId}`;
+    const recorded = await ledger.recordObligation({
+      debtorShopId: client.shopId,
+      creditorShopId: 'master',
+      amountUsd,
+      kind: 'virtual_number_cost',
+      sourceRef,
+      metadata: {
+        activationId,
+        salePriceUsd: Number(req.body?.salePriceUsd || 0),
+        customerId: String(req.body?.customerId || ''),
+        serviceCode: String(req.body?.serviceCode || ''),
+        countryId: String(req.body?.countryId || ''),
+        marginUsd: Number((Number(req.body?.salePriceUsd || 0) - amountUsd).toFixed(2))
+      }
+    });
+    return { duplicate: Boolean(recorded.duplicate), accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
+  app.post('/api/v1/virtual-numbers/provider-cost/refund', (req, res) => route(req, res, async client => {
+    const amountUsd = Number(req.body?.amountUsd || 0);
+    const orderId = String(req.body?.orderId || '').trim();
+    const activationId = String(req.body?.activationId || '').trim();
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error('INVALID_AMOUNT');
+    if (!orderId) throw new Error('ORDER_ID_REQUIRED');
+    const sourceRef = `vn-refund:${client.shopId}:${orderId}`;
+    const recorded = await ledger.recordObligation({
+      debtorShopId: 'master',
+      creditorShopId: client.shopId,
+      amountUsd,
+      kind: 'virtual_number_refund',
+      sourceRef,
+      metadata: {
+        activationId,
+        salePriceUsd: Number(req.body?.salePriceUsd || 0),
+        customerId: String(req.body?.customerId || ''),
+        serviceCode: String(req.body?.serviceCode || ''),
+        countryId: String(req.body?.countryId || '')
+      }
+    });
+    return { duplicate: Boolean(recorded.duplicate), accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
   app.post('/api/v1/settlements', (req, res) => route(req, res, async client => {
     const body = req.body || {};
     const amountUsd = Number(body.amountUsd || 0);
@@ -1487,6 +1707,10 @@ module.exports = {
   updateRemoteProduct,
   deleteRemoteProduct,
   addRemoteInventory,
+  listMyRemoteInventory,
+  updateMyRemoteInventory,
+  deleteMyRemoteInventory,
+  auditNetworkUser,
   fulfillRemote,
   lookupRemoteDelivery,
   fallbackPayments,
@@ -1509,6 +1733,8 @@ module.exports = {
   createFallbackBinanceIntent,
   verifyFallbackBinanceIntent,
   recordFallbackSettlement,
+  recordVirtualNumberProviderCost,
+  reverseVirtualNumberProviderCost,
   getMySettlementSummary,
   getMyAccounts,
   getMyCommerceStatus,
