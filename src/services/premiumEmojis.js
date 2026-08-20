@@ -91,6 +91,36 @@ const builtInOverrides = new Map();
 let customEntries = [];
 let loaded = false;
 
+function canonicalKeysForEmojiId(emojiId) {
+  const wanted = String(emojiId || '').trim();
+  if (!wanted) return [];
+  return BUILT_INS
+    .filter(entry => CANONICAL_PLATFORM_KEYS.has(entry.key) && String(entry.id) === wanted)
+    .map(entry => entry.key);
+}
+
+function sanitizeCustomEntries(rows = []) {
+  let correctedCrossPlatform = 0;
+  const entries = (Array.isArray(rows) ? rows : [])
+    .map(entry => cleanEntry(entry, 'custom'))
+    .filter(Boolean)
+    .slice(0, MAX_CUSTOM_ENTRIES)
+    .map(entry => {
+      if (!entry.platformKey) return entry;
+      const owners = canonicalKeysForEmojiId(entry.emojiId);
+      if (!owners.length || owners.includes(entry.platformKey)) return entry;
+      const canonical = BUILT_INS.find(row => row.key === entry.platformKey);
+      if (!canonical) return entry;
+      correctedCrossPlatform += 1;
+      return {
+        ...entry,
+        emojiId: String(canonical.id),
+        alt: canonical.alt || entry.alt || '✨'
+      };
+    });
+  return { entries, correctedCrossPlatform };
+}
+
 function normalizeKeyword(value) {
   return String(value || '')
     .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
@@ -145,11 +175,10 @@ async function load() {
   } catch (error) {
     console.error('Premium emoji mapping load:', error.message);
   }
-  customEntries = (Array.isArray(parsed) ? parsed : [])
-    .map(entry => cleanEntry(entry, 'custom'))
-    .filter(Boolean)
-    .slice(0, MAX_CUSTOM_ENTRIES);
+  const sanitized = sanitizeCustomEntries(parsed);
+  customEntries = sanitized.entries;
   loaded = true;
+  if (sanitized.correctedCrossPlatform > 0) await persistCustom();
   return customEntries.length;
 }
 
@@ -369,8 +398,41 @@ async function persistCustom() {
   }))));
 }
 
+async function replaceCustom(entries = []) {
+  const before = JSON.stringify(customEntries.map(entry => ({
+    id: entry.id,
+    keywordAr: entry.keywordAr,
+    keywordEn: entry.keywordEn,
+    emojiId: entry.emojiId,
+    aliases: entry.aliases,
+    platformKey: entry.platformKey,
+    semanticKey: entry.semanticKey,
+    confirmedPlatformOverride: entry.confirmedPlatformOverride === true
+  })));
+  const sanitized = sanitizeCustomEntries(entries);
+  customEntries = sanitized.entries;
+  loaded = true;
+  const after = JSON.stringify(customEntries.map(entry => ({
+    id: entry.id,
+    keywordAr: entry.keywordAr,
+    keywordEn: entry.keywordEn,
+    emojiId: entry.emojiId,
+    aliases: entry.aliases,
+    platformKey: entry.platformKey,
+    semanticKey: entry.semanticKey,
+    confirmedPlatformOverride: entry.confirmedPlatformOverride === true
+  })));
+  const changed = before !== after;
+  if (changed || sanitized.correctedCrossPlatform > 0) await persistCustom();
+  return {
+    count: customEntries.length,
+    changed,
+    correctedCrossPlatform: sanitized.correctedCrossPlatform
+  };
+}
+
 async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
-  const candidate = cleanEntry({
+  let candidate = cleanEntry({
     keywordAr,
     keywordEn,
     emojiId,
@@ -385,6 +447,8 @@ async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
     error.code = 'INVALID_PREMIUM_EMOJI_MAPPING';
     throw error;
   }
+  const sanitized = sanitizeCustomEntries([candidate]);
+  candidate = sanitized.entries[0];
   const normalizedAr = normalizeKeyword(candidate.keywordAr);
   const index = customEntries.findIndex(entry => normalizeKeyword(entry.keywordAr) === normalizedAr);
   if (index >= 0) {
@@ -400,7 +464,7 @@ async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
     customEntries.push(candidate);
   }
   await persistCustom();
-  return { ...candidate };
+  return { ...candidate, autoCorrected: sanitized.correctedCrossPlatform > 0 };
 }
 
 async function removeCustom(entryId) {
@@ -423,6 +487,7 @@ module.exports = {
   getByKey,
   setBuiltInOverride,
   listCustom,
+  replaceCustom,
   upsertCustom,
   removeCustom,
   isCanonicalPlatformKey: key => CANONICAL_PLATFORM_KEYS.has(String(key || '')),
