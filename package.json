@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "7.3.0",
+  "version": "7.5.0",
   "private": true,
-  "description": "Easy Telegram digital store v7 with three independent virtual-number providers, dynamic service ranking, safe UI text overrides, service-aware Premium custom emoji rendering, and non-destructive product emoji auditing",
+  "description": "Easy Telegram digital store v7 with full-tier virtual-number pricing, cheapest-service discovery, precise four-decimal checkout, safe UI text overrides, and service-aware Premium emoji rendering",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
