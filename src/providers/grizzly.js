@@ -63,20 +63,71 @@ async function request(apiKey, action, extra = {}) {
 
 function parsePrice(serviceData) {
   if (!serviceData || typeof serviceData !== 'object') return null;
-  let cost = Number(serviceData.cost ?? serviceData.price);
-  let count = Number(serviceData.count ?? serviceData.qty ?? serviceData.quantity ?? 0);
-  if (!Number.isFinite(cost)) {
-    const tiers = Object.entries(serviceData)
-      .map(([price, amount]) => ({ price: Number(price), count: Number(amount) }))
-      .filter(row => Number.isFinite(row.price) && row.price >= 0 && Number.isFinite(row.count) && row.count > 0)
-      .sort((a, b) => a.price - b.price);
-    if (tiers.length) {
-      cost = tiers[0].price;
-      count = tiers.reduce((sum, row) => sum + row.count, 0);
+  const offers = [];
+  const visit = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node) || depth > 8) return;
+    const directCost = Number(node.cost ?? node.price);
+    const directCount = Number(node.count ?? node.qty ?? node.quantity ?? 0);
+    if (Number.isFinite(directCost) && directCost >= 0 && Number.isFinite(directCount) && directCount > 0) {
+      offers.push({ price: directCost, count: Math.floor(directCount) });
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      const tierPrice = Number(key);
+      const tierCount = Number(value && typeof value === 'object'
+        ? (value.count ?? value.qty ?? value.quantity)
+        : value);
+      if (Number.isFinite(tierPrice) && tierPrice >= 0 && Number.isFinite(tierCount) && tierCount > 0) {
+        offers.push({ price: tierPrice, count: Math.floor(tierCount) });
+      } else if (value && typeof value === 'object') {
+        visit(value, depth + 1);
+      }
+    }
+  };
+  visit(serviceData);
+  if (!offers.length) return null;
+  const cheapest = Math.min(...offers.map(row => row.price));
+  const count = offers
+    .filter(row => Math.abs(row.price - cheapest) < 1e-9)
+    .reduce((sum, row) => sum + row.count, 0);
+  return count > 0 ? { providerCost: cheapest, count } : null;
+}
+
+function priceRoot(json) {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+  for (const key of ['data', 'prices', 'result']) {
+    if (json[key] && typeof json[key] === 'object' && !Array.isArray(json[key])) return json[key];
+  }
+  return json;
+}
+
+async function firstAvailablePriceRows(apiKey, extra, parseRows) {
+  let hadValidPayload = false;
+  let lastError = null;
+  for (const action of ['getPricesV2', 'getPrices']) {
+    try {
+      const root = priceRoot(parseJson(await request(apiKey, action, extra)));
+      if (!root) continue;
+      hadValidPayload = true;
+      const rows = parseRows(root);
+      if (Array.isArray(rows) && rows.length) return rows;
+    } catch (error) {
+      lastError = error;
+      if (action === 'getPricesV2' && String(error.code || '') !== 'BAD_KEY') continue;
+      if (!['BAD_ACTION', 'BAD_SERVICE', 'BAD_COUNTRY', 'BAD_PROVIDER_RESPONSE'].includes(String(error.code || ''))) throw error;
     }
   }
-  if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
-  return { providerCost: cost, count: Math.floor(count) };
+  if (!hadValidPayload && lastError) throw lastError;
+  return [];
+}
+
+function mergeCheapest(map, serviceCode, parsed) {
+  const current = map.get(serviceCode);
+  if (!current || parsed.providerCost < current.providerCost - 1e-9) {
+    map.set(serviceCode, { serviceCode, count: parsed.count, providerCost: parsed.providerCost });
+  } else if (Math.abs(parsed.providerCost - current.providerCost) < 1e-9) {
+    current.count += parsed.count;
+  }
 }
 
 function flattenRows(json, collectionKey) {
@@ -131,22 +182,18 @@ async function listCountries(apiKey, force = false) {
 
 async function availableServicesSummary(apiKey, force = false) {
   if (!force && allPricesCache.value.length && Date.now() - allPricesCache.at < PRICES_TTL) return allPricesCache.value;
-  const json = parseJson(await request(apiKey, 'getPrices'));
-  const map = new Map();
-  if (json && typeof json === 'object') {
+  const value = await firstAvailablePriceRows(apiKey, {}, json => {
+    const map = new Map();
     for (const countryData of Object.values(json)) {
       if (!countryData || typeof countryData !== 'object') continue;
       for (const [serviceCode, serviceData] of Object.entries(countryData)) {
         const parsed = parsePrice(serviceData);
         if (!parsed || !/^[A-Za-z0-9_-]{1,24}$/.test(serviceCode)) continue;
-        const current = map.get(serviceCode) || { serviceCode, count: 0, providerCost: Infinity };
-        current.count += parsed.count;
-        current.providerCost = Math.min(current.providerCost, parsed.providerCost);
-        map.set(serviceCode, current);
+        mergeCheapest(map, serviceCode, parsed);
       }
     }
-  }
-  const value = [...map.values()].filter(row => row.count > 0 && Number.isFinite(row.providerCost));
+    return [...map.values()].filter(row => row.count > 0 && Number.isFinite(row.providerCost));
+  });
   allPricesCache.at = Date.now(); allPricesCache.value = value;
   return value;
 }
@@ -156,18 +203,18 @@ async function availabilityForService(apiKey, serviceCode, force = false) {
   if (!/^[A-Za-z0-9_-]{1,24}$/.test(code)) throw apiError('BAD_SERVICE');
   const cached = pricesCache.get(code);
   if (!force && cached && Date.now() - cached.at < PRICES_TTL) return cached.value;
-  const json = parseJson(await request(apiKey, 'getPrices', { service: code }));
   const countries = await listCountries(apiKey).catch(() => []);
   const names = new Map(countries.map(row => [String(row.id), row.name]));
-  const rows = [];
-  if (json && typeof json === 'object') {
+  const rows = await firstAvailablePriceRows(apiKey, { service: code }, json => {
+    const found = [];
     for (const [countryId, countryData] of Object.entries(json)) {
       if (!countryData || typeof countryData !== 'object') continue;
       const parsed = parsePrice(countryData[code] || (('cost' in countryData || 'price' in countryData) ? countryData : null));
       if (!parsed) continue;
-      rows.push({ countryId: String(countryId), countryName: names.get(String(countryId)) || `Country ${countryId}`, ...parsed });
+      found.push({ countryId: String(countryId), countryName: names.get(String(countryId)) || `Country ${countryId}`, ...parsed });
     }
-  }
+    return found;
+  });
   rows.sort((a, b) => a.providerCost - b.providerCost || a.countryName.localeCompare(b.countryName, 'en'));
   pricesCache.set(code, { at: Date.now(), value: rows });
   return rows;

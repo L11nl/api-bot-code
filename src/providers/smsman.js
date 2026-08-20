@@ -21,6 +21,11 @@ function clearCaches() {
 
 function apiError(code, detail = '') { const error = new Error(code); error.code = code; error.detail = detail; return error; }
 function parseJson(text, fallback = null) { try { return JSON.parse(text); } catch { return fallback; } }
+function responseText(value) { return typeof value === 'string' ? value.trim() : String(value ?? '').trim(); }
+function providerErrorFromText(text) {
+  const match = String(text || '').match(/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION|NO_NUMBERS|NO_NUMBER|NO_BALANCE|NO_MONEY|ERROR_SQL|WRONG_MAX_PRICE)/i);
+  return match ? match[1].toUpperCase() : '';
+}
 
 async function request(apiKey, action, extra = {}) {
   if (!String(apiKey || '').trim()) throw apiError('BAD_KEY');
@@ -33,19 +38,56 @@ async function request(apiKey, action, extra = {}) {
       transformResponse: [data => data]
     });
   } catch (error) {
-    throw apiError('PROVIDER_UNAVAILABLE', error?.message || 'request failed');
+    const detail = responseText(error?.response?.data);
+    const providerCode = providerErrorFromText(detail);
+    if (providerCode) throw apiError(providerCode, detail);
+    throw apiError('PROVIDER_UNAVAILABLE', detail || error?.message || 'request failed');
   }
-  const text = typeof response.data === 'string' ? response.data.trim() : String(response.data ?? '').trim();
-  if (/^(BAD_KEY|BAD_ACTION|BAD_SERVICE|BAD_COUNTRY|NO_ACTIVATION)/i.test(text)) throw apiError(text.split(':')[0].trim().toUpperCase(), text);
+  const text = responseText(response.data);
+  const providerCode = providerErrorFromText(text);
+  if (providerCode) throw apiError(providerCode, text);
   return text;
 }
 
 function parsePrice(serviceData) {
   if (!serviceData || typeof serviceData !== 'object') return null;
-  const cost = Number(serviceData.cost ?? serviceData.price);
-  const count = Number(serviceData.count ?? 0);
-  if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(count) || count <= 0) return null;
-  return { providerCost: cost, count: Math.floor(count) };
+  const offers = [];
+  const visit = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node) || depth > 8) return;
+    const directCost = Number(node.cost ?? node.price);
+    const directCount = Number(node.count ?? node.qty ?? node.quantity ?? 0);
+    if (Number.isFinite(directCost) && directCost >= 0 && Number.isFinite(directCount) && directCount > 0) {
+      offers.push({ price: directCost, count: Math.floor(directCount) });
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      const tierPrice = Number(key);
+      const tierCount = Number(value && typeof value === 'object'
+        ? (value.count ?? value.qty ?? value.quantity)
+        : value);
+      if (Number.isFinite(tierPrice) && tierPrice >= 0 && Number.isFinite(tierCount) && tierCount > 0) {
+        offers.push({ price: tierPrice, count: Math.floor(tierCount) });
+      } else if (value && typeof value === 'object') {
+        visit(value, depth + 1);
+      }
+    }
+  };
+  visit(serviceData);
+  if (!offers.length) return null;
+  const cheapest = Math.min(...offers.map(row => row.price));
+  const count = offers
+    .filter(row => Math.abs(row.price - cheapest) < 1e-9)
+    .reduce((sum, row) => sum + row.count, 0);
+  return count > 0 ? { providerCost: cheapest, count } : null;
+}
+
+function mergeCheapest(map, serviceCode, parsed) {
+  const current = map.get(serviceCode);
+  if (!current || parsed.providerCost < current.providerCost - 1e-9) {
+    map.set(serviceCode, { serviceCode, count: parsed.count, providerCost: parsed.providerCost });
+  } else if (Math.abs(parsed.providerCost - current.providerCost) < 1e-9) {
+    current.count += parsed.count;
+  }
 }
 
 async function getBalance(apiKey) {
@@ -99,10 +141,7 @@ async function availableServicesSummary(apiKey, force = false) {
       for (const [serviceCode, serviceData] of Object.entries(countryData)) {
         const parsed = parsePrice(serviceData);
         if (!parsed || !/^[A-Za-z0-9_-]{1,24}$/.test(serviceCode)) continue;
-        const current = map.get(serviceCode) || { serviceCode, count: 0, providerCost: Infinity };
-        current.count += parsed.count;
-        current.providerCost = Math.min(current.providerCost, parsed.providerCost);
-        map.set(serviceCode, current);
+        mergeCheapest(map, serviceCode, parsed);
       }
     }
   }
