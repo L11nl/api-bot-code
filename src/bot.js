@@ -65,6 +65,7 @@ const { translateArToEn, translateEnToAr, looksArabic } = require('./translator'
 const network = require('./network');
 const networkLedger = require('./services/networkLedger');
 const virtualNumbers = require('./services/virtualNumbers');
+const premiumEmojis = require('./services/premiumEmojis');
 
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
@@ -168,14 +169,22 @@ function suspendedMainKeyboard(lang) {
 }
 
 const PREMIUM_EMOJI = {
-  binance: { id: '5875443023873053217', alt: '🟡' },
-  superqi: { id: '5184203496831846429', alt: '🔵' },
-  support: { id: '5882260605850620296', alt: '💬' },
-  wallet: { id: '6325416826100519483', alt: '👛' },
-  orders: { id: '5882175861850903857', alt: '📦' },
-  products: { id: '5800639128961814362', alt: '🛍️' },
-  // No language Custom Emoji ID was supplied. Keep a normal globe until a verified ID is configured.
-  language: { id: '', alt: '🌐' }
+  binance: premiumEmojis.getByKey('binance'),
+  superqi: premiumEmojis.getByKey('superqi'),
+  support: premiumEmojis.getByKey('support'),
+  wallet: premiumEmojis.getByKey('wallet'),
+  orders: premiumEmojis.getByKey('orders'),
+  products: premiumEmojis.getByKey('products'),
+  language: premiumEmojis.getByKey('language'),
+  settings: premiumEmojis.getByKey('settings'),
+  api: premiumEmojis.getByKey('api'),
+  phone: premiumEmojis.getByKey('phone'),
+  search: premiumEmojis.getByKey('search'),
+  delete: premiumEmojis.getByKey('delete'),
+  edit: premiumEmojis.getByKey('edit'),
+  save: premiumEmojis.getByKey('save'),
+  success: premiumEmojis.getByKey('success'),
+  error: premiumEmojis.getByKey('error')
 };
 
 async function loadPersistentRuntimeConfig() {
@@ -186,17 +195,20 @@ async function loadPersistentRuntimeConfig() {
     const key = `premium_emoji:${name}:id`;
     const missingToken = '__CD_MISSING_SETTING__';
     const stored = await getSetting(key, missingToken);
-    if (stored === missingToken) {
+    if (stored === missingToken || (!String(stored || '').trim() && emoji.id)) {
       await setSetting(key, String(emoji.id || ''));
     } else {
       emoji.id = String(stored || '');
     }
+    premiumEmojis.setBuiltInOverride(name, emoji.id);
   }
+  await premiumEmojis.load();
 }
 
 function emojiButton(text, emoji, extra = {}) {
   const button = { text, ...extra };
-  if (emoji?.id) button.icon_custom_emoji_id = String(emoji.id);
+  const selected = emoji?.id ? emoji : premiumEmojis.resolve(text);
+  if (selected?.id) button.icon_custom_emoji_id = String(selected.id);
   return button;
 }
 
@@ -204,6 +216,128 @@ function premiumEmojiHtml(emoji) {
   if (!emoji?.id) return escapeHtml(emoji?.alt || '');
   return `<tg-emoji emoji-id="${escapeHtml(String(emoji.id))}">${escapeHtml(emoji.alt || '✨')}</tg-emoji>`;
 }
+
+function premiumLabelHtml(value, fallbackEmoji = null) {
+  const text = String(value || '').trim();
+  const emoji = fallbackEmoji?.id ? fallbackEmoji : premiumEmojis.resolve(text);
+  return emoji?.id ? `${premiumEmojiHtml(emoji)} ${escapeHtml(text)}` : escapeHtml(text);
+}
+
+function mapKeyboardButtons(rows, mapper) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(row => Array.isArray(row)
+    ? row.map(button => (button && typeof button === 'object' ? mapper({ ...button }) : button))
+    : row);
+}
+
+function replyMarkupWithPremiumIcons(replyMarkup) {
+  if (!replyMarkup || typeof replyMarkup !== 'object') return replyMarkup;
+  const decorate = button => {
+    if (!button.icon_custom_emoji_id && typeof button.text === 'string') {
+      const emoji = premiumEmojis.resolve(button.text);
+      if (emoji?.id) button.icon_custom_emoji_id = String(emoji.id);
+    }
+    return button;
+  };
+  return {
+    ...replyMarkup,
+    inline_keyboard: mapKeyboardButtons(replyMarkup.inline_keyboard, decorate),
+    keyboard: mapKeyboardButtons(replyMarkup.keyboard, decorate)
+  };
+}
+
+function replyMarkupWithoutPremiumIcons(replyMarkup) {
+  if (!replyMarkup || typeof replyMarkup !== 'object') return replyMarkup;
+  const strip = button => {
+    delete button.icon_custom_emoji_id;
+    return button;
+  };
+  return {
+    ...replyMarkup,
+    inline_keyboard: mapKeyboardButtons(replyMarkup.inline_keyboard, strip),
+    keyboard: mapKeyboardButtons(replyMarkup.keyboard, strip)
+  };
+}
+
+function decoratePremiumHtmlSymbols(value) {
+  const replacements = [
+    ['🇮🇶', 'iraq'], ['🇬🇧', 'english'], ['🇸🇦', 'arabic'],
+    ['🗑️', 'delete'], ['🗑', 'delete'], ['✏️', 'edit'], ['✏', 'edit'],
+    ['⚙️', 'settings'], ['⚙', 'settings'], ['✅', 'success'], ['❌', 'error'],
+    ['🔎', 'search'], ['🔍', 'search'], ['📌', 'pin'], ['🔒', 'lock'],
+    ['📱', 'phone'], ['🔔', 'notifications_on'], ['🔕', 'notifications_off'],
+    ['⏳', 'loading'], ['🌐', 'language'], ['💾', 'save']
+  ];
+  // Never recurse into a Custom Emoji tag that was already rendered by a
+  // product, service, payment method, or explicit UI helper.
+  return String(value || '').split(/(<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>|<code\b[^>]*>[\s\S]*?<\/code>|<pre\b[^>]*>[\s\S]*?<\/pre>)/gi).map(part => {
+    if (/^<(?:tg-emoji|code|pre)\b/i.test(part)) return part;
+    let out = part;
+    for (const [symbol, key] of replacements) {
+      if (!out.includes(symbol)) continue;
+      const emoji = premiumEmojis.getByKey(key);
+      if (emoji?.id) out = out.split(symbol).join(premiumEmojiHtml(emoji));
+    }
+    return out;
+  }).join('');
+}
+
+function optionsWithPremiumIcons(options) {
+  if (!options || typeof options !== 'object') return options;
+  const decorated = { ...options };
+  if (options.reply_markup) decorated.reply_markup = replyMarkupWithPremiumIcons(options.reply_markup);
+  if (options.parse_mode === 'HTML' && typeof options.caption === 'string' && !options.caption_entities) {
+    decorated.caption = decoratePremiumHtmlSymbols(options.caption);
+  }
+  return decorated;
+}
+
+function hasPremiumButtons(options) {
+  const markup = options?.reply_markup;
+  return [markup?.inline_keyboard, markup?.keyboard].some(rows => Array.isArray(rows) && rows.some(row =>
+    Array.isArray(row) && row.some(button => Boolean(button?.icon_custom_emoji_id))));
+}
+
+function isPremiumButtonApiError(error) {
+  const detail = [error?.message, error?.response?.body?.description, error?.response?.data?.description]
+    .filter(Boolean)
+    .join(' ');
+  return /icon_custom_emoji_id|custom emoji|tg-emoji/i.test(detail);
+}
+
+function installPremiumEmojiButtonDecorator() {
+  const methods = [
+    ['sendMessage', 2, 1], ['editMessageText', 1, 0], ['sendPhoto', 2, null],
+    ['sendVideo', 2, null], ['sendAnimation', 2, null], ['sendDocument', 2, null],
+    ['sendAudio', 2, null], ['sendVoice', 2, null]
+  ];
+  for (const [method, optionsIndex, textIndex] of methods) {
+    if (typeof bot[method] !== 'function') continue;
+    const original = bot[method].bind(bot);
+    bot[method] = (...originalArgs) => {
+      const args = [...originalArgs];
+      args[optionsIndex] = optionsWithPremiumIcons(args[optionsIndex]);
+      if (textIndex !== null && args[optionsIndex]?.parse_mode === 'HTML' && typeof args[textIndex] === 'string' && !args[optionsIndex]?.entities) {
+        args[textIndex] = decoratePremiumHtmlSymbols(args[textIndex]);
+      }
+      return original(...args).catch(error => {
+        const textHasPremium = textIndex !== null && /<tg-emoji\b/i.test(String(args[textIndex] || ''));
+        const captionHasPremium = /<tg-emoji\b/i.test(String(args[optionsIndex]?.caption || ''));
+        if ((!hasPremiumButtons(args[optionsIndex]) && !textHasPremium && !captionHasPremium) || !isPremiumButtonApiError(error)) throw error;
+        const retryArgs = [...args];
+        retryArgs[optionsIndex] = {
+          ...(args[optionsIndex] || {}),
+          caption: stripTelegramCustomEmojiHtml(args[optionsIndex]?.caption),
+          reply_markup: replyMarkupWithoutPremiumIcons(args[optionsIndex]?.reply_markup)
+        };
+        if (textIndex !== null) retryArgs[textIndex] = stripTelegramCustomEmojiHtml(args[textIndex]);
+        return original(...retryArgs);
+      });
+    };
+  }
+}
+
+installPremiumEmojiButtonDecorator();
 
 function customPaymentEmoji(method) {
   return method?.iconCustomEmojiId
@@ -258,11 +392,14 @@ function extractProductNameRichText(text, entities = []) {
   const manual = raw.match(/\[(\d{5,24})\]/);
   const manualId = manual ? manual[1] : '';
   const cleanPlain = manual ? rich.plain.replace(manual[0], '').replace(/\s{2,}/g, ' ').trim() : rich.plain.trim();
-  const emojiId = rich.firstCustomEmojiId || manualId;
-  const emojiAlt = rich.firstCustomEmojiAlt || (manualId ? '✨' : '');
+  const automatic = !rich.firstCustomEmojiId && !manualId ? premiumEmojis.resolve(cleanPlain) : null;
+  const emojiId = rich.firstCustomEmojiId || manualId || automatic?.id || '';
+  const emojiAlt = rich.firstCustomEmojiAlt || (manualId ? '✨' : (automatic?.alt || ''));
   let html = rich.html;
   if (manualId && !rich.firstCustomEmojiId) {
     html = `<tg-emoji emoji-id="${escapeHtml(manualId)}">✨</tg-emoji> ${escapeHtml(cleanPlain)}`;
+  } else if (automatic?.id) {
+    html = `${premiumEmojiHtml(automatic)} ${escapeHtml(cleanPlain)}`;
   } else if (!emojiId) {
     html = escapeHtml(cleanPlain);
   }
@@ -489,6 +626,12 @@ function canManageVirtualProviders(user) {
   return canSeeVirtualProviderCost(user);
 }
 
+function canManagePremiumEmojis(user) {
+  // Use the same single-owner gate as provider secrets. Other admins can use
+  // the resulting icons but cannot rewrite the global keyword dictionary.
+  return canSeeVirtualProviderCost(user);
+}
+
 function providerAdminStatusIcon(status) {
   if (!status?.configured) return '⚠️';
   if (status?.keyValid) return '✅';
@@ -568,6 +711,65 @@ async function showVirtualProviderAdmin(chatId, user) {
       ],
       [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
     ] }
+  });
+}
+
+function customEmojiFromMessage(msg) {
+  const text = String(msg?.text || '').trim();
+  const rich = extractTelegramRichText(text, msg?.entities || []);
+  const manual = text.match(/(?:\[\s*)?(\d{5,24})(?:\s*\])?/);
+  const emojiId = String(rich.firstCustomEmojiId || manual?.[1] || '');
+  return {
+    emojiId: premiumEmojis.validEmojiId(emojiId) ? emojiId : '',
+    alt: String(rich.firstCustomEmojiAlt || '✨').slice(0, 16) || '✨'
+  };
+}
+
+async function showPremiumEmojiAdmin(chatId, user, page = 0) {
+  if (!canManagePremiumEmojis(user)) {
+    return bot.sendMessage(chatId, '⛔ إعدادات الإيموجيات المميزة متاحة للمالك الرئيسي فقط.');
+  }
+  const custom = premiumEmojis.listCustom();
+  const pageSize = 10;
+  const pages = Math.max(1, Math.ceil(custom.length / pageSize));
+  const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
+  const visible = custom.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const lines = [
+    `${premiumEmojiHtml(PREMIUM_EMOJI.settings)} <b>الإيموجيات المميزة — للمالك فقط</b>`,
+    '',
+    `القاموس الأساسي: <b>${premiumEmojis.builtInCount()}</b> ربطاً ثنائياً جاهزاً.`,
+    `الروابط التي أضفتها: <b>${custom.length}</b>.`,
+    '',
+    'عند إضافة منتج أو خدمة، أو عند ظهور اسم معروف في زر، يختار البوت الإيموجي تلقائياً بالعربي والإنجليزي.',
+    'لإضافة ربط جديد ترسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً.'
+  ];
+  if (visible.length) {
+    lines.push('', '<b>روابطك المخصصة:</b>');
+    for (const entry of visible) {
+      lines.push(`${premiumEmojiHtml({ id: entry.emojiId, alt: entry.alt })} ${escapeHtml(entry.keywordAr)} ↔ ${escapeHtml(entry.keywordEn || '—')}`);
+    }
+  }
+
+  const keyboard = [
+    [emojiButton('إضافة ربط جديد', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })]
+  ];
+  for (const entry of visible) {
+    keyboard.push([emojiButton(`حذف ${entry.keywordAr}`.slice(0, 48), PREMIUM_EMOJI.delete, {
+      callback_data: `adm:emoji:askdel:${entry.id}:${safePage}`,
+      style: 'danger'
+    })]);
+  }
+  if (pages > 1) {
+    const nav = [];
+    if (safePage > 0) nav.push({ text: '⬅️', callback_data: `adm:emoji:page:${safePage - 1}` });
+    nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop:emojipage' });
+    if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `adm:emoji:page:${safePage + 1}` });
+    keyboard.push(nav);
+  }
+  keyboard.push([{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]);
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: keyboard }
   });
 }
 
@@ -903,8 +1105,8 @@ async function showVirtualCountries(chatId, user, providerId, serviceCode, page 
     const anyService = findAnyOtherVirtualService(services);
     if (anyService && String(anyService.code) !== String(service.code) && !options.noFallback) {
       await bot.sendMessage(chatId, virtualNumberText(user.lang,
-        `🔄 ما ظهر خيار جاهز لـ <b>${escapeHtml(serviceName)}</b>، لذلك حولتك إلى <b>أي رقم</b> مع الأسعار المتوفرة.`,
-        `🔄 No ready option is available for <b>${escapeHtml(serviceName)}</b>, so here is <b>Any number</b> with current prices.`), { parse_mode: 'HTML' });
+        `🔄 ما ظهر خيار جاهز لـ <b>${premiumLabelHtml(serviceName)}</b>، لذلك حولتك إلى <b>أي رقم</b> مع الأسعار المتوفرة.`,
+        `🔄 No ready option is available for <b>${premiumLabelHtml(serviceName)}</b>, so here is <b>Any number</b> with current prices.`), { parse_mode: 'HTML' });
       return showVirtualCountries(chatId, user, providerId, anyService.code, 0, { noFallback: true });
     }
     return bot.sendMessage(chatId, virtualNumberText(user.lang,
@@ -939,9 +1141,9 @@ async function showVirtualCountries(chatId, user, providerId, serviceCode, page 
   keyboard.push([{ text: user.lang === 'en' ? '🔄 Refresh' : '🔄 تحديث', callback_data: `vn:countries:${providerId}:${service.code}:${safePage}` }]);
   keyboard.push([{ text: user.lang === 'en' ? '⬅️ Popular services' : '⬅️ الخدمات المشهورة', callback_data: `vn:p:${providerId}` }]);
   return bot.sendMessage(chatId, user.lang === 'en'
-    ? `📲 <b>${escapeHtml(serviceName)}</b>
+    ? `📲 <b>${premiumLabelHtml(serviceName)}</b>
 Available options are already filtered and ordered from cheapest to most expensive.`
-    : `📲 <b>${escapeHtml(serviceName)}</b>
+    : `📲 <b>${premiumLabelHtml(serviceName)}</b>
 الخيارات هنا مفلترة مسبقاً حسب المتوفر ومرتبة من الأرخص إلى الأغلى.`, {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
@@ -978,7 +1180,7 @@ async function showVirtualQuote(chatId, user, providerId, serviceCode, countryId
     : `💵 السعر: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`;
   const text = user.lang === 'en'
     ? [
-        `📲 Service: <b>${escapeHtml(serviceName)}</b>`,
+        `📲 Service: <b>${premiumLabelHtml(serviceName)}</b>`,
         `${country.flag} Country: <b>${escapeHtml(country.name)}</b>`,
         priceLineEn,
         `📦 Available now: <b>${quote.count}</b>`,
@@ -988,7 +1190,7 @@ async function showVirtualQuote(chatId, user, providerId, serviceCode, countryId
         `⏱ The number stays active for ${virtualNumbers.ACTIVATION_TIMEOUT_MINUTES} minutes while waiting for the code.`
       ].join('\n')
     : [
-        `📲 الخدمة: <b>${escapeHtml(serviceName)}</b>`,
+        `📲 الخدمة: <b>${premiumLabelHtml(serviceName)}</b>`,
         `${country.flag} الدولة: <b>${escapeHtml(country.name)}</b>`,
         priceLineAr,
         `📦 المتوفر حالياً: <b>${quote.count}</b>`,
@@ -1019,7 +1221,7 @@ async function showVirtualOrders(chatId, user) {
     const service = { code: order.serviceCode, name: order.serviceName };
     const serviceName = await virtualServiceDisplayName(service, user.lang);
     const country = localizedVirtualCountry(order.countryName, user.lang);
-    lines.push(`#${order.id} • ${escapeHtml(serviceName)} • ${country.flag} ${escapeHtml(country.name)} • <b>${moneyUsd(order.salePriceUsd)}</b>`);
+    lines.push(`#${order.id} • ${premiumLabelHtml(serviceName)} • ${country.flag} ${escapeHtml(country.name)} • <b>${moneyUsd(order.salePriceUsd)}</b>`);
     lines.push(`📞 <code>${escapeHtml(order.phoneNumber || '—')}</code> • ${escapeHtml(virtualNumberStatusLabel(order.status, user.lang))}`);
     if (order.smsCode) lines.push(`🔑 <code>${escapeHtml(order.smsCode)}</code>`);
     lines.push('');
@@ -1177,7 +1379,7 @@ async function handleVirtualNumberCallback(query, user, data) {
       return bot.sendMessage(user.id, user.lang === 'en'
         ? [
             '✅ <b>Number purchased successfully</b>',
-            `📲 Service: <b>${escapeHtml(displayServiceName)}</b>`,
+            `📲 Service: <b>${premiumLabelHtml(displayServiceName)}</b>`,
             `${displayCountry.flag} Country: <b>${escapeHtml(displayCountry.name)}</b>`,
             `💵 Paid: <b>${moneyUsd(order.salePriceUsd)}</b>`,
             `📞 Number: <code>${escapeHtml(order.phoneNumber)}</code>`,
@@ -1188,7 +1390,7 @@ async function handleVirtualNumberCallback(query, user, data) {
           ].join('\n')
         : [
             '✅ <b>تم شراء الرقم بنجاح</b>',
-            `📲 الخدمة: <b>${escapeHtml(displayServiceName)}</b>`,
+            `📲 الخدمة: <b>${premiumLabelHtml(displayServiceName)}</b>`,
             `${displayCountry.flag} الدولة: <b>${escapeHtml(displayCountry.name)}</b>`,
             `💵 تم خصم: <b>${moneyUsd(order.salePriceUsd)}</b>`,
             `📞 الرقم: <code>${escapeHtml(order.phoneNumber)}</code>`,
@@ -1763,7 +1965,7 @@ async function adminMenu() {
   return { inline_keyboard: rows };
 }
 
-async function adminSectionMenu(section) {
+async function adminSectionMenu(section, user = null) {
   const back = [{ text: '⬅️ رجوع للوحة الإدارة', callback_data: 'adm:home' }];
 
   if (section === 'products') {
@@ -1849,6 +2051,9 @@ async function adminSectionMenu(section) {
     ];
     if (network.isMaster()) {
       keyboard.push([{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]);
+    }
+    if (canManagePremiumEmojis(user)) {
+      keyboard.push([emojiButton('الإيموجيات المميزة', PREMIUM_EMOJI.settings, { callback_data: 'adm:emoji:0', style: 'primary' })]);
     }
     keyboard.push(
       [{ text: open ? '🔒 إغلاق المتجر' : '🔓 فتح المتجر', callback_data: 'adm:store_toggle', style: open ? 'danger' : 'success' }],
@@ -1949,6 +2154,10 @@ function stripTelegramCustomEmojiHtml(value) {
 function productCaption(product, stock, lang, moneyContext) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
+  const automaticNameEmoji = premiumEmojis.resolve(`${product.nameAr || ''} ${product.nameEn || ''}`);
+  const nameEmoji = descriptionData.nameEmojiId
+    ? { id: descriptionData.nameEmojiId, alt: descriptionData.nameEmojiAlt || automaticNameEmoji?.alt || '✨' }
+    : automaticNameEmoji;
   const description = lang === 'en'
     ? (descriptionData.en || descriptionData.ar || '')
     : (descriptionData.ar || descriptionData.en || '');
@@ -1958,9 +2167,8 @@ function productCaption(product, stock, lang, moneyContext) {
 
   let richName = escapeHtml(name);
   if (lang === 'ar' && descriptionData.nameArHtml) richName = descriptionData.nameArHtml;
-  else if (lang === 'en' && descriptionData.nameEmojiId) {
-    const alt = escapeHtml(descriptionData.nameEmojiAlt || '✨');
-    richName = `<tg-emoji emoji-id="${escapeHtml(descriptionData.nameEmojiId)}">${alt}</tg-emoji> ${escapeHtml(name)}`;
+  else if (nameEmoji?.id) {
+    richName = `${premiumEmojiHtml(nameEmoji)} ${escapeHtml(name)}`;
   }
 
   const richDescription = lang === 'ar' && descriptionData.descriptionArHtml
@@ -1988,8 +2196,12 @@ function productCaption(product, stock, lang, moneyContext) {
 function productButton(product, stock, lang, moneyContext) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
-  const displayName = descriptionData.nameEmojiId && descriptionData.nameEmojiAlt
-    ? String(name).replace(descriptionData.nameEmojiAlt, '').trim() || name
+  const automaticNameEmoji = premiumEmojis.resolve(`${product.nameAr || ''} ${product.nameEn || ''}`);
+  const nameEmoji = descriptionData.nameEmojiId
+    ? { id: descriptionData.nameEmojiId, alt: descriptionData.nameEmojiAlt || automaticNameEmoji?.alt || '✨' }
+    : automaticNameEmoji;
+  const displayName = nameEmoji?.id && nameEmoji.alt
+    ? String(name).replace(nameEmoji.alt, '').trim() || name
     : name;
   // Unicode LTR isolates keep price and stock as separate visual blocks even inside Arabic RTL buttons.
   const ltrIsolate = value => `⁦${String(value)}⁩`;
@@ -2002,7 +2214,7 @@ function productButton(product, stock, lang, moneyContext) {
     callback_data: `prod:${product.id}`,
     style: product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger')
   };
-  if (descriptionData.nameEmojiId) button.icon_custom_emoji_id = descriptionData.nameEmojiId;
+  if (nameEmoji?.id) button.icon_custom_emoji_id = String(nameEmoji.id);
   return button;
 }
 
@@ -3712,8 +3924,8 @@ async function handleStateMessage(msg, user, state) {
       });
       keyboard.push([{ text: user.lang === 'en' ? '⬅️ All countries' : '⬅️ كل الدول', callback_data: `vn:countries:${providerId}:${serviceCode}:0` }]);
       await bot.sendMessage(user.id, user.lang === 'en'
-        ? `🔎 <b>${escapeHtml(serviceName)}</b> — found ${matches.length} country result(s), ordered by price.`
-        : `🔎 <b>${escapeHtml(serviceName)}</b> — حصلت ${matches.length} دولة، مرتبة حسب السعر.`, {
+        ? `🔎 <b>${premiumLabelHtml(serviceName)}</b> — found ${matches.length} country result(s), ordered by price.`
+        : `🔎 <b>${premiumLabelHtml(serviceName)}</b> — حصلت ${matches.length} دولة، مرتبة حسب السعر.`, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: keyboard }
       });
@@ -4599,6 +4811,80 @@ async function handleStateMessage(msg, user, state) {
     }
   }
 
+  if (state.action === 'admin_premium_emoji_add' && isAdmin(user.id)) {
+    if (!canManagePremiumEmojis(user)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
+      return true;
+    }
+    const text = String(msg.text || '').trim();
+    if (state.step === 'keyword_ar') {
+      if (!text || text.length > 80 || !looksArabic(text)) {
+        await bot.sendMessage(user.id, '❌ أرسل الاسم أو المعنى <b>بالعربية فقط</b> وبحد أقصى 80 حرفاً. مثال: كانفا', {
+          parse_mode: 'HTML',
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      const known = premiumEmojis.resolve(text);
+      let keywordEn = '';
+      try { keywordEn = String(await translateArToEn(text) || '').trim(); } catch {}
+      if (!keywordEn || looksArabic(keywordEn)) keywordEn = String(known?.keywordEn || '').trim();
+      if (!keywordEn || looksArabic(keywordEn)) {
+        await bot.sendMessage(user.id, '⚠️ تعذرت الترجمة الإنجليزية التلقائية الآن، لذلك لم أحفظ ربطاً ناقصاً. أرسل الاسم العربي مرة ثانية بعد قليل.', {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      keywordEn = keywordEn.slice(0, 80);
+      await setState(user.id, {
+        action: 'admin_premium_emoji_add',
+        step: 'emoji',
+        data: { keywordAr: text, keywordEn }
+      });
+      await bot.sendMessage(user.id, [
+        '✅ تمت مزامنة الاسمين تلقائياً:',
+        `العربي: <b>${escapeHtml(text)}</b>`,
+        `English: <b>${escapeHtml(keywordEn)}</b>`,
+        '',
+        'الآن أرسل الإيموجي المميز نفسه من تيليجرام، أو أرسل المعرّف بهذه الصيغة: <code>[5796637619601283518]</code>.'
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+    if (state.step === 'emoji') {
+      const selected = customEmojiFromMessage(msg);
+      if (!selected.emojiId) {
+        await bot.sendMessage(user.id, '❌ ما قدرت أقرأ Custom Emoji ID. أرسل الإيموجي المميز نفسه أو المعرّف الرقمي بين أقواس مربعة.', {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      try {
+        const saved = await premiumEmojis.upsertCustom({
+          keywordAr: state.data?.keywordAr,
+          keywordEn: state.data?.keywordEn,
+          emojiId: selected.emojiId,
+          alt: selected.alt
+        });
+        await clearState(user.id);
+        await bot.sendMessage(user.id, [
+          `${premiumEmojiHtml({ id: saved.emojiId, alt: saved.alt })} <b>تم حفظ الربط وتفعيله على البوت بالكامل.</b>`,
+          `العربي: <b>${escapeHtml(saved.keywordAr)}</b>`,
+          `English: <b>${escapeHtml(saved.keywordEn)}</b>`,
+          '',
+          'أي منتج أو خدمة أو زر يحتوي هذا الاسم سيأخذ الإيموجي تلقائياً.'
+        ].join('\n'), { parse_mode: 'HTML' });
+        await showPremiumEmojiAdmin(user.id, user);
+      } catch (error) {
+        const reason = error.code === 'PREMIUM_EMOJI_LIMIT'
+          ? 'وصلت للحد الأعلى للروابط المخصصة.'
+          : 'تعذر حفظ الربط. تحقق من الاسم ومعرّف الإيموجي.';
+        await bot.sendMessage(user.id, `❌ ${reason}`, { reply_markup: cancelInlineKeyboard() });
+      }
+      return true;
+    }
+  }
+
   if (state.action === 'admin_virtual_provider_api_key' && isAdmin(user.id)) {
     if (!canManageVirtualProviders(user)) {
       await clearState(user.id);
@@ -4610,9 +4896,9 @@ async function handleStateMessage(msg, user, state) {
       await clearState(user.id);
       return true;
     }
-    const apiKey = String(msg.text || '').trim();
-    if (apiKey.length < 8 || apiKey.length > 512 || /\s/.test(apiKey)) {
-      await bot.sendMessage(user.id, '❌ مفتاح API غير صحيح. انسخه كامل بدون مسافات، أو اكتب إغلاق للإلغاء.');
+    const apiKey = virtualNumbers.normalizeProviderApiKeyInput(msg.text || '');
+    if (!virtualNumbers.validProviderApiKeyInput(apiKey)) {
+      await bot.sendMessage(user.id, '❌ صيغة المفتاح غير صحيحة. أرسل قيمة API Key أو رابط الـAPI الكامل؛ البوت يزيل المسافات الخفية تلقائياً. اكتب إغلاق للإلغاء.');
       return true;
     }
     // The Telegram message containing the secret should disappear immediately.
@@ -4624,7 +4910,14 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, `✅ تم فحص API ${providerName} وحفظه بشكل مشفر. الرصيد الحالي: $${Number(result.balance || 0).toFixed(4)}`);
       await showVirtualProviderAdmin(user.id, user);
     } catch (error) {
-      await bot.sendMessage(user.id, `❌ لم يتم حفظ المفتاح: ${virtualNumberErrorText(error, 'ar')}\nأرسل مفتاحاً صحيحاً أو اكتب إغلاق للإلغاء.`, { reply_markup: cancelInlineKeyboard() });
+      const providerName = providerId === 'smsman' ? 'SMS-MAN' : 'SMSBower';
+      const badKeyHint = String(error.code || '') === 'BAD_KEY'
+        ? `\n\nالموقع <b>${providerName}</b> نفسه رفض المفتاح بعد تنظيفه. تأكد أن المفتاح صادر من حساب ${providerName} وأنك اخترت الموقع الصحيح. يقبل البوت المفتاح وحده أو رابط الـAPI الكامل.`
+        : '';
+      await bot.sendMessage(user.id, `❌ لم يتم حفظ المفتاح: ${virtualNumberErrorText(error, 'ar')}${badKeyHint}\n\nأرسل المفتاح مرة ثانية أو اكتب إغلاق للإلغاء.`, {
+        parse_mode: 'HTML',
+        reply_markup: cancelInlineKeyboard()
+      });
     }
     return true;
   }
@@ -6037,7 +6330,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:menu:')) {
     const section = data.slice('adm:menu:'.length);
-    const menu = await adminSectionMenu(section);
+    const menu = await adminSectionMenu(section, user);
     if (!menu) return answerCallback(query.id, 'القسم غير موجود.', true);
     await answerCallback(query.id);
     return bot.sendMessage(query.message.chat.id, menu.title, {
@@ -6312,7 +6605,62 @@ async function handleAdminCallback(query, user, data) {
     return;
   }
 
+  if (data === 'adm:emoji:add') {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await setState(user.id, { action: 'admin_premium_emoji_add', step: 'keyword_ar', data: {} });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      `${premiumEmojiHtml(PREMIUM_EMOJI.edit)} <b>إضافة إيموجي مميز</b>`,
+      '',
+      'أرسل الاسم أو المعنى <b>بالعربية فقط</b>، مثال: <code>كانفا</code>.',
+      'سأولّد الاسم الإنجليزي وأزامنه تلقائياً، ثم أطلب منك الإيموجي.',
+      'اكتب إغلاق للإلغاء.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
 
+  if (data.startsWith('adm:emoji:askdel:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const parts = data.split(':');
+    const entryId = String(parts[3] || '');
+    const page = Math.max(0, Number(parts[4] || 0));
+    const entry = premiumEmojis.listCustom().find(row => row.id === entryId);
+    if (!entry) return answerCallback(query.id, 'الربط غير موجود.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>تأكيد حذف الربط فقط</b>',
+      `${premiumEmojiHtml({ id: entry.emojiId, alt: entry.alt })} ${escapeHtml(entry.keywordAr)} ↔ ${escapeHtml(entry.keywordEn || '—')}`,
+      '',
+      'لن يُحذف أي منتج أو طلب أو سجل من قاعدة البيانات.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        emojiButton('تأكيد حذف الربط', PREMIUM_EMOJI.delete, { callback_data: `adm:emoji:del:${entry.id}:${page}`, style: 'danger' }),
+        { text: 'إلغاء', callback_data: `adm:emoji:${page}` }
+      ]] }
+    });
+  }
+
+  if (data.startsWith('adm:emoji:del:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const parts = data.split(':');
+    const entryId = String(parts[3] || '');
+    const page = Math.max(0, Number(parts[4] || 0));
+    const removed = await premiumEmojis.removeCustom(entryId);
+    await answerCallback(query.id, removed ? 'تم حذف الربط فقط.' : 'الربط محذوف أصلاً.');
+    return showPremiumEmojiAdmin(query.message.chat.id, user, page);
+  }
+
+  if (data.startsWith('adm:emoji:page:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await answerCallback(query.id);
+    return showPremiumEmojiAdmin(query.message.chat.id, user, Number(data.split(':')[3] || 0));
+  }
+
+  if (/^adm:emoji(?::\d+)?$/.test(data)) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await answerCallback(query.id);
+    return showPremiumEmojiAdmin(query.message.chat.id, user, Number(data.split(':')[2] || 0));
+  }
 
   if (data === 'adm:vnproviders') {
     await answerCallback(query.id);
@@ -6593,7 +6941,7 @@ async function handleAdminCallback(query, user, data) {
     await setSetting('automatic_notifications_enabled', enabled ? 'false' : 'true');
     const nowEnabled = !enabled;
     await answerCallback(query.id, nowEnabled ? 'تم تشغيل الإشعارات التلقائية.' : 'تم إيقاف الإشعارات التلقائية.');
-    const menu = await adminSectionMenu('marketing');
+    const menu = await adminSectionMenu('marketing', user);
     return bot.sendMessage(query.message.chat.id, nowEnabled ? '🔔 <b>الإشعارات التلقائية شغالة الآن.</b>' : '🔕 <b>الإشعارات التلقائية متوقفة الآن.</b>', {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: menu.keyboard }
@@ -6604,7 +6952,7 @@ async function handleAdminCallback(query, user, data) {
     const open = await isStoreOpen();
     await setSetting('store_open', open ? 'false' : 'true');
     await answerCallback(query.id, open ? 'تم إغلاق المتجر.' : 'تم فتح المتجر.');
-    const menu = await adminSectionMenu('settings');
+    const menu = await adminSectionMenu('settings', user);
     return bot.sendMessage(query.message.chat.id, open
       ? '🔒 <b>المتجر مغلق الآن.</b> الدعم والطلبات القديمة تبقى متاحة.'
       : '✅ <b>المتجر مفتوح الآن للمستخدمين.</b>', {
@@ -6815,6 +7163,7 @@ async function handleAdminCallback(query, user, data) {
           { text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }
         ],
         ...(network.isMaster() ? [[{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]] : []),
+        ...(canManagePremiumEmojis(user) ? [[emojiButton('الإيموجيات المميزة', PREMIUM_EMOJI.settings, { callback_data: 'adm:emoji:0', style: 'primary' })]] : []),
         [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
       ] }
     });
@@ -7713,14 +8062,14 @@ function startVirtualNumbersWatcher() {
           await bot.sendMessage(order.userId, lang === 'en'
             ? [
                 '📩 <b>SMS code received</b>',
-                `📲 ${escapeHtml(order.serviceName)}`,
+                `📲 ${premiumLabelHtml(order.serviceName)}`,
                 `📞 <code>${escapeHtml(order.phoneNumber || '')}</code>`,
                 `🔑 Code: <code>${escapeHtml(event.code || '')}</code>`,
                 `🆔 Order: <code>#${order.id}</code>`
               ].join('\n')
             : [
                 '📩 <b>وصل كود SMS</b>',
-                `📲 ${escapeHtml(order.serviceName)}`,
+                `📲 ${premiumLabelHtml(order.serviceName)}`,
                 `📞 <code>${escapeHtml(order.phoneNumber || '')}</code>`,
                 `🔑 الكود: <code>${escapeHtml(event.code || '')}</code>`,
                 `🆔 الطلب: <code>#${order.id}</code>`
