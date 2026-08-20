@@ -13,6 +13,7 @@ const axios = require('axios');
 const config = require('../config');
 const smsbower = require('../providers/smsbower');
 const smsman = require('../providers/smsman');
+const grizzly = require('../providers/grizzly');
 
 const DEFAULT_PROFIT = 0.15;
 const ACTIVATION_TIMEOUT_MINUTES = Math.max(1, Number(config.virtualNumbers?.activationTimeoutMinutes || 10));
@@ -34,6 +35,14 @@ const PROVIDERS = {
     secureKey: 'virtual_numbers_smsman_api_key',
     profitSetting: 'virtual_numbers_smsman_profit',
     envKey: () => String(config.virtualNumbers?.smsmanApiKey || '').trim()
+  },
+  grizzly: {
+    id: 'grizzly',
+    adminName: 'GrizzlySMS',
+    adapter: grizzly,
+    secureKey: 'virtual_numbers_grizzly_api_key',
+    profitSetting: 'virtual_numbers_grizzly_profit',
+    envKey: () => String(config.virtualNumbers?.grizzlyApiKey || '').trim()
   }
 };
 
@@ -77,6 +86,14 @@ function normalizeProviderApiKeyInput(value) {
 function validProviderApiKeyInput(value) {
   const key = normalizeProviderApiKeyInput(value);
   return key.length >= 8 && key.length <= 512 && !/[<>{}\\]/.test(key);
+}
+
+function detectProviderFromApiInput(value) {
+  const raw = String(value || '').toLowerCase();
+  if (/grizzly\s*-?\s*sms|grizzlysms\.com/.test(raw)) return 'grizzly';
+  if (/sms\s*-?\s*man|sms-man\.com/.test(raw)) return 'smsman';
+  if (/sms\s*-?\s*bower|smsbower\.(?:com|page)/.test(raw)) return 'smsbower';
+  return '';
 }
 
 function providerRecord(providerId) {
@@ -779,6 +796,7 @@ module.exports = {
   getProviderApiKey,
   normalizeProviderApiKeyInput,
   validProviderApiKeyInput,
+  detectProviderFromApiInput,
   hasProviderApi,
   hasAnyConfiguredProvider,
   getProviderProfit,

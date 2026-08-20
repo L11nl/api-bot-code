@@ -7,7 +7,8 @@ const MAX_CUSTOM_ENTRIES = 120;
 // Telegram Premium Custom Emoji IDs supplied by the store owner. Aliases are
 // deliberately bilingual so one mapping works in Arabic and English screens.
 // Keep these defaults additive: owner-created mappings are stored separately
-// in Setting and always take precedence over this list.
+// in Setting and always take precedence over this list. Re-saving a known
+// name is therefore an intentional override, not an error.
 const BUILT_INS = [
   { key: 'iraq', id: '5221980268230882832', alt: '🇮🇶', aliases: ['العراق', 'عراقي', 'iraq', 'iraqi'] },
   { key: 'binance', id: '5875443023873053217', alt: '🟡', aliases: ['بايننس', 'بينانس', 'binance'] },
@@ -67,6 +68,8 @@ const BUILT_INS = [
   { key: 'language', id: '5798420477705719523', alt: '🌐', aliases: ['اللغة', 'تغيير اللغة', 'language', 'change language', '🌐'] },
   { key: 'purchased', id: '5796205953913196373', alt: '✅', aliases: ['تم الشراء', 'تمت العملية بنجاح', 'تمت عملية الشراء', 'purchase complete', 'purchased successfully'] },
   { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'تم الحفظ', 'save', 'saved', '💾'] },
+  { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'money', 'price', '💰'] },
+  { key: 'box', id: '5366201992970518798', alt: '📦', aliases: ['علامة الصندوق', 'الصندوق', 'المخزون', 'box', 'stock', 'package', '📦'] },
 
   // Existing bot-wide icons are retained so the restoration does not regress
   // menus that already used them before the owner's new dictionary arrived.
@@ -76,19 +79,14 @@ const BUILT_INS = [
   { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'products', 'product'] }
 ];
 
-// Brand/service mappings supplied by the owner are authoritative. A stale or
-// accidentally-created custom mapping must not turn Canva into YouTube, or
-// CapCut/Netflix into the phone icon. Custom mappings still win for names that
-// are not part of this canonical platform dictionary.
+// These keys identify known platforms for the conservative startup repair.
+// They are defaults only: a mapping explicitly saved by the owner always wins.
 const CANONICAL_PLATFORM_KEYS = new Set([
   'binance', 'superqi', 'google_one', 'youtube_premium', 'canva', 'capcut',
   'youtube', 'instagram', 'netflix', 'duolingo', 'adobe', 'chrome', 'google',
   'gemini', 'gmail', 'chatgpt', 'tiktok', 'authenticator', 'spotify',
   'telegram', 'facebook', 'paypal', 'x', 'whatsapp', 'play_store'
 ]);
-const LEGACY_UI_KEYS = new Set(['support', 'wallet', 'orders', 'products']);
-const OWNER_SUPPLIED_KEYS = new Set(BUILT_INS.map(entry => entry.key).filter(key => !LEGACY_UI_KEYS.has(key)));
-
 const builtInOverrides = new Map();
 let customEntries = [];
 let loaded = false;
@@ -200,8 +198,7 @@ function resolve(value) {
         normalized === normalizedAlias || normalized.startsWith(`${normalizedAlias} `) || normalized.endsWith(` ${normalizedAlias}`)
       );
       const score =
-        (entry.source === 'built-in' && OWNER_SUPPLIED_KEYS.has(entry.key) ? 20000 : 0) +
-        (entry.source === 'custom' ? 10000 : 0) +
+        (entry.source === 'custom' ? 20000 : 0) +
         (rawMatched ? 5000 : 0) +
         (exact ? 2000 : 0) +
         (actionAtEdge ? 1000 : 0) -
@@ -239,13 +236,6 @@ function getByKey(key) {
 function setBuiltInOverride(key, emojiId) {
   const normalizedKey = String(key || '').trim();
   if (!BUILT_INS.some(entry => entry.key === normalizedKey)) return false;
-  // IDs explicitly supplied by the owner are canonical. Do not let a stale
-  // Setting row silently replace them. Only the four pre-existing UI icons
-  // retain backwards-compatible database overrides.
-  if (OWNER_SUPPLIED_KEYS.has(normalizedKey)) {
-    builtInOverrides.delete(normalizedKey);
-    return false;
-  }
   if (validEmojiId(emojiId)) builtInOverrides.set(normalizedKey, String(emojiId));
   else builtInOverrides.delete(normalizedKey);
   return true;
@@ -272,13 +262,6 @@ async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
   if (!candidate) {
     const error = new Error('INVALID_PREMIUM_EMOJI_MAPPING');
     error.code = 'INVALID_PREMIUM_EMOJI_MAPPING';
-    throw error;
-  }
-  const canonical = resolve(`${candidate.keywordAr} ${candidate.keywordEn}`);
-  if (canonical?.source === 'built-in' && OWNER_SUPPLIED_KEYS.has(canonical.key) && canonical.id !== candidate.emojiId) {
-    const error = new Error('PROTECTED_PREMIUM_EMOJI_MAPPING');
-    error.code = 'PROTECTED_PREMIUM_EMOJI_MAPPING';
-    error.canonical = canonical;
     throw error;
   }
   const normalizedAr = normalizeKeyword(candidate.keywordAr);
@@ -321,6 +304,5 @@ module.exports = {
   upsertCustom,
   removeCustom,
   isCanonicalPlatformKey: key => CANONICAL_PLATFORM_KEYS.has(String(key || '')),
-  isOwnerSuppliedKey: key => OWNER_SUPPLIED_KEYS.has(String(key || '')),
   builtInCount: () => BUILT_INS.length
 };
