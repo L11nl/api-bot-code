@@ -14,18 +14,21 @@ const BUILT_INS = [
   { key: 'superqi', id: '5184203496831846429', alt: '🔵', aliases: ['سوبركي', 'سوبر كي', 'superqi', 'super qi'] },
   { key: 'google_one', id: '5796314805564346672', alt: '☁️', aliases: ['جوجل وان', 'قوقل وان', 'google one', 'google 1'] },
   { key: 'youtube_premium', id: '5873070917730439903', alt: '▶️', aliases: ['يوتيوب بريميوم', 'youtube premium'] },
-  { key: 'canva', id: '5796637619601283518', alt: '🎨', aliases: ['كانفا', 'canva'] },
-  { key: 'capcut', id: '5364339557712020484', alt: '✂️', aliases: ['كاب كات', 'كابكات', 'capcut', 'cap cut'] },
+  { key: 'canva', id: '5796637619601283518', alt: '🎨', aliases: ['كانفا', 'كنفا', 'انفا', 'canva'] },
+  { key: 'capcut', id: '5364339557712020484', alt: '✂️', aliases: ['كاب كات', 'كابكات', 'كاب كت', 'capcut', 'cap cut'] },
   { key: 'verified', id: '5436335853976692415', alt: '✅', aliases: ['علامة التوثيق', 'موثق', 'موثقة', 'verified', 'verification badge'] },
   { key: 'error', id: '5271934564699226262', alt: '❌', aliases: ['❌', 'خطأ', 'فشل', 'error', 'failed', 'invalid'] },
   { key: 'success', id: '5273806972871787310', alt: '✅', aliases: ['✅', 'علامة الصح', 'صحيح', 'نجاح', 'تم بنجاح', 'success', 'correct'] },
   { key: 'youtube', id: '5805401092346875873', alt: '▶️', aliases: ['يوتيوب', 'youtube'] },
   { key: 'instagram', id: '6274016787805775396', alt: '📷', aliases: ['انستغرام', 'إنستغرام', 'انستا', 'instagram'] },
-  { key: 'netflix', id: '6276168506291527077', alt: '🎬', aliases: ['نتفلكس', 'نيتفلكس', 'netflix'] },
+  { key: 'netflix', id: '6276168506291527077', alt: '🎬', aliases: ['نتفلكس', 'نيتفلكس', 'نت فلكس', 'netflix'] },
   { key: 'duolingo', id: '6274059063168869584', alt: '🦉', aliases: ['دولنجو', 'دولينجو', 'duolingo'] },
   { key: 'adobe', id: '6274021404895620321', alt: '🎨', aliases: ['ادوبي', 'أدوبي', 'adobe'] },
   { key: 'chrome', id: '6276153753078865622', alt: '🌐', aliases: ['جوجل كروم', 'قوقل كروم', 'كروم', 'google chrome', 'chrome'] },
   { key: 'google', id: '6276229331618372151', alt: '🌐', aliases: ['جوجل', 'قوقل', 'google'] },
+  // No separate Gemini ID was supplied. Gemini is a Google service, so all
+  // common Arabic spellings use the supplied Google Custom Emoji ID.
+  { key: 'gemini', id: '6276229331618372151', alt: '✨', aliases: ['جمني', 'جيميني', 'جمناي', 'جيمناي', 'جيميناي', 'gemini', 'google gemini'] },
   { key: 'gmail', id: '6273588910278844363', alt: '📧', aliases: ['جيميل جوجل', 'جيميل', 'بريد جوجل', 'gmail', 'google mail'] },
   { key: 'chatgpt', id: '6276304880093109177', alt: '🤖', aliases: ['شات جي بي تي', 'شات جي بي تى', 'chatgpt', 'chat gpt', 'openai'] },
   { key: 'tiktok', id: '6273825678940970726', alt: '🎵', aliases: ['تيك توك', 'تيكتوك', 'tiktok', 'tik tok'] },
@@ -72,6 +75,19 @@ const BUILT_INS = [
   { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'orders', 'my orders'] },
   { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'products', 'product'] }
 ];
+
+// Brand/service mappings supplied by the owner are authoritative. A stale or
+// accidentally-created custom mapping must not turn Canva into YouTube, or
+// CapCut/Netflix into the phone icon. Custom mappings still win for names that
+// are not part of this canonical platform dictionary.
+const CANONICAL_PLATFORM_KEYS = new Set([
+  'binance', 'superqi', 'google_one', 'youtube_premium', 'canva', 'capcut',
+  'youtube', 'instagram', 'netflix', 'duolingo', 'adobe', 'chrome', 'google',
+  'gemini', 'gmail', 'chatgpt', 'tiktok', 'authenticator', 'spotify',
+  'telegram', 'facebook', 'paypal', 'x', 'whatsapp', 'play_store'
+]);
+const LEGACY_UI_KEYS = new Set(['support', 'wallet', 'orders', 'products']);
+const OWNER_SUPPLIED_KEYS = new Set(BUILT_INS.map(entry => entry.key).filter(key => !LEGACY_UI_KEYS.has(key)));
 
 const builtInOverrides = new Map();
 let customEntries = [];
@@ -184,6 +200,7 @@ function resolve(value) {
         normalized === normalizedAlias || normalized.startsWith(`${normalizedAlias} `) || normalized.endsWith(` ${normalizedAlias}`)
       );
       const score =
+        (entry.source === 'built-in' && OWNER_SUPPLIED_KEYS.has(entry.key) ? 20000 : 0) +
         (entry.source === 'custom' ? 10000 : 0) +
         (rawMatched ? 5000 : 0) +
         (exact ? 2000 : 0) +
@@ -222,6 +239,13 @@ function getByKey(key) {
 function setBuiltInOverride(key, emojiId) {
   const normalizedKey = String(key || '').trim();
   if (!BUILT_INS.some(entry => entry.key === normalizedKey)) return false;
+  // IDs explicitly supplied by the owner are canonical. Do not let a stale
+  // Setting row silently replace them. Only the four pre-existing UI icons
+  // retain backwards-compatible database overrides.
+  if (OWNER_SUPPLIED_KEYS.has(normalizedKey)) {
+    builtInOverrides.delete(normalizedKey);
+    return false;
+  }
   if (validEmojiId(emojiId)) builtInOverrides.set(normalizedKey, String(emojiId));
   else builtInOverrides.delete(normalizedKey);
   return true;
@@ -248,6 +272,13 @@ async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
   if (!candidate) {
     const error = new Error('INVALID_PREMIUM_EMOJI_MAPPING');
     error.code = 'INVALID_PREMIUM_EMOJI_MAPPING';
+    throw error;
+  }
+  const canonical = resolve(`${candidate.keywordAr} ${candidate.keywordEn}`);
+  if (canonical?.source === 'built-in' && OWNER_SUPPLIED_KEYS.has(canonical.key) && canonical.id !== candidate.emojiId) {
+    const error = new Error('PROTECTED_PREMIUM_EMOJI_MAPPING');
+    error.code = 'PROTECTED_PREMIUM_EMOJI_MAPPING';
+    error.canonical = canonical;
     throw error;
   }
   const normalizedAr = normalizeKeyword(candidate.keywordAr);
@@ -289,5 +320,7 @@ module.exports = {
   listCustom,
   upsertCustom,
   removeCustom,
+  isCanonicalPlatformKey: key => CANONICAL_PLATFORM_KEYS.has(String(key || '')),
+  isOwnerSuppliedKey: key => OWNER_SUPPLIED_KEYS.has(String(key || '')),
   builtInCount: () => BUILT_INS.length
 };
