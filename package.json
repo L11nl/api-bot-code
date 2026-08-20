@@ -1,12 +1,12 @@
 {
   "name": "my-bot-store-clean",
-  "version": "7.5.0",
+  "version": "7.6.0",
   "private": true,
-  "description": "Easy Telegram digital store v7 with full-tier virtual-number pricing, cheapest-service discovery, precise four-decimal checkout, safe UI text overrides, and service-aware Premium emoji rendering",
+  "description": "Easy Telegram digital store v7 with network-wide Premium emoji synchronization, cross-platform icon repair, full-tier virtual-number pricing, and safe UI text overrides",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/services/uiTextOverrides.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/providers/grizzly.js && node --check src/payments/binancePay.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/services/uiTextOverrides.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/providers/grizzly.js && node --check src/payments/binancePay.js"
   },
   "engines": {
     "node": ">=20"
