@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "7.6.0",
+  "version": "7.8.0",
   "private": true,
-  "description": "Easy Telegram digital store v7 with network-wide Premium emoji synchronization, cross-platform icon repair, full-tier virtual-number pricing, and safe UI text overrides",
+  "description": "Easy Telegram digital store v7 with one-flow partner bot provisioning, isolated local services, Railway PostgreSQL recovery, and network-wide Premium emoji synchronization",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
