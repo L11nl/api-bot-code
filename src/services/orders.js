@@ -39,6 +39,12 @@ function productVisibleInCurrentShop(product) {
   return status === 'published';
 }
 
+function effectiveProductPrice(product) {
+  const base = Math.max(0, Number(product?.price || 0));
+  const override = product?.localPriceOverrideUsd == null ? NaN : Number(product.localPriceOverrideUsd);
+  return Number.isFinite(override) && override >= 0 ? override : base;
+}
+
 async function getProductStock(merchantId) {
   const product = await Merchant.findByPk(merchantId);
   if (product?.type === 'service') return productVisibleInCurrentShop(product) ? 999999 : 0;
@@ -182,17 +188,18 @@ async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
   if (!Number.isInteger(qty) || qty < 1 || qty > 100) throw new Error('INVALID_QUANTITY');
   const stock = product.type === 'service' ? 999999 : await getProductStock(product.id);
   if (product.type !== 'service' && stock < qty) throw new Error('OUT_OF_STOCK');
+  const unitPrice = effectiveProductPrice(product);
   return PurchaseOrder.create({
     userId,
     merchantId,
     quantity: qty,
-    unitPrice: Number(product.price),
-    totalAmount: Number(product.price) * qty,
+    unitPrice,
+    totalAmount: unitPrice * qty,
     currency: 'USDT',
     paymentMethod,
     status: 'pending_payment',
     walletApplied: 0,
-    externalAmount: Number(product.price) * qty
+    externalAmount: unitPrice * qty
   });
 }
 
@@ -735,6 +742,7 @@ module.exports = {
   getProductStocksMap,
   productAccessibleInCurrentShop,
   productVisibleInCurrentShop,
+  effectiveProductPrice,
   normalizeProductFamilyName,
   sortProductStockRows,
   listActiveProducts,

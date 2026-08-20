@@ -15,7 +15,7 @@ const BUILT_INS = [
   { key: 'superqi', id: '5184203496831846429', alt: '🔵', aliases: ['سوبركي', 'سوبر كي', 'superqi', 'super qi'] },
   { key: 'google_one', id: '5796314805564346672', alt: '☁️', aliases: ['جوجل وان', 'قوقل وان', 'google one', 'google 1'] },
   { key: 'youtube_premium', id: '5873070917730439903', alt: '▶️', aliases: ['يوتيوب بريميوم', 'youtube premium'] },
-  { key: 'canva', id: '5796637619601283518', alt: '🎨', aliases: ['كانفا', 'كنفا', 'انفا', 'canva'] },
+  { key: 'canva', id: '6275971058054995473', alt: '🎨', aliases: ['كانفا', 'كنفا', 'انفا', 'canva'] },
   { key: 'capcut', id: '5364339557712020484', alt: '✂️', aliases: ['كاب كات', 'كابكات', 'كاب كت', 'capcut', 'cap cut'] },
   { key: 'verified', id: '5436335853976692415', alt: '✅', aliases: ['علامة التوثيق', 'موثق', 'موثقة', 'verified', 'verification badge'] },
   { key: 'error', id: '5271934564699226262', alt: '❌', aliases: ['❌', 'خطأ', 'فشل', 'error', 'failed', 'invalid'] },
@@ -39,15 +39,15 @@ const BUILT_INS = [
   { key: 'facebook', id: '6273966236040699752', alt: '👤', aliases: ['فيسبوك', 'فيس بوك', 'facebook'] },
   { key: 'paypal', id: '6276017886083423354', alt: '💳', aliases: ['باي بال', 'بايبال', 'paypal', 'pay pal'] },
   { key: 'api', id: '5881713916643382055', alt: '🔑', aliases: ['واجهة برمجة التطبيقات', 'مفتاح api', 'api key', 'api'] },
-  { key: 'x', id: '5875114677918240630', alt: '✖️', aliases: ['تويتر سابقا', 'تويتر', 'twitter', 'x.com'] },
-  // This is intentionally the same ID supplied by the owner for X and WhatsApp.
-  { key: 'whatsapp', id: '5875114677918240630', alt: '💬', aliases: ['واتساب', 'واتس اب', 'whatsapp', 'whats app'] },
+  { key: 'x', id: '5794261081052418411', alt: '✖️', aliases: ['تويتر سابقا', 'تويتر', 'twitter', 'x.com'] },
+  // The owner intentionally supplied one ID for both X/Twitter and WhatsApp.
+  { key: 'whatsapp', id: '5794261081052418411', alt: '💬', aliases: ['واتساب', 'واتس اب', 'whatsapp', 'whats app'] },
   { key: 'search', id: '5874960879434338403', alt: '🔎', aliases: ['بحث عن', 'البحث', 'بحث', 'search', 'find', '🔎', '🔍'] },
   { key: 'delete', id: '5841541824803509441', alt: '🗑️', aliases: ['حذف', 'قمامة', 'مسح', 'delete', 'remove', 'trash', '🗑️', '🗑'] },
   { key: 'edit', id: '5879841310902324730', alt: '✏️', aliases: ['تعديل', 'تغيير', 'رد', 'الوصف', 'نص', 'كتابة', 'edit', 'change', 'reply', 'description', 'text', 'write', '✏️', '✏'] },
   { key: 'pin', id: '5796440171364749940', alt: '📌', aliases: ['تثبيت', 'مثبت', 'pin', 'pinned', '📌'] },
   { key: 'lock', id: '5879895758202735862', alt: '🔒', aliases: ['قفل', 'مغلق', 'الضمان', 'ضمان', 'lock', 'locked', 'warranty', 'guarantee', '🔒'] },
-  { key: 'phone', id: '5897488197650223178', alt: '📱', aliases: ['الأرقام الافتراضية', 'الارقام الافتراضية', 'رقم افتراضي', 'شراء رقم', 'اتصال', 'virtual numbers', 'virtual number', 'phone number', '📱'] },
+  { key: 'phone', id: '6325330308279308485', alt: '📱', aliases: ['هاتف', 'الهاتف', 'الأرقام الافتراضية', 'الارقام الافتراضية', 'رقم افتراضي', 'شراء رقم', 'اتصال', 'phone', 'telephone', 'virtual numbers', 'virtual number', 'phone number', '📱'] },
   { key: 'notifications_on', id: '5909201569898827582', alt: '🔔', aliases: ['تفعيل الجرس', 'تشغيل الإشعارات', 'تشغيل الاشعارات', 'الإشعارات', 'الاشعارات', 'إعلان', 'اعلان', 'notifications on', 'enable notifications', 'notifications', 'announcement', '🔔'] },
   { key: 'notifications_off', id: '5909123362839335003', alt: '🔕', aliases: ['تعطيل الجرس', 'إيقاف الإشعارات', 'ايقاف الاشعارات', 'notifications off', 'disable notifications', '🔕'] },
   { key: 'digit_1', id: '5794182096603847292', alt: '1️⃣', aliases: ['1️⃣', '1'] },
@@ -67,16 +67,40 @@ const BUILT_INS = [
   { key: 'settings', id: '5801152386143620268', alt: '⚙️', aliases: ['الإعدادات', 'الاعدادات', 'إعدادات', 'اعدادات', 'لوحة الإدارة', 'لوحة الادارة', 'إدارة البوت', 'ادارة البوت', 'settings', 'setting', 'admin panel', '⚙️', '⚙'] },
   { key: 'language', id: '5798420477705719523', alt: '🌐', aliases: ['اللغة', 'تغيير اللغة', 'language', 'change language', '🌐'] },
   { key: 'purchased', id: '5796205953913196373', alt: '✅', aliases: ['تم الشراء', 'تمت العملية بنجاح', 'تمت عملية الشراء', 'شراء', 'اشتري', 'purchase complete', 'purchased successfully', 'purchase', 'buy'] },
-  { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'تم الحفظ', 'إضافة', 'اضافة', 'رفع', 'استيراد', 'نسخ', 'save', 'saved', 'add', 'upload', 'import', 'copy', '💾'] },
+  { key: 'trending', id: '5999246912174166759', alt: '🔥', aliases: ['نار', 'النار', 'رائج', 'الرائج', 'ترند', 'شائع', 'الأكثر طلبا', 'الاكثر طلبا', 'fire', 'trending', 'hot', 'popular', '🔥'] },
+  { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'احفظ', 'تم الحفظ', 'حفظ لاحقا', 'تذكره لاحقا', 'علامة الحفظ', 'save', 'saved', 'save for later', 'bookmark', '💾'] },
+  { key: 'copy', id: '5877301185639091664', alt: '📋', aliases: ['نسخ', 'نسخ النص', 'نسخ نص', 'انسخ', 'copy', 'copy text', 'clipboard', '📋'] },
+  { key: 'key', id: '6005570495603282482', alt: '🔑', aliases: ['مفتاح', 'المفتاح', 'كلمة مفتاح', 'key', 'secret key', '🔑'] },
+  { key: 'add_message', id: '5883973610606956186', alt: '💬', aliases: ['إضافة رسالة', 'اضافة رسالة', 'رسالة جديدة', 'أضف رسالة', 'اضف رسالة', 'add message', 'new message'] },
+  { key: 'image', id: '5775949822993371030', alt: '🖼️', aliases: ['صورة', 'الصورة', 'صور', 'إضافة صورة', 'اضافة صورة', 'ارسل صورة', 'أرسل صورة', 'image', 'photo', 'picture', '🖼️', '🖼'] },
+  { key: 'live_support', id: '5908808657700655253', alt: '🧑‍💼', aliases: ['الدعم الحي', 'الدعم المباشر', 'موظف الدعم', 'دعم حقيقي', 'موظف حقيقي', 'live support', 'human support', 'support agent'] },
+  { key: 'fix', id: '5988023995125993550', alt: '🔧', aliases: ['إصلاح', 'اصلاح', 'تصليح', 'إصلاح برمجي', 'اصلاح برمجي', 'صيانة', 'fix', 'repair', 'maintenance', 'wrench', '🔧'] },
+  { key: 'close_live_support', id: '5886496611835581345', alt: '🚫', aliases: ['إغلاق الدعم الحي', 'اغلاق الدعم الحي', 'إنهاء الدعم', 'انهاء الدعم', 'إغلاق الدردشة', 'اغلاق الدردشة', 'close live support', 'close support', 'end chat'] },
+  { key: 'hashtag', id: '5951584964305755220', alt: '#️⃣', aliases: ['هاشتاق', 'هاشتاغ', 'وسم', 'hashtag', '#'] },
+  { key: 'laptop', id: '6325569336094232734', alt: '💻', aliases: ['لابتوب', 'حاسوب محمول', 'كمبيوتر', 'حاسوب', 'laptop', 'computer', 'pc', '💻'] },
+  { key: 'free_gift', id: '6325864460477010488', alt: '🎁', aliases: ['هدية مجانية', 'الهدية المجانية', 'مجانا', 'مجاناً', 'free gift', 'freebie'] },
+  { key: 'add', id: '6325454162251223334', alt: '➕', aliases: ['إضافة منتج', 'اضافة منتج', 'إضافة خدمة', 'اضافة خدمة', 'إضافة شيء', 'اضافة شيء', 'أضف', 'اضف', 'add product', 'add service', 'add item', 'create product', '➕'] },
+  { key: 'qr', id: '5987917196469213507', alt: '🔳', aliases: ['كيو ار', 'كيو آر', 'باركود', 'رمز qr', 'مسح الرمز', 'qr', 'qr code', 'barcode'] },
+  { key: 'fingerprint', id: '5886505193180239900', alt: '🫆', aliases: ['بصمة', 'بصمة اصبع', 'بصمة إصبع', 'fingerprint', 'touch id'] },
+  { key: 'plus', id: '5775937998948404844', alt: '+', aliases: ['علامة الجمع', 'زائد', 'plus', '+'] },
+  { key: 'minus', id: '5877413297170419326', alt: '−', aliases: ['علامة الطرح', 'ناقص', 'minus', '−', '-'] },
+  { key: 'multiply', id: '5778527486270770928', alt: '×', aliases: ['علامة الضرب', 'ضرب', 'multiply', 'times', '×'] },
+  { key: 'direction_right', id: '5875506366050734240', alt: '👉🏼', aliases: ['اتجاه يمين', 'إلى اليمين', 'الى اليمين', 'right direction', 'point right', '👉🏼', '👉'] },
+  { key: 'direction_left', id: '5877536313623711363', alt: '👈🏼', aliases: ['اتجاه يسار', 'إلى اليسار', 'الى اليسار', 'left direction', 'point left', '👈🏼', '👈'] },
+  { key: 'star', id: '5958376256788502078', alt: '⭐', aliases: ['نجمة', 'مميز', 'المفضلة', 'star', 'favorite', 'featured', '⭐'] },
+  { key: 'developer', id: '5801040467885822075', alt: '🧑‍💻', aliases: ['مبرمج', 'المبرمج', 'إصلاح كود', 'اصلاح كود', 'تعديل كود', 'برمجة', 'developer', 'programmer', 'fix code', 'coding'] },
+  { key: 'gift', id: '5470041305616759456', alt: '🎁', aliases: ['هدية', 'الهدايا', 'إهداء', 'اهداء', 'gift', 'gifts', 'present', '🎁'] },
+  { key: 'ios', id: '5332512686112520612', alt: '🍎', aliases: ['ايفون', 'آيفون', 'نظام ايفون', 'ios', 'iphone', 'apple ios'] },
+  { key: 'android', id: '5332560480508591604', alt: '🤖', aliases: ['اندرويد', 'أندرويد', 'نظام اندرويد', 'android'] },
   { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'المبلغ', 'الربح', 'الدفع', 'العملة', 'دولار', 'money', 'price', 'amount', 'profit', 'payment', 'currency', 'dollar', 'usd', '💰'] },
   { key: 'box', id: '5366201992970518798', alt: '📦', aliases: ['علامة الصندوق', 'الصندوق', 'المخزون', 'الكمية', 'المتوفر', 'box', 'stock', 'package', 'quantity', 'available', '📦'] },
 
   // Existing bot-wide icons are retained so the restoration does not regress
   // menus that already used them before the owner's new dictionary arrived.
-  { key: 'support', id: '5882260605850620296', alt: '💬', aliases: ['الدعم', 'الدعم الفني', 'مساعدة', 'المساعدة', 'تواصل', 'العملاء', 'محادثة', 'الزبون', 'support', 'help', 'contact', 'customers', 'conversation', 'customer'] },
+  { key: 'support', id: '5908808657700655253', alt: '🧑‍💼', aliases: ['الدعم', 'الدعم الفني', 'مساعدة', 'المساعدة', 'تواصل', 'العملاء', 'محادثة', 'الزبون', 'support', 'help', 'contact', 'customers', 'conversation', 'customer'] },
   { key: 'wallet', id: '6325416826100519483', alt: '👛', aliases: ['المحفظة', 'محفظتك', 'شحن المحفظة', 'الرصيد', 'wallet', 'balance', 'top up wallet'] },
   { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'الطلبات والتسليم', 'الطلب', 'التسليم', 'استرجاع طلب', 'orders', 'my orders', 'order', 'delivery'] },
-  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'إدارة المنتجات', 'ادارة المنتجات', 'المنتجات والمخزون', 'منتج', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'المتجر', 'products', 'product', 'store'] }
+  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'إدارة المنتجات', 'ادارة المنتجات', 'المنتجات والمخزون', 'منتج', 'منتج جديد', 'المتجر', 'products', 'product', 'store'] }
 ];
 
 // These keys identify known platforms for the conservative startup repair.
@@ -106,7 +130,7 @@ function sanitizeCustomEntries(rows = []) {
     .filter(Boolean)
     .slice(0, MAX_CUSTOM_ENTRIES)
     .map(entry => {
-      if (!entry.platformKey) return entry;
+      if (!entry.platformKey || entry.confirmedPlatformOverride === true) return entry;
       const owners = canonicalKeysForEmojiId(entry.emojiId);
       if (!owners.length || owners.includes(entry.platformKey)) return entry;
       const canonical = BUILT_INS.find(row => row.key === entry.platformKey);
@@ -201,6 +225,7 @@ function allEntries() {
 function rawAliasMatch(raw, alias) {
   const needle = String(alias || '').trim();
   if (!needle) return false;
+  if (needle === '-') return raw === '-' || raw.includes(' - ');
   if (/^[\p{L}\p{N}\s._-]+$/u.test(needle)) return false;
   return raw.includes(needle);
 }
@@ -251,7 +276,12 @@ function candidateScore({ entry, normalizedAlias, normalizedText, rawMatched }) 
   const exact = Boolean(normalizedAlias && normalizedText === normalizedAlias);
   const tokenCount = normalizedAlias ? normalizedAlias.split(' ').filter(Boolean).length : 0;
   const aliasLength = normalizedAlias.length;
-  const actionKeys = new Set(['error', 'success', 'search', 'delete', 'edit', 'pin', 'lock', 'notifications_on', 'notifications_off', 'settings', 'save']);
+  const actionKeys = new Set([
+    'error', 'success', 'search', 'delete', 'edit', 'pin', 'lock',
+    'notifications_on', 'notifications_off', 'settings', 'save', 'copy',
+    'key', 'add_message', 'image', 'live_support', 'fix',
+    'close_live_support', 'add', 'qr'
+  ]);
   const genericKeys = new Set(['support', 'wallet', 'orders', 'products']);
   const actionAtEdge = normalizedAlias && actionKeys.has(entry.key) && (
     normalizedText === normalizedAlias ||
@@ -431,6 +461,19 @@ async function replaceCustom(entries = []) {
   };
 }
 
+async function migrateConfirmedPlatformIds(overrides = {}) {
+  let changed = 0;
+  customEntries = customEntries.map(entry => {
+    const wanted = String(overrides?.[entry.platformKey] || '').trim();
+    if (!validEmojiId(wanted) || String(entry.emojiId) === wanted) return entry;
+    changed += 1;
+    const builtIn = BUILT_INS.find(row => row.key === entry.platformKey);
+    return { ...entry, emojiId: wanted, alt: builtIn?.alt || entry.alt || '✨' };
+  });
+  if (changed) await persistCustom();
+  return changed;
+}
+
 async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
   let candidate = cleanEntry({
     keywordAr,
@@ -488,6 +531,7 @@ module.exports = {
   setBuiltInOverride,
   listCustom,
   replaceCustom,
+  migrateConfirmedPlatformIds,
   upsertCustom,
   removeCustom,
   isCanonicalPlatformKey: key => CANONICAL_PLATFORM_KEYS.has(String(key || '')),

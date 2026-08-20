@@ -493,8 +493,9 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw, opti
   const debtor = normalizeShopId(debtorShopIdRaw);
   const creditor = normalizeShopId(creditorShopIdRaw);
   if (debtor === creditor) throw new Error('INVALID_COUNTERPARTY');
+  const paymentMethod = String(options?.method || 'binance').toLowerCase() === 'manual' ? 'manual' : 'binance';
   const binancePayId = String(options?.binancePayId || '').trim();
-  if (!binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
+  if (paymentMethod === 'binance' && !binancePayId) throw new Error('CREDITOR_BINANCE_NOT_CONFIGURED');
 
   const transaction = await sequelize.transaction();
   try {
@@ -510,9 +511,29 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw, opti
       lock: transaction.LOCK.UPDATE
     });
     if (existing) {
-      if (!existing.binancePayId && binancePayId) {
+      if (paymentMethod === 'manual' && existing.submittedOrderId) {
+        throw new Error('BINANCE_PAYMENT_ALREADY_SUBMITTED');
+      }
+      if (paymentMethod === 'binance' && existing.manualProofBase64) {
+        throw new Error('MANUAL_PROOF_ALREADY_SUBMITTED');
+      }
+      if (paymentMethod === 'manual') {
+        if (String(existing.paymentMethod || '') !== 'manual' || !existing.manualProofBase64) {
+          existing.paymentMethod = 'manual';
+          existing.binancePayId = null;
+          existing.manualProofBase64 = null;
+          existing.manualProofMime = null;
+          existing.manualProofSubmittedAt = null;
+          existing.debtorNotified = false;
+          await existing.save({ transaction, fields: [
+            'paymentMethod', 'binancePayId', 'manualProofBase64', 'manualProofMime',
+            'manualProofSubmittedAt', 'debtorNotified'
+          ] });
+        }
+      } else {
+        existing.paymentMethod = 'binance';
         existing.binancePayId = binancePayId;
-        await existing.save({ transaction, fields: ['binancePayId'] });
+        await existing.save({ transaction, fields: ['paymentMethod', 'binancePayId'] });
       }
       await transaction.commit();
       return existing;
@@ -521,7 +542,7 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw, opti
     const amount = Number(dir.amountUsd.toFixed(2));
     // Reserve the current debt immediately. New operations after this point build
     // a new balance independently. The reserved amount stays part of liability
-    // until Binance verification succeeds.
+    // until the selected Binance/manual settlement is confirmed.
     balance.amountSignedUsd = 0;
     await balance.save({ transaction });
     const request = await NetworkDebtPayment.create({
@@ -535,12 +556,43 @@ async function createDebtPaymentRequest(debtorShopIdRaw, creditorShopIdRaw, opti
       egpAmount: null,
       status: 'pending',
       requestedByShopId: debtor,
-      binancePayId,
+      paymentMethod,
+      binancePayId: paymentMethod === 'binance' ? binancePayId : null,
       submittedOrderId: null,
       transactionId: null,
       verificationError: null,
       debtorNotified: false
     }, { transaction });
+    await transaction.commit();
+    return request;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function submitDebtManualProof(requestId, debtorShopIdRaw, proof = {}) {
+  const debtor = normalizeShopId(debtorShopIdRaw);
+  const mime = String(proof?.mime || '').toLowerCase();
+  const base64 = String(proof?.base64 || '').replace(/^data:[^;]+;base64,/i, '').trim();
+  if (!/^image\/(?:jpeg|png|webp)$/.test(mime)) throw new Error('INVALID_PROOF_IMAGE');
+  if (!/^[A-Za-z0-9+/=]+$/.test(base64)) throw new Error('INVALID_PROOF_IMAGE');
+  const bytes = Buffer.byteLength(base64, 'base64');
+  if (bytes < 32 || bytes > 1200000) throw new Error('PROOF_IMAGE_TOO_LARGE');
+
+  const transaction = await sequelize.transaction();
+  try {
+    const request = await NetworkDebtPayment.findByPk(String(requestId), { transaction, lock: transaction.LOCK.UPDATE });
+    if (!request || normalizeShopId(request.debtorShopId) !== debtor) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
+    if (request.status !== 'pending') throw new Error('PAYMENT_REQUEST_ALREADY_RESOLVED');
+    if (String(request.paymentMethod || '') !== 'manual') throw new Error('PAYMENT_METHOD_MISMATCH');
+    request.manualProofBase64 = base64;
+    request.manualProofMime = mime;
+    request.manualProofSubmittedAt = new Date();
+    request.debtorNotified = false;
+    await request.save({ transaction, fields: [
+      'manualProofBase64', 'manualProofMime', 'manualProofSubmittedAt', 'debtorNotified'
+    ] });
     await transaction.commit();
     return request;
   } catch (error) {
@@ -558,6 +610,7 @@ async function submitDebtBinanceOrder(requestId, debtorShopIdRaw, submittedOrder
     const request = await NetworkDebtPayment.findByPk(String(requestId), { transaction, lock: transaction.LOCK.UPDATE });
     if (!request || normalizeShopId(request.debtorShopId) !== debtor) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
     if (request.status !== 'pending') throw new Error('PAYMENT_REQUEST_ALREADY_RESOLVED');
+    if (String(request.paymentMethod || 'binance') !== 'binance') throw new Error('PAYMENT_METHOD_MISMATCH');
     const duplicate = await NetworkDebtPayment.findOne({
       where: {
         id: { [Op.ne]: request.id },
@@ -588,6 +641,7 @@ async function debtBinanceVerificationsForCreditor(creditorShopIdRaw) {
     where: {
       creditorShopId: creditor,
       status: 'pending',
+      paymentMethod: 'binance',
       submittedOrderId: { [Op.not]: null }
     },
     order: [['createdAt', 'ASC']],
@@ -605,6 +659,7 @@ async function finishDebtBinanceVerification(requestId, creditorShopIdRaw, resul
       await transaction.commit();
       return request;
     }
+    if (String(request.paymentMethod || 'binance') !== 'binance') throw new Error('PAYMENT_METHOD_MISMATCH');
 
     if (result.success) {
       const transactionId = String(result.transactionId || '').trim();
@@ -657,6 +712,7 @@ async function debtPaymentResultsForDebtor(debtorShopIdRaw) {
       debtorNotified: false,
       [Op.or]: [
         { status: 'confirmed' },
+        { status: 'rejected' },
         { verificationError: { [Op.not]: null } }
       ]
     },
@@ -685,11 +741,18 @@ async function resolveDebtPaymentRequest(requestId, actorShopIdRaw, approve) {
     if (!request) throw new Error('PAYMENT_REQUEST_NOT_FOUND');
     if (request.status !== 'pending') throw new Error('PAYMENT_REQUEST_ALREADY_RESOLVED');
     if (normalizeShopId(request.creditorShopId) !== actor) throw new Error('NOT_PAYMENT_CREDITOR');
+    if (String(request.paymentMethod || 'binance') === 'binance' && request.binancePayId) {
+      throw new Error('BINANCE_AUTOMATIC_ONLY');
+    }
+    if (approve && String(request.paymentMethod || '') === 'manual' && !request.manualProofBase64) {
+      throw new Error('MANUAL_PROOF_REQUIRED');
+    }
 
     if (approve) {
       request.status = 'confirmed';
       request.confirmedByShopId = actor;
       request.confirmedAt = new Date();
+      request.debtorNotified = false;
       await request.save({ transaction });
     } else {
       await applyBalanceDelta({
@@ -700,6 +763,7 @@ async function resolveDebtPaymentRequest(requestId, actorShopIdRaw, approve) {
       });
       request.status = 'rejected';
       request.rejectedAt = new Date();
+      request.debtorNotified = false;
       await request.save({ transaction });
     }
     await transaction.commit();
@@ -836,6 +900,7 @@ module.exports = {
   notificationEventsAfter,
   latestNotificationEventId,
   createDebtPaymentRequest,
+  submitDebtManualProof,
   submitDebtBinanceOrder,
   debtBinanceVerificationsForCreditor,
   finishDebtBinanceVerification,
