@@ -190,7 +190,36 @@ const PREMIUM_EMOJI = {
   error: premiumEmojis.getByKey('error')
 };
 
+const OWNER_EMOJI_DICTIONARY_VERSION = '2026-08-20-final-1';
+const OWNER_CANONICAL_UI_EMOJI_IDS = Object.freeze({
+  binance: '5875443023873053217',
+  superqi: '5184203496831846429',
+  language: '5798420477705719523',
+  settings: '5801152386143620268',
+  api: '5881713916643382055',
+  phone: '5897488197650223178',
+  search: '5874960879434338403',
+  delete: '5841541824803509441',
+  edit: '5879841310902324730',
+  save: '5366201992970518798',
+  money: '5361656830944624968',
+  box: '5366201992970518798',
+  success: '5273806972871787310',
+  error: '5271934564699226262'
+});
+
 async function loadPersistentRuntimeConfig() {
+  // One-time repair for IDs that an older release persisted before the owner
+  // supplied the final dictionary. This changes only emoji settings and does
+  // not touch users, balances, products, stock, orders, or deliveries.
+  const dictionaryVersion = await getSetting('premium_emoji_dictionary_version', '');
+  if (dictionaryVersion !== OWNER_EMOJI_DICTIONARY_VERSION) {
+    for (const [name, emojiId] of Object.entries(OWNER_CANONICAL_UI_EMOJI_IDS)) {
+      await setSetting(`premium_emoji:${name}:id`, emojiId);
+    }
+    await setSetting('premium_emoji_dictionary_version', OWNER_EMOJI_DICTIONARY_VERSION);
+  }
+
   // Store UI Premium Emoji IDs in PostgreSQL the first time we see them.
   // Future code deployments load the database value instead of replacing it
   // with whatever happens to be hard-coded in a newer source file.
@@ -355,19 +384,23 @@ function mapKeyboardButtons(rows, mapper) {
 function replyMarkupWithPremiumIcons(replyMarkup) {
   if (!replyMarkup || typeof replyMarkup !== 'object') return replyMarkup;
   const decorate = (button, replyKeyboard = false) => {
-    const originalText = typeof button.text === 'string' ? button.text : '';
-    if (originalText) {
+    const sourceText = typeof button.text === 'string' ? button.text : '';
+    const lockedPremiumEmoji = button.__lockPremiumEmoji === true;
+    delete button.__lockPremiumEmoji;
+    if (sourceText) {
       uiTextOverrides.record({
         kind: 'button',
-        text: originalText,
+        text: sourceText,
         callbackData: button.callback_data || '',
         replyKeyboard
       });
-      const override = uiTextOverrides.get('button', originalText);
+      const override = uiTextOverrides.get('button', sourceText);
       if (override) {
         button.text = override.replacementText;
-        delete button.icon_custom_emoji_id;
-        if (override.emojiId) button.icon_custom_emoji_id = String(override.emojiId);
+        if (!lockedPremiumEmoji) {
+          delete button.icon_custom_emoji_id;
+          if (override.emojiId) button.icon_custom_emoji_id = String(override.emojiId);
+        }
       }
     }
     const skipAutomaticIcon = button.__skipPremiumEmoji === true;
@@ -380,6 +413,9 @@ function replyMarkupWithPremiumIcons(replyMarkup) {
       const originalText = button.text;
       button.text = stripOrdinaryEmojiText(originalText, !button.icon_custom_emoji_id).trim();
       if (!button.text) button.text = button.icon_custom_emoji_id ? '\u2060' : originalText;
+    }
+    if (replyKeyboard && sourceText && typeof button.text === 'string') {
+      uiTextOverrides.registerReplyButtonAlias(button.text, sourceText);
     }
     return button;
   };
@@ -921,7 +957,7 @@ async function showVirtualProviderAdmin(chatId, user) {
       `• رابط الـAPI: ${status.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
       `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(status))}</b>`,
       `• ${serviceLine(status)}`,
-      `• الربح لكل رقم: <b>${moneyUsd(status.profit ?? 0.15)}</b>`,
+      `• الربح لكل رقم: <b>${virtualRetailPriceText(status.profit ?? 0.15)}</b>`,
       `• الطلبات: شراء ${Number(status.purchased || 0)} | مكتمل ${Number(status.completed || 0)} | نشط ${Number(status.active || 0)}`
     );
   });
@@ -1143,10 +1179,17 @@ async function showUiTextOverridesAdmin(chatId, user, page = 0) {
   });
 }
 
+function virtualRetailPriceText(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount < 0) return '$0.0000';
+  const needsFourDecimals = amount < 1 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-9;
+  return `$${amount.toFixed(needsFourDecimals ? 4 : 2)}`;
+}
+
 function virtualProviderCostText(providerCost, retail) {
   const provider = Number(providerCost || 0);
-  const providerText = provider.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') || '0';
-  return `$${providerText} 👈🏻 $${Number(retail || 0).toFixed(2)}`;
+  const providerText = Number.isFinite(provider) && provider >= 0 ? provider.toFixed(4) : '0.0000';
+  return `$${providerText} 👈🏻 ${virtualRetailPriceText(retail)}`;
 }
 
 const VIRTUAL_SERVICE_AR_NAMES = new Map([
@@ -1414,8 +1457,9 @@ async function showVirtualServices(chatId, user, providerId, page = 0, filtered 
   const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
   const rows = services.slice(safePage * pageSize, safePage * pageSize + pageSize);
   const labels = await Promise.all(rows.map(service => virtualServiceDisplayName(service, user.lang)));
+  const summaryByCode = new Map(summary.map(row => [String(row.serviceCode), row]));
   const keyboard = rows.map((service, index) => [{
-    text: `📲 ${labels[index]}`,
+    text: `📲 ${labels[index]}${summaryByCode.has(String(service.code)) ? ` • ${virtualRetailPriceText(summaryByCode.get(String(service.code)).retailPrice)}` : ''}`,
     callback_data: `vn:svc:${providerId}:${service.code}`,
     style: 'primary'
   }]);
@@ -1427,6 +1471,7 @@ async function showVirtualServices(chatId, user, providerId, page = 0, filtered 
     if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `vn:services:${providerId}:${safePage + 1}` });
     keyboard.push(nav);
   }
+  keyboard.push([{ text: user.lang === 'en' ? '💸 Cheapest numbers now' : '💸 أرخص الأرقام الآن', callback_data: `vn:cheap:${providerId}:0`, style: 'success' }]);
   keyboard.push([{ text: user.lang === 'en' ? '🔎 Search all services' : '🔎 البحث في كل الخدمات', callback_data: `vn:search:${providerId}` }]);
   keyboard.push([
     { text: user.lang === 'en' ? '🧾 My orders' : '🧾 طلباتي', callback_data: 'vn:orders' },
@@ -1448,6 +1493,58 @@ async function showVirtualServices(chatId, user, providerId, page = 0, filtered 
         'هنا تظهر الخدمات الدارجة فقط. باقي الخدمات موجودة بالبحث، والبحث يقبل العربي والإنجليزي.'
       ].filter(Boolean).join('\n');
   return bot.sendMessage(chatId, title, {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function showCheapestVirtualServices(chatId, user, providerId, page = 0) {
+  const publicProvider = await virtualNumbers.getPublicProvider(providerId);
+  if (!publicProvider) return showVirtualNumbersHome(chatId, user);
+  const [services, summary] = await Promise.all([
+    virtualNumbers.listServices(providerId),
+    virtualNumbers.availableServicesSummary(providerId, true)
+  ]);
+  const serviceByCode = new Map(services.map(service => [String(service.code), service]));
+  const available = summary
+    .map(quote => ({ service: serviceByCode.get(String(quote.serviceCode)), quote }))
+    .filter(row => row.service && Number(row.quote.count) > 0 && Number.isFinite(Number(row.quote.retailPrice)))
+    .sort((a, b) => Number(a.quote.retailPrice) - Number(b.quote.retailPrice)
+      || Number(a.quote.providerCost) - Number(b.quote.providerCost)
+      || String(a.service.name).localeCompare(String(b.service.name), 'en'));
+
+  if (!available.length) {
+    return bot.sendMessage(chatId, virtualNumberText(user.lang,
+      'لا توجد أرقام متوفرة من هذه الخدمة في هذه اللحظة. جرّب التحديث بعد قليل.',
+      'No numbers are available from this service at this moment. Try refreshing shortly.'), {
+      reply_markup: { inline_keyboard: [[{ text: user.lang === 'en' ? '⬅️ Popular services' : '⬅️ الخدمات المشهورة', callback_data: `vn:p:${providerId}` }]] }
+    });
+  }
+
+  const pageSize = 10;
+  const pages = Math.max(1, Math.ceil(available.length / pageSize));
+  const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
+  const slice = available.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const labels = await Promise.all(slice.map(row => virtualServiceDisplayName(row.service, user.lang)));
+  const keyboard = slice.map((row, index) => [{
+    text: `📲 ${labels[index]} • ${virtualRetailPriceText(row.quote.retailPrice)} • ${row.quote.count}`,
+    callback_data: `vn:svc:${providerId}:${row.service.code}`,
+    style: 'success'
+  }]);
+  if (pages > 1) {
+    const nav = [];
+    if (safePage > 0) nav.push({ text: '⬅️', callback_data: `vn:cheap:${providerId}:${safePage - 1}` });
+    nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop:vncheap' });
+    if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `vn:cheap:${providerId}:${safePage + 1}` });
+    keyboard.push(nav);
+  }
+  keyboard.push([{ text: user.lang === 'en' ? '🔄 Refresh prices' : '🔄 تحديث الأسعار', callback_data: `vn:cheap:${providerId}:${safePage}` }]);
+  keyboard.push([{ text: user.lang === 'en' ? '🔎 Search all services' : '🔎 البحث في كل الخدمات', callback_data: `vn:search:${providerId}` }]);
+  keyboard.push([{ text: user.lang === 'en' ? '⬅️ Popular services' : '⬅️ الخدمات المشهورة', callback_data: `vn:p:${providerId}` }]);
+
+  return bot.sendMessage(chatId, user.lang === 'en'
+    ? `💸 <b>Cheapest available numbers</b>\nPrices are ordered live from cheapest to highest. The shown sale price includes your configured margin.`
+    : `💸 <b>أرخص الأرقام المتوفرة</b>\nالأسعار مرتبة مباشرة من الأرخص إلى الأغلى. سعر البيع الظاهر يتضمن هامش الربح الذي ضبطته.`, {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -1495,7 +1592,7 @@ async function showVirtualCountries(chatId, user, providerId, serviceCode, page 
     const country = localizedVirtualCountry(row.countryName, user.lang);
     const priceText = showProviderCost
       ? virtualProviderCostText(row.providerCost, row.retailPrice)
-      : `$${Number(row.retailPrice).toFixed(2)}`;
+      : virtualRetailPriceText(row.retailPrice);
     return [{
       text: `${country.flag} ${country.name} • ${priceText} • ${row.count}`,
       callback_data: `vn:quote:${providerId}:${service.code}:${row.countryId}`,
@@ -1540,14 +1637,14 @@ async function showVirtualQuote(chatId, user, providerId, serviceCode, countryId
   ]);
   const balance = Number(fresh?.balance || 0);
   const country = localizedVirtualCountry(quote.countryName, user.lang);
-  const cents = Math.round(Number(quote.retailPrice) * 100);
+  const priceUnits = Math.round(Number(quote.retailPrice) * 10_000);
   const showProviderCost = canSeeVirtualProviderCost(user);
   const priceLineEn = showProviderCost
     ? `💵 Provider → sale: <b>${virtualProviderCostText(quote.providerCost, quote.retailPrice)}</b>`
-    : `💵 Price: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`;
+    : `💵 Price: <b>${virtualRetailPriceText(quote.retailPrice)}</b>`;
   const priceLineAr = showProviderCost
     ? `💵 سعر الموقع ← سعر البيع: <b>${virtualProviderCostText(quote.providerCost, quote.retailPrice)}</b>`
-    : `💵 السعر: <b>$${Number(quote.retailPrice).toFixed(2)}</b>`;
+    : `💵 السعر: <b>${virtualRetailPriceText(quote.retailPrice)}</b>`;
   const text = user.lang === 'en'
     ? [
         `📲 Service: <b>${premiumLabelHtml(serviceName)}</b>`,
@@ -1572,7 +1669,7 @@ async function showVirtualQuote(chatId, user, providerId, serviceCode, countryId
   return bot.sendMessage(chatId, text, {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
-      [{ text: user.lang === 'en' ? `✅ Buy for $${Number(quote.retailPrice).toFixed(2)}` : `✅ شراء بـ $${Number(quote.retailPrice).toFixed(2)}`, callback_data: `vn:buy:${providerId}:${service.code}:${quote.countryId}:${cents}`, style: 'success' }],
+      [{ text: user.lang === 'en' ? `✅ Buy for ${virtualRetailPriceText(quote.retailPrice)}` : `✅ شراء بـ ${virtualRetailPriceText(quote.retailPrice)}`, callback_data: `vn:buy:${providerId}:${service.code}:${quote.countryId}:u${priceUnits}`, style: 'success' }],
       [{ text: user.lang === 'en' ? '⬅️ Countries' : '⬅️ الدول', callback_data: `vn:countries:${providerId}:${service.code}:0` }]
     ] }
   });
@@ -1591,7 +1688,7 @@ async function showVirtualOrders(chatId, user) {
     const service = { code: order.serviceCode, name: order.serviceName };
     const serviceName = await virtualServiceDisplayName(service, user.lang);
     const country = localizedVirtualCountry(order.countryName, user.lang);
-    lines.push(`#${order.id} • ${premiumLabelHtml(serviceName)} • ${country.flag} ${escapeHtml(country.name)} • <b>${moneyUsd(order.salePriceUsd)}</b>`);
+    lines.push(`#${order.id} • ${premiumLabelHtml(serviceName)} • ${country.flag} ${escapeHtml(country.name)} • <b>${virtualRetailPriceText(order.salePriceUsd)}</b>`);
     lines.push(`📞 <code>${escapeHtml(order.phoneNumber || '—')}</code> • ${escapeHtml(virtualNumberStatusLabel(order.status, user.lang))}`);
     if (order.smsCode) lines.push(`🔑 <code>${escapeHtml(order.smsCode)}</code>`);
     lines.push('');
@@ -1678,6 +1775,13 @@ async function handleVirtualNumberCallback(query, user, data) {
     await answerCallback(query.id, user.lang === 'en' ? 'Loading services…' : 'جاري تحميل الخدمات…');
     return showVirtualServices(query.message.chat.id, user, providerId, page);
   }
+  if (data.startsWith('vn:cheap:')) {
+    const parts = data.split(':');
+    const providerId = String(parts[2] || '');
+    const page = Number(parts[3] || 0);
+    await answerCallback(query.id, user.lang === 'en' ? 'Loading cheapest numbers…' : 'جاري تحميل أرخص الأرقام…');
+    return showCheapestVirtualServices(query.message.chat.id, user, providerId, page);
+  }
   if (data.startsWith('vn:search:')) {
     const providerId = String(data.split(':')[2] || '');
     if (!(await virtualNumbers.getPublicProvider(providerId))) {
@@ -1732,7 +1836,10 @@ async function handleVirtualNumberCallback(query, user, data) {
     const providerId = String(parts[2] || '');
     const serviceCode = String(parts[3] || '');
     const countryId = String(parts[4] || '');
-    const expectedRetailCents = Number(parts[5] || 0);
+    const priceToken = String(parts[5] || '');
+    const expectedRetailUnits = /^u\d+$/.test(priceToken)
+      ? Number(priceToken.slice(1))
+      : Math.round(Number(priceToken || 0) * 100);
     await answerCallback(query.id, user.lang === 'en' ? 'Purchasing number…' : 'جاري شراء الرقم…');
     try {
       const services = await virtualNumbers.listServices(providerId);
@@ -1746,7 +1853,7 @@ async function handleVirtualNumberCallback(query, user, data) {
         serviceName: service.name,
         countryId,
         countryName: currentQuote.countryName,
-        expectedRetailCents
+        expectedRetailUnits
       });
       const displayServiceName = await virtualServiceDisplayName(service, user.lang);
       const displayCountry = localizedVirtualCountry(currentQuote.countryName, user.lang);
@@ -1755,7 +1862,7 @@ async function handleVirtualNumberCallback(query, user, data) {
             '✅ <b>Number purchased successfully</b>',
             `📲 Service: <b>${premiumLabelHtml(displayServiceName)}</b>`,
             `${displayCountry.flag} Country: <b>${escapeHtml(displayCountry.name)}</b>`,
-            `💵 Paid: <b>${moneyUsd(order.salePriceUsd)}</b>`,
+            `💵 Paid: <b>${virtualRetailPriceText(order.salePriceUsd)}</b>`,
             `📞 Number: <code>${escapeHtml(order.phoneNumber)}</code>`,
             `🆔 Order: <code>#${order.id}</code>`,
             '',
@@ -1766,7 +1873,7 @@ async function handleVirtualNumberCallback(query, user, data) {
             '✅ <b>تم شراء الرقم بنجاح</b>',
             `📲 الخدمة: <b>${premiumLabelHtml(displayServiceName)}</b>`,
             `${displayCountry.flag} الدولة: <b>${escapeHtml(displayCountry.name)}</b>`,
-            `💵 تم خصم: <b>${moneyUsd(order.salePriceUsd)}</b>`,
+            `💵 تم خصم: <b>${virtualRetailPriceText(order.salePriceUsd)}</b>`,
             `📞 الرقم: <code>${escapeHtml(order.phoneNumber)}</code>`,
             `🆔 الطلب: <code>#${order.id}</code>`,
             '',
@@ -1788,7 +1895,7 @@ async function handleVirtualNumberCallback(query, user, data) {
         return showVirtualQuote(user.id, user, providerId, serviceCode, countryId);
       }
       if (error.code === 'INSUFFICIENT_BALANCE') {
-        return bot.sendMessage(user.id, `${virtualNumberErrorText(error, user.lang)}\n${virtualNumberText(user.lang, 'المطلوب', 'Required')}: <b>$${Number(error.required || 0).toFixed(2)}</b>\n${virtualNumberText(user.lang, 'رصيدك', 'Your balance')}: <b>$${Number(error.balance || 0).toFixed(2)}</b>`, {
+        return bot.sendMessage(user.id, `${virtualNumberErrorText(error, user.lang)}\n${virtualNumberText(user.lang, 'المطلوب', 'Required')}: <b>${virtualRetailPriceText(error.required || 0)}</b>\n${virtualNumberText(user.lang, 'رصيدك', 'Your balance')}: <b>${virtualRetailPriceText(error.balance || 0)}</b>`, {
           parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [[{ text: user.lang === 'en' ? '💳 Open wallet' : '💳 فتح المحفظة', callback_data: 'vn:wallet' }]] }
         });
@@ -1804,8 +1911,8 @@ async function handleVirtualNumberCallback(query, user, data) {
       return bot.sendMessage(user.id, result.alreadyDone
         ? virtualNumberText(user.lang, 'ℹ️ هذا الطلب منتهي أصلاً.', 'ℹ️ This order is already closed.')
         : virtualNumberText(user.lang,
-          `↩️ تم إلغاء الرقم وإرجاع ${moneyUsd(result.refunded || 0)} إلى محفظتك.`,
-          `↩️ Number cancelled and ${moneyUsd(result.refunded || 0)} was returned to your wallet.`));
+          `↩️ تم إلغاء الرقم وإرجاع ${virtualRetailPriceText(result.refunded || 0)} إلى محفظتك.`,
+          `↩️ Number cancelled and ${virtualRetailPriceText(result.refunded || 0)} was returned to your wallet.`));
     } catch (error) {
       return bot.sendMessage(user.id, `❌ ${virtualNumberErrorText(error, user.lang)}`);
     }
@@ -2591,7 +2698,11 @@ function productButtonRow(product, stock, lang, moneyContext) {
   const button = {
     text: `${displayName} | ${priceText} | ${availabilityText}`,
     callback_data: `prod:${product.id}`,
-    style
+    style,
+    // Product identity is derived from the product record. A historical UI
+    // text override may rename the label, but must never swap Canva for
+    // YouTube or CapCut for a save/bookmark icon.
+    __lockPremiumEmoji: true
   };
   const buttonEmoji = nameEmoji?.id
     ? nameEmoji
@@ -4256,8 +4367,9 @@ async function handleStateMessage(msg, user, state) {
       }
 
       const labels = await Promise.all(matches.map(service => virtualServiceDisplayName(service, user.lang)));
+      const summaryByCode = new Map(summary.map(row => [String(row.serviceCode), row]));
       const keyboard = matches.map((service, index) => [{
-        text: `📲 ${labels[index]}`,
+        text: `📲 ${labels[index]}${summaryByCode.has(String(service.code)) ? ` • ${virtualRetailPriceText(summaryByCode.get(String(service.code)).retailPrice)}` : ''}`,
         callback_data: `vn:svc:${providerId}:${service.code}`,
         style: 'primary'
       }]);
@@ -4308,7 +4420,7 @@ async function handleStateMessage(msg, user, state) {
         const country = localizedVirtualCountry(row.countryName, user.lang);
         const priceText = showProviderCost
           ? virtualProviderCostText(row.providerCost, row.retailPrice)
-          : `$${Number(row.retailPrice).toFixed(2)}`;
+          : virtualRetailPriceText(row.retailPrice);
         return [{
           text: `${country.flag} ${country.name} • ${priceText} • ${row.count}`,
           callback_data: `vn:quote:${providerId}:${serviceCode}:${row.countryId}`,
@@ -5452,7 +5564,7 @@ async function handleStateMessage(msg, user, state) {
     try {
       const profit = await virtualNumbers.setProviderProfit(providerId, value);
       await clearState(user.id);
-      await bot.sendMessage(user.id, `✅ تم ضبط ربح كل رقم على <b>${moneyUsd(profit)}</b>.`, { parse_mode: 'HTML' });
+      await bot.sendMessage(user.id, `✅ تم ضبط ربح كل رقم على <b>${virtualRetailPriceText(profit)}</b>.`, { parse_mode: 'HTML' });
       await showVirtualProviderAdmin(user.id, user);
     } catch (error) {
       await bot.sendMessage(user.id, `❌ ${virtualNumberErrorText(error, 'ar')}`);
@@ -7133,7 +7245,7 @@ async function handleAdminCallback(query, user, data) {
         `كانت صحيحة: <b>${report.correct}</b>`,
         `تم تصحيحها الآن: <b>${report.repaired}</b>`,
         '',
-        'تعديلك اليدوي يبقى معتمداً عندما يكون مربوطاً بنفس الخدمة، أما الكلمات العامة فلا تتغلب بعد الآن على اسم خدمة أدق.'
+        'أي تغيير تحفظه عمداً من هذا الإصدار يبقى معتمداً لنفس الخدمة. الروابط القديمة غير المؤكدة والكلمات العامة لا تتغلب على اسم خدمة أدق.'
       ];
       if (report.unknownNames.length) {
         lines.push('', '<b>أسماء تحتاج ربطاً يدوياً لأنها غير معروفة بالقاموس:</b>');
@@ -7324,8 +7436,8 @@ async function handleAdminCallback(query, user, data) {
     await setState(user.id, { action: 'admin_virtual_provider_profit', providerId });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, [
-      `📈 ربح <b>${providerName}</b> الحالي: <b>${moneyUsd(current)}</b>.`,
-      'أرسل الربح الجديد لكل رقم بالدولار، مثال: <code>0.15</code> أو <code>0.20</code>.',
+      `📈 ربح <b>${providerName}</b> الحالي: <b>${virtualRetailPriceText(current)}</b>.`,
+      'أرسل الربح الجديد لكل رقم بالدولار، مثال: <code>0</code> للبيع بسعر الموقع، أو <code>0.15</code> لإضافة 15 سنتاً.',
       'اكتب إغلاق للإلغاء.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
@@ -8696,13 +8808,13 @@ function startVirtualNumbersWatcher() {
         }
         if (event.type === 'expired_refund') {
           await bot.sendMessage(order.userId, lang === 'en'
-            ? `⏱ No SMS code arrived within ${virtualNumbers.ACTIVATION_TIMEOUT_MINUTES} minutes. Number order #${order.id} was cancelled automatically and ${moneyUsd(event.refunded || 0)} was returned to your wallet.`
-            : `⏱ ما وصل كود خلال ${virtualNumbers.ACTIVATION_TIMEOUT_MINUTES} دقائق. تم إلغاء طلب الرقم #${order.id} تلقائياً وإرجاع ${moneyUsd(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
+            ? `⏱ No SMS code arrived within ${virtualNumbers.ACTIVATION_TIMEOUT_MINUTES} minutes. Number order #${order.id} was cancelled automatically and ${virtualRetailPriceText(event.refunded || 0)} was returned to your wallet.`
+            : `⏱ ما وصل كود خلال ${virtualNumbers.ACTIVATION_TIMEOUT_MINUTES} دقائق. تم إلغاء طلب الرقم #${order.id} تلقائياً وإرجاع ${virtualRetailPriceText(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
         }
         if (event.type === 'provider_cancelled') {
           await bot.sendMessage(order.userId, lang === 'en'
-            ? `↩️ Virtual-number order #${order.id} was cancelled by the provider and ${moneyUsd(event.refunded || 0)} was returned to your wallet.`
-            : `↩️ تم إلغاء طلب الرقم #${order.id} من المزود وإرجاع ${moneyUsd(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
+            ? `↩️ Virtual-number order #${order.id} was cancelled by the provider and ${virtualRetailPriceText(event.refunded || 0)} was returned to your wallet.`
+            : `↩️ تم إلغاء طلب الرقم #${order.id} من المزود وإرجاع ${virtualRetailPriceText(event.refunded || 0)} إلى محفظتك.`).catch(() => {});
         }
       }
     } catch (error) {
