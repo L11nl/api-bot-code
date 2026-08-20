@@ -206,6 +206,10 @@ async function loadPersistentRuntimeConfig() {
     premiumEmojis.setBuiltInOverride(name, emoji.id);
   }
   await premiumEmojis.load();
+  for (const [name, emoji] of Object.entries(PREMIUM_EMOJI)) {
+    const latest = premiumEmojis.getByKey(name);
+    if (latest?.id) Object.assign(emoji, latest);
+  }
   await uiTextOverrides.load();
   await repairKnownProductEmojiMappings().catch(error => {
     console.error('Premium emoji product repair:', error.message);
@@ -214,7 +218,10 @@ async function loadPersistentRuntimeConfig() {
 
 function emojiButton(text, emoji, extra = {}) {
   const button = { text, ...extra };
-  const selected = emoji?.id ? emoji : premiumEmojis.resolve(text);
+  const resolved = premiumEmojis.resolveProduct(text) || premiumEmojis.resolve(text);
+  const selected = resolved?.source === 'custom' && resolved.exactMatch
+    ? resolved
+    : (emoji?.id ? emoji : resolved);
   if (selected?.id) button.icon_custom_emoji_id = String(selected.id);
   return button;
 }
@@ -262,7 +269,7 @@ function cleanProductNameForEmoji(value, oldAlt = '') {
 }
 
 function resolvedProductNameEmoji(product) {
-  return premiumEmojis.resolve(`${product?.nameAr || ''} ${product?.nameEn || ''}`);
+  return premiumEmojis.resolveProduct(`${product?.nameAr || ''} ${product?.nameEn || ''}`);
 }
 
 function usableProductNameEmoji(...candidates) {
@@ -277,12 +284,23 @@ function usableProductNameEmoji(...candidates) {
   )) || null;
 }
 
-async function repairKnownProductEmojiMappings() {
+async function auditProductEmojiMappings({ repair = false } = {}) {
   const products = await Merchant.findAll({ attributes: ['id', 'nameAr', 'nameEn', 'description'] });
-  let repaired = 0;
+  const report = {
+    total: products.length,
+    recognized: 0,
+    correct: 0,
+    mismatched: 0,
+    repaired: 0,
+    unknownNames: []
+  };
   for (const product of products) {
     const canonical = resolvedProductNameEmoji(product);
-    if (!canonical?.id || !premiumEmojis.isCanonicalPlatformKey(canonical.key)) continue;
+    if (!canonical?.id || !premiumEmojis.isCanonicalPlatformKey(canonical.key)) {
+      if (report.unknownNames.length < 12) report.unknownNames.push(String(product.nameAr || product.nameEn || `#${product.id}`));
+      continue;
+    }
+    report.recognized += 1;
 
     const original = product.description;
     const base = original && typeof original === 'object' && !Array.isArray(original)
@@ -295,7 +313,12 @@ async function repairKnownProductEmojiMappings() {
       String(base.nameEmojiId || '') === String(canonical.id) &&
       String(base.nameEmojiAlt || '') === String(canonical.alt || '✨') &&
       String(base.nameArHtml || '') === expectedHtml
-    ) continue;
+    ) {
+      report.correct += 1;
+      continue;
+    }
+    report.mismatched += 1;
+    if (!repair) continue;
 
     product.set('description', {
       ...base,
@@ -305,15 +328,20 @@ async function repairKnownProductEmojiMappings() {
     });
     product.changed('description', true);
     await product.save({ fields: ['description'] });
-    repaired += 1;
+    report.repaired += 1;
   }
-  if (repaired) console.log(`Premium emoji mappings repaired for ${repaired} product(s).`);
-  return repaired;
+  return report;
+}
+
+async function repairKnownProductEmojiMappings() {
+  const report = await auditProductEmojiMappings({ repair: true });
+  if (report.repaired) console.log(`Premium emoji mappings repaired for ${report.repaired} product(s).`);
+  return report.repaired;
 }
 
 function premiumLabelHtml(value, fallbackEmoji = null) {
   const text = String(value || '').trim();
-  const emoji = fallbackEmoji?.id ? fallbackEmoji : premiumEmojis.resolve(text);
+  const emoji = fallbackEmoji?.id ? fallbackEmoji : (premiumEmojis.resolveProduct(text) || premiumEmojis.resolve(text));
   return emoji?.id ? `${premiumEmojiHtml(emoji)} ${escapeHtml(text)}` : escapeHtml(text);
 }
 
@@ -345,7 +373,7 @@ function replyMarkupWithPremiumIcons(replyMarkup) {
     const skipAutomaticIcon = button.__skipPremiumEmoji === true;
     delete button.__skipPremiumEmoji;
     if (!skipAutomaticIcon && !button.icon_custom_emoji_id && typeof button.text === 'string') {
-      const emoji = premiumEmojis.resolve(button.text);
+      const emoji = premiumEmojis.resolveProduct(button.text) || premiumEmojis.resolve(button.text);
       if (emoji?.id) button.icon_custom_emoji_id = String(emoji.id);
     }
     if (typeof button.text === 'string') {
@@ -390,7 +418,7 @@ function decoratePremiumHtmlSymbols(value) {
   ];
   // Never recurse into a Custom Emoji tag that was already rendered by a
   // product, service, payment method, or explicit UI helper.
-  return String(value || '').split(/(<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>|<code\b[^>]*>[\s\S]*?<\/code>|<pre\b[^>]*>[\s\S]*?<\/pre>)/gi).map(part => {
+  const decorated = String(value || '').split(/(<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>|<code\b[^>]*>[\s\S]*?<\/code>|<pre\b[^>]*>[\s\S]*?<\/pre>)/gi).map(part => {
     if (/^<(?:tg-emoji|code|pre)\b/i.test(part)) return part;
     let out = part;
     for (const [symbol, key] of replacements) {
@@ -402,6 +430,18 @@ function decoratePremiumHtmlSymbols(value) {
       /^<tg-emoji\b/i.test(fragment) ? fragment : stripOrdinaryEmojiText(fragment, true)
     )).join('');
   }).join('');
+  return decorated.split('\n').map(line => {
+    if (!line.trim() || /<(?:tg-emoji|code|pre|blockquote)\b/i.test(line)) return line;
+    const visibleText = uiTextOverrides.plainText(line);
+    if (!visibleText) return line;
+    const emoji = premiumEmojis.resolveProduct(visibleText) || premiumEmojis.resolve(visibleText);
+    return emoji?.id ? `${premiumEmojiHtml(emoji)} ${line}` : line;
+  }).join('\n');
+}
+
+function premiumPlainTextAsHtml(value) {
+  const html = decoratePremiumHtmlSymbols(escapeHtml(String(value || '')));
+  return /<tg-emoji\b/i.test(html) ? html : '';
 }
 
 function uiTextOverrideHtml(override) {
@@ -432,7 +472,13 @@ function optionsWithPremiumIcons(options, recordMessageText = true) {
   if (decorated.parse_mode === 'HTML' && typeof decorated.caption === 'string' && !decorated.caption_entities) {
     decorated.caption = decoratePremiumHtmlSymbols(decorated.caption);
   } else if (typeof decorated.caption === 'string' && !decorated.caption_entities) {
-    decorated.caption = stripOrdinaryEmojiText(decorated.caption, true);
+    const premiumHtml = premiumPlainTextAsHtml(decorated.caption);
+    if (premiumHtml) {
+      decorated.caption = premiumHtml;
+      decorated.parse_mode = 'HTML';
+    } else {
+      decorated.caption = stripOrdinaryEmojiText(decorated.caption, true);
+    }
   }
   return decorated;
 }
@@ -473,9 +519,17 @@ function installPremiumEmojiButtonDecorator() {
       }
       args[optionsIndex] = optionsWithPremiumIcons(args[optionsIndex], recordMessageText);
       if (textIndex !== null && typeof args[textIndex] === 'string' && !args[optionsIndex]?.entities) {
-        args[textIndex] = args[optionsIndex]?.parse_mode === 'HTML'
-          ? decoratePremiumHtmlSymbols(args[textIndex])
-          : stripOrdinaryEmojiText(args[textIndex], true);
+        if (args[optionsIndex]?.parse_mode === 'HTML') {
+          args[textIndex] = decoratePremiumHtmlSymbols(args[textIndex]);
+        } else {
+          const premiumHtml = premiumPlainTextAsHtml(args[textIndex]);
+          if (premiumHtml) {
+            args[textIndex] = premiumHtml;
+            args[optionsIndex] = { ...(args[optionsIndex] || {}), parse_mode: 'HTML' };
+          } else {
+            args[textIndex] = stripOrdinaryEmojiText(args[textIndex], true);
+          }
+        }
       }
       return original(...args).catch(error => {
         const textHasPremium = textIndex !== null && /<tg-emoji\b/i.test(String(args[textIndex] || ''));
@@ -556,7 +610,7 @@ function extractProductNameRichText(text, entities = []) {
   const manual = raw.match(/\[(\d{5,24})\]/);
   const manualId = manual ? manual[1] : '';
   let cleanPlain = manual ? rich.plain.replace(manual[0], '').replace(/\s{2,}/g, ' ').trim() : rich.plain.trim();
-  const detected = premiumEmojis.resolve(cleanPlain);
+  const detected = premiumEmojis.resolveProduct(cleanPlain);
   const canonical = detected?.id && premiumEmojis.isCanonicalPlatformKey(detected.key) ? detected : null;
   if (canonical && rich.firstCustomEmojiAlt) {
     cleanPlain = cleanPlain.replace(rich.firstCustomEmojiAlt, '').replace(/\s{2,}/g, ' ').trim();
@@ -933,6 +987,7 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
 
   const keyboard = [
     [emojiButton('إضافة أو تغيير ربط', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })],
+    [emojiButton('مراجعة إيموجيات المنتجات', PREMIUM_EMOJI.search, { callback_data: 'adm:emoji:repairproducts', style: 'primary' })],
     [emojiButton('البحث عن نص أو زر', PREMIUM_EMOJI.search, { callback_data: 'adm:uitext:search', style: 'primary' })],
     [emojiButton('النصوص والأزرار المعدلة', PREMIUM_EMOJI.edit, { callback_data: 'adm:uitext:list:0', style: 'primary' })]
   ];
@@ -5319,11 +5374,13 @@ async function handleStateMessage(msg, user, state) {
           emojiId: selected.emojiId,
           alt: selected.alt
         });
+        const repairedProducts = await repairKnownProductEmojiMappings();
         await clearState(user.id);
         await bot.sendMessage(user.id, [
           `${premiumEmojiHtml({ id: saved.emojiId, alt: saved.alt })} <b>تم حفظ الربط وتفعيله على البوت بالكامل.</b>`,
           `العربي: <b>${escapeHtml(saved.keywordAr)}</b>`,
           `English: <b>${escapeHtml(saved.keywordEn)}</b>`,
+          ...(repairedProducts ? [`تم تصحيح الإيموجي في <b>${repairedProducts}</b> منتج موجود.`] : []),
           '',
           'أي منتج أو خدمة أو زر يحتوي هذا الاسم سيأخذ الإيموجي تلقائياً.'
         ].join('\n'), { parse_mode: 'HTML' });
@@ -7063,6 +7120,37 @@ async function handleAdminCallback(query, user, data) {
     return;
   }
 
+  if (data === 'adm:emoji:repairproducts') {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await answerCallback(query.id, 'جاري فحص إيموجيات المنتجات...');
+    try {
+      const report = await auditProductEmojiMappings({ repair: true });
+      const lines = [
+        `${premiumEmojiHtml(PREMIUM_EMOJI.success)} <b>اكتملت المراجعة الذكية لإيموجيات المنتجات</b>`,
+        '',
+        `كل المنتجات المفحوصة: <b>${report.total}</b>`,
+        `الخدمات المعروفة في القاموس: <b>${report.recognized}</b>`,
+        `كانت صحيحة: <b>${report.correct}</b>`,
+        `تم تصحيحها الآن: <b>${report.repaired}</b>`,
+        '',
+        'تعديلك اليدوي يبقى معتمداً عندما يكون مربوطاً بنفس الخدمة، أما الكلمات العامة فلا تتغلب بعد الآن على اسم خدمة أدق.'
+      ];
+      if (report.unknownNames.length) {
+        lines.push('', '<b>أسماء تحتاج ربطاً يدوياً لأنها غير معروفة بالقاموس:</b>');
+        for (const name of report.unknownNames) lines.push(`• ${escapeHtml(name)}`);
+      }
+      return bot.sendMessage(query.message.chat.id, lines.join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: 'رجوع إلى الإيموجيات المميزة', callback_data: 'adm:emoji:0' }]] }
+      });
+    } catch (error) {
+      console.error('Product emoji audit:', error.message);
+      return bot.sendMessage(query.message.chat.id, 'تعذر إكمال المراجعة الآن. لم يتم حذف أو تغيير أي مخزون أو طلب.', {
+        reply_markup: { inline_keyboard: [[{ text: 'رجوع', callback_data: 'adm:emoji:0' }]] }
+      });
+    }
+  }
+
   if (data === 'adm:uitext:search') {
     if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     await uiTextOverrides.persistCatalog().catch(error => console.error('UI text catalog flush:', error.message));
@@ -7176,6 +7264,7 @@ async function handleAdminCallback(query, user, data) {
     const entryId = String(parts[3] || '');
     const page = Math.max(0, Number(parts[4] || 0));
     const removed = await premiumEmojis.removeCustom(entryId);
+    if (removed) await repairKnownProductEmojiMappings();
     await answerCallback(query.id, removed ? 'تم حذف الربط فقط.' : 'الربط محذوف أصلاً.');
     return showPremiumEmojiAdmin(query.message.chat.id, user, page);
   }
