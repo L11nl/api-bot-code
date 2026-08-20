@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "7.8.0",
+  "version": "7.9.0",
   "private": true,
-  "description": "Easy Telegram digital store v7 with one-flow partner bot provisioning, isolated local services, Railway PostgreSQL recovery, and network-wide Premium emoji synchronization",
+  "description": "Telegram digital store v7.9 with per-bot local/public product publishing, approval, pricing, inventory revenue splits, and partner bot provisioning",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
