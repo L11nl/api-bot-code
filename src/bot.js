@@ -66,6 +66,7 @@ const network = require('./network');
 const networkLedger = require('./services/networkLedger');
 const virtualNumbers = require('./services/virtualNumbers');
 const premiumEmojis = require('./services/premiumEmojis');
+const uiTextOverrides = require('./services/uiTextOverrides');
 
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
@@ -205,6 +206,7 @@ async function loadPersistentRuntimeConfig() {
     premiumEmojis.setBuiltInOverride(name, emoji.id);
   }
   await premiumEmojis.load();
+  await uiTextOverrides.load();
   await repairKnownProductEmojiMappings().catch(error => {
     console.error('Premium emoji product repair:', error.message);
   });
@@ -324,7 +326,22 @@ function mapKeyboardButtons(rows, mapper) {
 
 function replyMarkupWithPremiumIcons(replyMarkup) {
   if (!replyMarkup || typeof replyMarkup !== 'object') return replyMarkup;
-  const decorate = button => {
+  const decorate = (button, replyKeyboard = false) => {
+    const originalText = typeof button.text === 'string' ? button.text : '';
+    if (originalText) {
+      uiTextOverrides.record({
+        kind: 'button',
+        text: originalText,
+        callbackData: button.callback_data || '',
+        replyKeyboard
+      });
+      const override = uiTextOverrides.get('button', originalText);
+      if (override) {
+        button.text = override.replacementText;
+        delete button.icon_custom_emoji_id;
+        if (override.emojiId) button.icon_custom_emoji_id = String(override.emojiId);
+      }
+    }
     const skipAutomaticIcon = button.__skipPremiumEmoji === true;
     delete button.__skipPremiumEmoji;
     if (!skipAutomaticIcon && !button.icon_custom_emoji_id && typeof button.text === 'string') {
@@ -340,8 +357,8 @@ function replyMarkupWithPremiumIcons(replyMarkup) {
   };
   return {
     ...replyMarkup,
-    inline_keyboard: mapKeyboardButtons(replyMarkup.inline_keyboard, decorate),
-    keyboard: mapKeyboardButtons(replyMarkup.keyboard, decorate)
+    inline_keyboard: mapKeyboardButtons(replyMarkup.inline_keyboard, button => decorate(button, false)),
+    keyboard: mapKeyboardButtons(replyMarkup.keyboard, button => decorate(button, true))
   };
 }
 
@@ -387,14 +404,35 @@ function decoratePremiumHtmlSymbols(value) {
   }).join('');
 }
 
-function optionsWithPremiumIcons(options) {
+function uiTextOverrideHtml(override) {
+  const label = escapeHtml(String(override?.replacementText || '').trim());
+  if (!override?.emojiId) return label;
+  return `${premiumEmojiHtml({ id: override.emojiId, alt: override.emojiAlt || '✨' })} ${label}`.trim();
+}
+
+function applyMessageTextOverride(value, options = {}, entitiesKey = 'entities', recordText = true) {
+  if (typeof value !== 'string') return { value, options };
+  if (recordText) uiTextOverrides.record({ kind: 'message', text: value });
+  const override = uiTextOverrides.get('message', value);
+  if (!override) return { value, options };
+  const nextOptions = { ...(options || {}), parse_mode: 'HTML' };
+  delete nextOptions[entitiesKey];
+  return { value: uiTextOverrideHtml(override), options: nextOptions };
+}
+
+function optionsWithPremiumIcons(options, recordMessageText = true) {
   if (!options || typeof options !== 'object') return options;
-  const decorated = { ...options };
+  let decorated = { ...options };
+  if (typeof decorated.caption === 'string') {
+    const applied = applyMessageTextOverride(decorated.caption, decorated, 'caption_entities', recordMessageText);
+    decorated = applied.options;
+    decorated.caption = applied.value;
+  }
   if (options.reply_markup) decorated.reply_markup = replyMarkupWithPremiumIcons(options.reply_markup);
-  if (options.parse_mode === 'HTML' && typeof options.caption === 'string' && !options.caption_entities) {
-    decorated.caption = decoratePremiumHtmlSymbols(options.caption);
-  } else if (typeof options.caption === 'string' && !options.caption_entities) {
-    decorated.caption = stripOrdinaryEmojiText(options.caption, true);
+  if (decorated.parse_mode === 'HTML' && typeof decorated.caption === 'string' && !decorated.caption_entities) {
+    decorated.caption = decoratePremiumHtmlSymbols(decorated.caption);
+  } else if (typeof decorated.caption === 'string' && !decorated.caption_entities) {
+    decorated.caption = stripOrdinaryEmojiText(decorated.caption, true);
   }
   return decorated;
 }
@@ -424,7 +462,16 @@ function installPremiumEmojiButtonDecorator() {
     const original = bot[method].bind(bot);
     bot[method] = (...originalArgs) => {
       const args = [...originalArgs];
-      args[optionsIndex] = optionsWithPremiumIcons(args[optionsIndex]);
+      const destinationChatId = method.startsWith('edit')
+        ? args[optionsIndex]?.chat_id
+        : args[0];
+      const recordMessageText = config.admins.has(Number(destinationChatId));
+      if (textIndex !== null && typeof args[textIndex] === 'string') {
+        const applied = applyMessageTextOverride(args[textIndex], args[optionsIndex] || {}, 'entities', recordMessageText);
+        args[textIndex] = applied.value;
+        args[optionsIndex] = applied.options;
+      }
+      args[optionsIndex] = optionsWithPremiumIcons(args[optionsIndex], recordMessageText);
       if (textIndex !== null && typeof args[textIndex] === 'string' && !args[optionsIndex]?.entities) {
         args[textIndex] = args[optionsIndex]?.parse_mode === 'HTML'
           ? decoratePremiumHtmlSymbols(args[textIndex])
@@ -862,6 +909,7 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
     return bot.sendMessage(chatId, '⛔ إعدادات الإيموجيات المميزة متاحة للمالك الرئيسي فقط.');
   }
   const custom = premiumEmojis.listCustom();
+  const textOverrides = uiTextOverrides.list();
   const pageSize = 10;
   const pages = Math.max(1, Math.ceil(custom.length / pageSize));
   const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
@@ -871,6 +919,7 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
     '',
     `القاموس الأساسي: <b>${premiumEmojis.builtInCount()}</b> ربطاً ثنائياً جاهزاً.`,
     `الروابط التي أضفتها: <b>${custom.length}</b>.`,
+    `النصوص والأزرار التي عدّلتها: <b>${textOverrides.length}</b>.`,
     '',
     'عند إضافة منتج أو خدمة، أو عند ظهور اسم معروف في زر، يختار البوت الإيموجي تلقائياً بالعربي والإنجليزي.',
     'أرسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً. إذا كان الاسم موجوداً مسبقاً فسيُحدَّث ربطه بالإيموجي الجديد.'
@@ -883,7 +932,9 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
   }
 
   const keyboard = [
-    [emojiButton('إضافة أو تغيير ربط', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })]
+    [emojiButton('إضافة أو تغيير ربط', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })],
+    [emojiButton('البحث عن نص أو زر', PREMIUM_EMOJI.search, { callback_data: 'adm:uitext:search', style: 'primary' })],
+    [emojiButton('النصوص والأزرار المعدلة', PREMIUM_EMOJI.edit, { callback_data: 'adm:uitext:list:0', style: 'primary' })]
   ];
   for (const entry of visible) {
     keyboard.push([emojiButton(`حذف ${entry.keywordAr}`.slice(0, 48), PREMIUM_EMOJI.delete, {
@@ -899,6 +950,138 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
     keyboard.push(nav);
   }
   keyboard.push([{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]);
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+function uiTextKindLabel(kind) {
+  return kind === 'button' ? 'زر' : 'نص رسالة';
+}
+
+function uiTextPreview(value, limit = 150) {
+  const text = String(value || '').trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function currentUiTextCandidate(state) {
+  const ids = Array.isArray(state?.data?.candidateIds) ? state.data.candidateIds : [];
+  const index = Math.max(0, Number(state?.data?.candidateIndex || 0));
+  return uiTextOverrides.findCandidate(ids[index]);
+}
+
+async function showUiTextCandidate(chatId, state) {
+  const candidate = currentUiTextCandidate(state);
+  if (!candidate) {
+    await setState(chatId, { action: 'admin_ui_text_edit', step: 'query', data: {} });
+    return bot.sendMessage(chatId, 'انتهت النتائج المتاحة. أرسل كلمة أخرى للبحث، أو اكتب إغلاق للإلغاء.', {
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+  const total = Array.isArray(state?.data?.candidateIds) ? state.data.candidateIds.length : 1;
+  const index = Math.max(0, Number(state?.data?.candidateIndex || 0));
+  const lines = [
+    `${premiumEmojiHtml(PREMIUM_EMOJI.search)} <b>هل أنت تبحث عن هذا؟</b>`,
+    '',
+    `النوع: <b>${uiTextKindLabel(candidate.kind)}</b> — النتيجة ${index + 1}/${total}`,
+    `<blockquote>${escapeHtml(candidate.plainText)}</blockquote>`
+  ];
+  if (candidate.override) {
+    lines.push('', '<b>شكله المعدل حالياً:</b>', `<blockquote>${escapeHtml(candidate.override.replacementText)}</blockquote>`);
+  }
+  lines.push('', 'اكتب <b>نعم</b> لاختياره، أو اكتب <b>التالي</b> لرؤية النتيجة التالية.');
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [[
+      emojiButton('نعم، هذا هو', PREMIUM_EMOJI.success, { callback_data: 'adm:uitext:yes', style: 'success' }),
+      emojiButton('التالي', PREMIUM_EMOJI.search, { callback_data: 'adm:uitext:next', style: 'primary' })
+    ], [{ text: 'إغلاق', callback_data: 'flow:cancel', style: 'danger' }]] }
+  });
+}
+
+async function selectCurrentUiTextCandidate(user, state) {
+  const candidate = currentUiTextCandidate(state);
+  if (!candidate) {
+    await setState(user.id, { action: 'admin_ui_text_edit', step: 'query', data: {} });
+    return bot.sendMessage(user.id, 'هذه النتيجة لم تعد متاحة. أرسل كلمة أخرى للبحث.', {
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+  await setState(user.id, {
+    action: 'admin_ui_text_edit',
+    step: 'replacement',
+    data: { selectedId: candidate.id }
+  });
+  return bot.sendMessage(user.id, [
+    `${premiumEmojiHtml(PREMIUM_EMOJI.edit)} <b>تعديل ${uiTextKindLabel(candidate.kind)}</b>`,
+    '',
+    '<b>النص الكامل الحالي:</b>',
+    `<blockquote>${escapeHtml(candidate.plainText)}</blockquote>`,
+    '',
+    'أرسل الآن النص أو الاسم الجديد كاملاً.',
+    'تستطيع وضع Custom Emoji مميز مع النص، أو كتابة معرّفه هكذا: <code>[5796637619601283518] النص الجديد</code>.',
+    'إذا أرسلت الإيموجي وحده، سيبقى النص الحالي كما هو ويتغير الإيموجي فقط.',
+    'اكتب إغلاق للإلغاء.'
+  ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+}
+
+async function nextUiTextCandidate(user, state) {
+  const ids = Array.isArray(state?.data?.candidateIds) ? state.data.candidateIds : [];
+  const nextIndex = Number(state?.data?.candidateIndex || 0) + 1;
+  if (nextIndex >= ids.length) {
+    await setState(user.id, { action: 'admin_ui_text_edit', step: 'query', data: {} });
+    return bot.sendMessage(user.id, 'لا توجد نتيجة أخرى. أرسل كلمة مختلفة أو جزءاً آخر من النص للبحث من جديد.', {
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+  const nextState = {
+    action: 'admin_ui_text_edit',
+    step: 'confirm',
+    data: { ...state.data, candidateIndex: nextIndex }
+  };
+  await setState(user.id, nextState);
+  return showUiTextCandidate(user.id, nextState);
+}
+
+async function showUiTextOverridesAdmin(chatId, user, page = 0) {
+  if (!canManagePremiumEmojis(user)) {
+    return bot.sendMessage(chatId, 'إعدادات النصوص والأزرار متاحة للمالك الرئيسي فقط.');
+  }
+  const rows = uiTextOverrides.list();
+  const pageSize = 7;
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.max(0, Math.min(pages - 1, Number(page) || 0));
+  const visible = rows.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const lines = [
+    `${premiumEmojiHtml(PREMIUM_EMOJI.edit)} <b>النصوص والأزرار المعدلة</b>`,
+    '',
+    `عدد التعديلات: <b>${rows.length}</b>.`,
+    'حذف تعديل يعيد النص الأصلي فقط، ولا يحذف منتجاً أو طلباً أو مخزوناً.'
+  ];
+  if (!visible.length) lines.push('', 'لا توجد تعديلات محفوظة بعد.');
+  for (const row of visible) {
+    const icon = row.emojiId ? `${premiumEmojiHtml({ id: row.emojiId, alt: row.emojiAlt })} ` : '';
+    lines.push(
+      '',
+      `<b>${uiTextKindLabel(row.kind)}:</b> ${escapeHtml(uiTextPreview(row.originalPlainText))}`,
+      `← ${icon}${escapeHtml(uiTextPreview(row.replacementText))}`
+    );
+  }
+  const keyboard = visible.map(row => [emojiButton(
+    `إلغاء تعديل ${row.replacementText}`.slice(0, 52),
+    PREMIUM_EMOJI.delete,
+    { callback_data: `adm:uitext:askdel:${row.id}:${safePage}`, style: 'danger' }
+  )]);
+  if (pages > 1) {
+    const nav = [];
+    if (safePage > 0) nav.push({ text: 'السابق', callback_data: `adm:uitext:list:${safePage - 1}` });
+    nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop:uitextpage' });
+    if (safePage < pages - 1) nav.push({ text: 'التالي', callback_data: `adm:uitext:list:${safePage + 1}` });
+    keyboard.push(nav);
+  }
+  keyboard.push([emojiButton('بحث جديد', PREMIUM_EMOJI.search, { callback_data: 'adm:uitext:search', style: 'primary' })]);
+  keyboard.push([{ text: 'رجوع إلى الإيموجيات المميزة', callback_data: 'adm:emoji:0' }]);
   return bot.sendMessage(chatId, lines.join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
@@ -2319,7 +2502,7 @@ function productCaption(product, stock, lang, moneyContext) {
     : String(stock);
   return [
     `<b>${richName}</b>`,
-    `💵 <b>${t(lang, 'price')}:</b> ${customerMoney(product.price, moneyContext, lang)}`,
+    `💰 <b>${t(lang, 'price')}:</b> ${customerMoney(product.price, moneyContext, lang)}`,
     `📦 <b>${t(lang, 'stock')}:</b> ${stockText}`,
     `📈 <b>${t(lang, 'sold')}:</b> ${Number(descriptionData.sold || 0)}`,
     `🛡 <b>${t(lang, 'warranty')}:</b> ${richWarranty}`,
@@ -2340,29 +2523,27 @@ function productButtonRow(product, stock, lang, moneyContext) {
   let displayName = cleanProductNameForEmoji(name, descriptionData.nameEmojiAlt);
   if (nameEmoji?.id && nameEmoji.alt) displayName = cleanProductNameForEmoji(displayName, nameEmoji.alt);
   if (!displayName) displayName = name;
-  // Telegram supports one Custom Emoji per inline button. Three adjacent
-  // buttons let the product, money and box icons all remain real Custom Emoji
-  // without embedding unsupported HTML inside button text.
+  // Telegram supports one Custom Emoji per inline button. Keep each product
+  // as one wide button and reserve that icon slot for the product/service
+  // identity. Money and stock Custom Emoji remain available in the product
+  // details message, where Telegram supports multiple entities.
   const ltrIsolate = value => `⁦${String(value)}⁩`;
   const style = product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger');
-  const common = {
+  const priceText = ltrIsolate(customerMoneyCompact(product.price, moneyContext));
+  const availabilityText = product.type === 'service'
+    ? (lang === 'en' ? 'service' : 'خدمة')
+    : ltrIsolate(stock);
+  const button = {
+    text: `${displayName} | ${priceText} | ${availabilityText}`,
     callback_data: `prod:${product.id}`,
     style
   };
-  const nameButton = { text: displayName, ...common };
-  if (nameEmoji?.id) nameButton.icon_custom_emoji_id = String(nameEmoji.id);
-  else nameButton.__skipPremiumEmoji = true;
-  const priceButton = emojiButton(
-    ltrIsolate(customerMoneyCompact(product.price, moneyContext)),
-    PREMIUM_EMOJI.money,
-    common
-  );
-  const availabilityButton = product.type === 'service'
-    ? { text: lang === 'en' ? 'service' : 'خدمة', __skipPremiumEmoji: true, ...common }
-    : emojiButton(ltrIsolate(stock), PREMIUM_EMOJI.box, common);
-  return lang === 'en'
-    ? [nameButton, priceButton, availabilityButton]
-    : [availabilityButton, priceButton, nameButton];
+  const buttonEmoji = nameEmoji?.id
+    ? nameEmoji
+    : (product.type === 'service' ? null : PREMIUM_EMOJI.box);
+  if (buttonEmoji?.id) button.icon_custom_emoji_id = String(buttonEmoji.id);
+  else button.__skipPremiumEmoji = true;
+  return [button];
 }
 
 async function sendProductKeyboard(chatId, user, rows) {
@@ -3094,6 +3275,10 @@ bot.on('message', async msg => {
 
     const freshBeforeGate = await User.findByPk(user.id);
     const preGateState = parseState(freshBeforeGate);
+    if (preGateState?.action !== 'admin_ui_text_edit') {
+      const originalButtonText = uiTextOverrides.originalButtonText(msg.text);
+      if (originalButtonText) msg.text = originalButtonText;
+    }
     const supportRequested = msg.text === t('ar', 'support') || msg.text === t('en', 'support');
 
     if (!isAdmin(user.id) && preGateState?.action !== 'support_chat' && !supportRequested) {
@@ -4964,6 +5149,121 @@ async function handleStateMessage(msg, user, state) {
     }
   }
 
+  if (state.action === 'admin_ui_text_edit' && isAdmin(user.id)) {
+    if (!canManagePremiumEmojis(user)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, 'هذا الإعداد للمالك الرئيسي فقط.');
+      return true;
+    }
+    const submittedText = String(msg.text || '').trim();
+    if (state.step === 'query') {
+      if (!submittedText || submittedText.length > 120) {
+        await bot.sendMessage(user.id, 'أرسل كلمة أو جزءاً من النص أو اسم الزر، بحد أقصى 120 حرفاً.', {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      await uiTextOverrides.persistCatalog().catch(error => console.error('UI text catalog flush:', error.message));
+      const matches = uiTextOverrides.search(submittedText, 8);
+      if (!matches.length) {
+        await bot.sendMessage(user.id, [
+          'لم أجد نصاً أو زراً مشابهاً ضمن الواجهات الآمنة التي ظهرت في البوت حتى الآن.',
+          'افتح الشاشة المطلوبة مرة واحدة ثم ابحث بكلمة أوضح من النص، أو اكتب إغلاق للإلغاء.'
+        ].join('\n'), { reply_markup: cancelInlineKeyboard() });
+        return true;
+      }
+      const nextState = {
+        action: 'admin_ui_text_edit',
+        step: 'confirm',
+        data: {
+          query: submittedText,
+          candidateIds: matches.map(row => row.id),
+          candidateIndex: 0
+        }
+      };
+      await setState(user.id, nextState);
+      await showUiTextCandidate(user.id, nextState);
+      return true;
+    }
+    if (state.step === 'confirm') {
+      const answer = uiTextOverrides.normalizeText(submittedText);
+      if (['نعم', 'اي', 'ايوه', 'اجل', 'yes', 'y'].includes(answer)) {
+        await selectCurrentUiTextCandidate(user, state);
+        return true;
+      }
+      if (['التالي', 'لا', 'next', 'n', 'no'].includes(answer)) {
+        await nextUiTextCandidate(user, state);
+        return true;
+      }
+      await bot.sendMessage(user.id, 'اكتب نعم إذا كانت هذه هي النتيجة، أو التالي لعرض نتيجة أخرى.', {
+        reply_markup: cancelInlineKeyboard()
+      });
+      return true;
+    }
+    if (state.step === 'replacement') {
+      const candidate = uiTextOverrides.findCandidate(state.data?.selectedId);
+      if (!candidate) {
+        await setState(user.id, { action: 'admin_ui_text_edit', step: 'query', data: {} });
+        await bot.sendMessage(user.id, 'تعذر العثور على النص المحدد. أرسل كلمة للبحث من جديد.', {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      const rich = extractTelegramRichText(submittedText, msg.entities || []);
+      const bracketId = submittedText.match(/\[\s*(\d{5,24})\s*\]/);
+      const standaloneId = submittedText.match(/^\s*(\d{5,24})\s*$/);
+      const requestedEmojiId = String(rich.firstCustomEmojiId || bracketId?.[1] || standaloneId?.[1] || '');
+      if (requestedEmojiId && !premiumEmojis.validEmojiId(requestedEmojiId)) {
+        await bot.sendMessage(user.id, 'معرّف الإيموجي المميز غير صحيح. أرسله بين أقواس مربعة مع النص الجديد.', {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      let replacementText = String(rich.plain || submittedText || '').trim();
+      if (bracketId) replacementText = replacementText.replace(bracketId[0], ' ').replace(/\s+/g, ' ').trim();
+      if (standaloneId) replacementText = '';
+      if (rich.firstCustomEmojiId && rich.firstCustomEmojiAlt) {
+        replacementText = replacementText.replace(rich.firstCustomEmojiAlt, ' ').replace(/\s+/g, ' ').trim();
+      }
+      replacementText = stripOrdinaryEmojiText(replacementText, false).trim();
+      if (!replacementText) {
+        replacementText = String(candidate.override?.replacementText || candidate.plainText || '').trim();
+      }
+      const replacementLimit = candidate.kind === 'button' ? 64 : 700;
+      if (!replacementText || replacementText.length > replacementLimit) {
+        await bot.sendMessage(user.id, `أرسل ${candidate.kind === 'button' ? 'اسماً للزر' : 'نصاً'} لا يتجاوز ${replacementLimit} حرفاً، أو أرسل الإيموجي المميز وحده للإبقاء على النص الحالي.`, {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      try {
+        const saved = await uiTextOverrides.upsert({
+          kind: candidate.kind,
+          originalText: candidate.text,
+          replacementText,
+          emojiId: requestedEmojiId || candidate.override?.emojiId || '',
+          emojiAlt: requestedEmojiId ? (rich.firstCustomEmojiAlt || '✨') : (candidate.override?.emojiAlt || '✨'),
+          replyKeyboard: candidate.replyKeyboard === true
+        });
+        await clearState(user.id);
+        await bot.sendMessage(user.id, [
+          `${saved.emojiId ? premiumEmojiHtml({ id: saved.emojiId, alt: saved.emojiAlt }) : premiumEmojiHtml(PREMIUM_EMOJI.success)} <b>تم حفظ التعديل.</b>`,
+          `النوع: <b>${uiTextKindLabel(saved.kind)}</b>`,
+          `النص الجديد: <b>${escapeHtml(saved.replacementText)}</b>`,
+          '',
+          'سيُطبق على المطابقة الكاملة لهذا النص أو الزر، من دون تغيير المنتجات أو المخزون أو الطلبات.'
+        ].join('\n'), { parse_mode: 'HTML' });
+        await showUiTextOverridesAdmin(user.id, user, 0);
+      } catch (error) {
+        const reason = error.code === 'UI_TEXT_OVERRIDE_LIMIT'
+          ? 'وصلت للحد الأعلى من تعديلات النصوص. احذف تعديلاً قديماً ثم حاول مرة أخرى.'
+          : 'تعذر حفظ تعديل النص. حاول مرة ثانية.';
+        await bot.sendMessage(user.id, reason, { reply_markup: cancelInlineKeyboard() });
+      }
+      return true;
+    }
+  }
+
   if (state.action === 'admin_premium_emoji_add' && isAdmin(user.id)) {
     if (!canManagePremiumEmojis(user)) {
       await clearState(user.id);
@@ -6761,6 +7061,77 @@ async function handleAdminCallback(query, user, data) {
     await client.save({ fields: ['isActive'] });
     await answerCallback(query.id, client.isActive ? 'تم تفعيل API.' : 'تم إيقاف API لهذا البوت.');
     return;
+  }
+
+  if (data === 'adm:uitext:search') {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await uiTextOverrides.persistCatalog().catch(error => console.error('UI text catalog flush:', error.message));
+    await setState(user.id, { action: 'admin_ui_text_edit', step: 'query', data: {} });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      `${premiumEmojiHtml(PREMIUM_EMOJI.search)} <b>البحث عن نص أو زر</b>`,
+      '',
+      'أرسل كلمة موجودة داخل النص أو اسم الزر، أو اكتب عبارة مشابهة له.',
+      'سأعرض أقرب نتيجة كاملة وأسألك: هل أنت تبحث عن هذا؟',
+      '',
+      'للحماية، لا يفهرس هذا البحث كلمات المرور أو مفاتيح API أو بيانات التسليم الحساسة.',
+      'اكتب إغلاق للإلغاء.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data === 'adm:uitext:yes' || data === 'adm:uitext:next') {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const fresh = await User.findByPk(user.id);
+    const state = parseState(fresh);
+    if (!state || state.action !== 'admin_ui_text_edit' || state.step !== 'confirm') {
+      return answerCallback(query.id, 'انتهت جلسة البحث. ابدأ بحثاً جديداً.', true);
+    }
+    await answerCallback(query.id);
+    if (data === 'adm:uitext:yes') return selectCurrentUiTextCandidate(user, state);
+    return nextUiTextCandidate(user, state);
+  }
+
+  if (data.startsWith('adm:uitext:list:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    await answerCallback(query.id);
+    return showUiTextOverridesAdmin(query.message.chat.id, user, Number(data.split(':')[3] || 0));
+  }
+
+  if (data.startsWith('adm:uitext:askdel:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const parts = data.split(':');
+    const entryId = String(parts[3] || '');
+    const page = Math.max(0, Number(parts[4] || 0));
+    const row = uiTextOverrides.list().find(entry => entry.id === entryId);
+    if (!row) return answerCallback(query.id, 'التعديل غير موجود.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>هل تريد إلغاء هذا التعديل؟</b>',
+      '',
+      `الأصلي: <b>${escapeHtml(row.originalPlainText)}</b>`,
+      `المعدل: <b>${escapeHtml(row.replacementText)}</b>`,
+      '',
+      'سيعود النص الأصلي فقط. لن يُحذف أي منتج أو طلب أو مخزون.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        emojiButton('تأكيد إلغاء التعديل', PREMIUM_EMOJI.delete, {
+          callback_data: `adm:uitext:del:${row.id}:${page}`,
+          style: 'danger'
+        }),
+        { text: 'رجوع', callback_data: `adm:uitext:list:${page}` }
+      ]] }
+    });
+  }
+
+  if (data.startsWith('adm:uitext:del:')) {
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    const parts = data.split(':');
+    const entryId = String(parts[3] || '');
+    const page = Math.max(0, Number(parts[4] || 0));
+    const removed = await uiTextOverrides.remove(entryId);
+    await answerCallback(query.id, removed ? 'تمت إعادة النص الأصلي.' : 'التعديل ملغى أصلاً.');
+    return showUiTextOverridesAdmin(query.message.chat.id, user, page);
   }
 
   if (data === 'adm:emoji:add') {
