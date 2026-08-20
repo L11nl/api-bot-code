@@ -207,6 +207,20 @@ const OWNER_CANONICAL_UI_EMOJI_IDS = Object.freeze({
   success: '5273806972871787310',
   error: '5271934564699226262'
 });
+let sharedPremiumEmojiRevision = '';
+
+async function syncNetworkPremiumEmojiMappings({ repairProducts = false } = {}) {
+  if (!network.enabledClient()) return { changed: false, count: premiumEmojis.listCustom().length };
+  const shared = await network.getSharedPremiumEmojiMappings();
+  const revision = String(shared?.revision || '');
+  if (revision && revision === sharedPremiumEmojiRevision && premiumEmojis.loaded()) {
+    return { changed: false, count: premiumEmojis.listCustom().length };
+  }
+  const result = await premiumEmojis.replaceCustom(shared?.mappings || []);
+  sharedPremiumEmojiRevision = revision;
+  if (result.changed && repairProducts) await repairKnownProductEmojiMappings();
+  return result;
+}
 
 async function loadPersistentRuntimeConfig() {
   // One-time repair for IDs that an older release persisted before the owner
@@ -234,7 +248,16 @@ async function loadPersistentRuntimeConfig() {
     }
     premiumEmojis.setBuiltInOverride(name, emoji.id);
   }
-  await premiumEmojis.load();
+  let sharedDictionaryLoaded = false;
+  if (network.enabledClient()) {
+    try {
+      await syncNetworkPremiumEmojiMappings();
+      sharedDictionaryLoaded = true;
+    } catch (error) {
+      console.error('Shared Premium emoji startup sync:', error.message);
+    }
+  }
+  if (!sharedDictionaryLoaded) await premiumEmojis.load();
   for (const [name, emoji] of Object.entries(PREMIUM_EMOJI)) {
     const latest = premiumEmojis.getByKey(name);
     if (latest?.id) Object.assign(emoji, latest);
@@ -1012,7 +1035,8 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
     `النصوص والأزرار التي عدّلتها: <b>${textOverrides.length}</b>.`,
     '',
     'عند إضافة منتج أو خدمة، أو عند ظهور اسم معروف في زر، يختار البوت الإيموجي تلقائياً بالعربي والإنجليزي.',
-    'أرسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً. إذا كان الاسم موجوداً مسبقاً فسيُحدَّث ربطه بالإيموجي الجديد.'
+    'أرسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً. إذا كان الاسم موجوداً مسبقاً فسيُحدَّث ربطه بالإيموجي الجديد.',
+    'أي ربط تحفظه هنا يتزامن تلقائياً مع جميع بوتات الشبكة خلال 30 ثانية.'
   ];
   if (visible.length) {
     lines.push('', '<b>روابطك المخصصة:</b>');
@@ -5489,12 +5513,13 @@ async function handleStateMessage(msg, user, state) {
         const repairedProducts = await repairKnownProductEmojiMappings();
         await clearState(user.id);
         await bot.sendMessage(user.id, [
-          `${premiumEmojiHtml({ id: saved.emojiId, alt: saved.alt })} <b>تم حفظ الربط وتفعيله على البوت بالكامل.</b>`,
+          `${premiumEmojiHtml({ id: saved.emojiId, alt: saved.alt })} <b>تم حفظ الربط وتفعيله على جميع البوتات.</b>`,
           `العربي: <b>${escapeHtml(saved.keywordAr)}</b>`,
           `English: <b>${escapeHtml(saved.keywordEn)}</b>`,
+          ...(saved.autoCorrected ? ['تم تصحيح المعرّف تلقائياً لأنه كان تابعاً لخدمة معروفة أخرى.'] : []),
           ...(repairedProducts ? [`تم تصحيح الإيموجي في <b>${repairedProducts}</b> منتج موجود.`] : []),
           '',
-          'أي منتج أو خدمة أو زر يحتوي هذا الاسم سيأخذ الإيموجي تلقائياً.'
+          'أي منتج أو خدمة أو زر يحتوي هذا الاسم سيأخذ الإيموجي تلقائياً، وتتلقى بقية البوتات الربط خلال 30 ثانية.'
         ].join('\n'), { parse_mode: 'HTML' });
         await showPremiumEmojiAdmin(user.id, user);
       } catch (error) {
@@ -7377,7 +7402,7 @@ async function handleAdminCallback(query, user, data) {
     const page = Math.max(0, Number(parts[4] || 0));
     const removed = await premiumEmojis.removeCustom(entryId);
     if (removed) await repairKnownProductEmojiMappings();
-    await answerCallback(query.id, removed ? 'تم حذف الربط فقط.' : 'الربط محذوف أصلاً.');
+    await answerCallback(query.id, removed ? 'تم حذف الربط من جميع البوتات.' : 'الربط محذوف أصلاً.');
     return showPremiumEmojiAdmin(query.message.chat.id, user, page);
   }
 
@@ -8751,6 +8776,9 @@ function startNetworkAccountWatcher() {
     if (networkAccountWatcherRunning) return;
     networkAccountWatcherRunning = true;
     try {
+      await syncNetworkPremiumEmojiMappings({ repairProducts: true }).catch(error => {
+        console.error('Shared Premium emoji watcher sync:', error.message);
+      });
       await syncLocalSharedPaymentMethods();
       await network.syncPublicPaymentProfile().catch(error => console.error('Payment profile sync:', error.message));
       await processOwnedSharedPaymentRequests();

@@ -40,6 +40,7 @@ let publicPaymentProfileSyncedAt = 0;
 let masterCatalogSnapshotCache = { at: 0, products: null };
 const authClientCache = new Map();
 const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
+const PREMIUM_EMOJI_STORAGE_KEY = 'premium_emoji_keyword_map_v1';
 
 function invalidateSharedMethodsCache() { sharedMethodsCache = { at: 0, data: null }; }
 function invalidateCatalogCache() {
@@ -181,6 +182,42 @@ async function catalogSnapshot() {
   });
   masterCatalogSnapshotCache = { at: Date.now(), products: snapshot };
   return snapshot;
+}
+
+function publicPremiumEmojiMappings(rows = []) {
+  return (Array.isArray(rows) ? rows : []).slice(0, 120).map(entry => ({
+    entryId: String(entry?.entryId || entry?.id || '').trim(),
+    key: String(entry?.key || '').trim(),
+    keywordAr: String(entry?.keywordAr || '').trim(),
+    keywordEn: String(entry?.keywordEn || '').trim(),
+    emojiId: String(entry?.emojiId || entry?.id || '').trim(),
+    alt: String(entry?.alt || '✨').slice(0, 16),
+    aliases: Array.isArray(entry?.aliases)
+      ? entry.aliases.map(alias => String(alias || '').trim()).filter(Boolean).slice(0, 30)
+      : [],
+    platformKey: String(entry?.platformKey || '').trim(),
+    semanticKey: String(entry?.semanticKey || '').trim(),
+    confirmedPlatformOverride: entry?.confirmedPlatformOverride === true
+  })).filter(entry => entry.keywordAr && /^\d{5,24}$/.test(entry.emojiId));
+}
+
+async function premiumEmojiSnapshot() {
+  let rows = [];
+  try { rows = JSON.parse(await getSetting(PREMIUM_EMOJI_STORAGE_KEY, '[]')); }
+  catch { rows = []; }
+  const mappings = publicPremiumEmojiMappings(rows);
+  const revision = crypto.createHash('sha256').update(JSON.stringify(mappings)).digest('hex');
+  return { mappings, revision };
+}
+
+async function getSharedPremiumEmojiMappings() {
+  if (isMaster()) return premiumEmojiSnapshot();
+  if (!enabledClient()) return { mappings: [], revision: '' };
+  const data = await clientRequest('get', '/api/v1/premium-emojis');
+  return {
+    mappings: publicPremiumEmojiMappings(data?.mappings),
+    revision: String(data?.revision || '')
+  };
 }
 
 async function productStockProtection(merchantId, productOwnerShopId = 'master') {
@@ -1084,6 +1121,8 @@ function installMasterRoutes(app, getBot) {
     products: await catalogSnapshot()
   })));
 
+  app.get('/api/v1/premium-emojis', (req, res) => route(req, res, async () => premiumEmojiSnapshot()));
+
   app.get('/api/v1/status/me', (req, res) => route(req, res, async client => ({
     status: await ledger.commerceStatusForShop(client.shopId)
   })));
@@ -1702,6 +1741,7 @@ module.exports = {
   enabledClient,
   createClient,
   clientDatabaseSchema,
+  getSharedPremiumEmojiMappings,
   syncCatalogToLocal,
   createRemoteProduct,
   updateRemoteProduct,
