@@ -71,7 +71,6 @@ const uiTextOverrides = require('./services/uiTextOverrides');
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
 const memoryRate = new Map();
-const pendingPartnerBotTokens = new Map();
 let cachedBotUsername = '';
 let commerceStatusCache = { at: 0, value: null };
 const channelMembershipCache = new Map();
@@ -729,7 +728,6 @@ async function setState(userId, state) {
 }
 
 async function clearState(userId) {
-  pendingPartnerBotTokens.delete(Number(userId));
   await setState(userId, null);
 }
 
@@ -2475,9 +2473,10 @@ async function adminSectionMenu(section, user = null) {
 
   if (section === 'products') {
     return {
-      title: '🛍️ <b>المنتجات والمخزون</b>\nإضافة المنتجات، تعديلها، تعبئة المخزون واسترجاع أي تسليم.',
+      title: '🛍️ <b>المنتجات والمخزون</b>\nإضافة المنتجات، إضافة خدمة محلية، تعديل المخزون واسترجاع أي تسليم.',
       keyboard: [
         [{ text: '➕ إضافة منتج جديد', callback_data: 'adm:add_product', style: 'success' }],
+        [{ text: '🛠 إضافة خدمة محلية', callback_data: 'adm:add_service_local', style: 'success' }],
         [emojiButton('إدارة المنتجات', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' })],
         [{ text: '📥 إضافة مخزون', callback_data: 'adm:stock', style: 'success' }],
         [{ text: '🔎 استرجاع منتج / طلب', callback_data: 'adm:delivery_lookup' }],
@@ -4285,6 +4284,9 @@ async function finalizeNewProduct(user, data) {
       networkManaged: false,
       networkOwnerShopId: network.enabledClient() ? String(config.network.shopId || '') : (network.isMaster() ? 'master' : String(config.network.shopId || 'master')),
       networkStock: 0,
+      visibilityScope: 'private',
+      localPublicationStatus: 'published',
+      createdByAdminId: Number(user.id),
       ownerNote: 'Local service'
     });
   } else if (network.enabledClient()) {
@@ -4325,7 +4327,7 @@ async function finalizeNewProduct(user, data) {
 
   if (product.type === 'service') {
     await clearState(user.id);
-    await bot.sendMessage(user.id, '✅ تم إنشاء خدمة جديدة ونشرها. هذا النوع يطلب بيانات من الزبون ويعطيك أزرار: تم التفعيل / تأجيل / استرداد / فتح محادثة.', {
+    await bot.sendMessage(user.id, '✅ تم إنشاء خدمة محلية داخل هذا البوت فقط. لن تُرسل إلى البوت الرئيسي أو بقية بوتات الشبكة. هذا النوع يطلب بيانات من الزبون ويعطيك أزرار: تم التفعيل / تأجيل / استرداد / فتح محادثة.', {
       reply_markup: { inline_keyboard: [[{ text: 'فتح المنتج', callback_data: `adm:edit:${product.id}` }]] }
     });
     return true;
@@ -4337,6 +4339,117 @@ async function finalizeNewProduct(user, data) {
     reply_markup: cancelInlineKeyboard()
   });
   return true;
+}
+
+function railwayServiceVariableReference(serviceName, variableName) {
+  let name = String(serviceName || '').trim();
+  if (!name || /[\r\n{}]/.test(name)) name = 'Postgres قاعدة البيانات';
+  const referenceName = /^[A-Za-z0-9_-]+$/.test(name)
+    ? name
+    : `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return '${{' + referenceName + '.' + String(variableName || '').trim() + '}}';
+}
+
+function railwayEnvironmentValue(value) {
+  const text = String(value ?? '');
+  return /^[A-Za-z0-9_./:@?&=+%-]+$/.test(text) ? text : JSON.stringify(text);
+}
+
+function splitRailwayCopyChunks(rawVariables, maxLength = 230) {
+  const chunks = [];
+  let current = '';
+  for (const line of String(rawVariables || '').split('\n')) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length > maxLength && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function verifyPartnerBotToken(token) {
+  if (String(token) === String(config.token)) {
+    return { ok: false, reason: 'هذا توكن البوت الرئيسي نفسه. أنشئ بوتاً جديداً من BotFather.' };
+  }
+  try {
+    const response = await axios.get(`https://api.telegram.org/bot${token}/getMe`, {
+      timeout: 12000,
+      validateStatus: () => true
+    });
+    if (response.status !== 200 || response.data?.ok !== true || response.data?.result?.is_bot !== true) {
+      return { ok: false, reason: 'Telegram رفض التوكن. انسخه من BotFather مرة ثانية.' };
+    }
+    return {
+      ok: true,
+      username: String(response.data.result.username || '').trim()
+    };
+  } catch {
+    return { ok: false, reason: 'تعذر فحص التوكن مع Telegram الآن. أرسله مرة ثانية بعد قليل.' };
+  }
+}
+
+async function completePartnerBotSetup(user, data, partnerBotToken) {
+  const masterApiUrl = String(config.network.publicUrl || '').trim().replace(/\/$/, '');
+  if (!/^https:\/\//i.test(masterApiUrl)) {
+    throw Object.assign(new Error('MASTER_PUBLIC_URL_REQUIRED'), { code: 'MASTER_PUBLIC_URL_REQUIRED' });
+  }
+
+  const currency = ['USD', 'IQD', 'EGP'].includes(String(config.network.settlementCurrency || '').toUpperCase())
+    ? String(config.network.settlementCurrency).toUpperCase()
+    : 'USD';
+  const created = await network.createClient({
+    name: data.name,
+    ownerTelegramId: data.ownerTelegramId,
+    settlementCurrency: currency
+  });
+  const databaseReference = railwayServiceVariableReference(
+    config.railway?.databaseServiceName,
+    'DATABASE_URL'
+  );
+  const rawVariables = [
+    `BOT_TOKEN=${railwayEnvironmentValue(partnerBotToken)}`,
+    `ADMIN_IDS=${railwayEnvironmentValue(data.ownerTelegramId)}`,
+    `DATABASE_URL=${databaseReference}`,
+    `DATABASE_SCHEMA=${railwayEnvironmentValue(created.databaseSchema)}`,
+    'NETWORK_ROLE=client',
+    `NETWORK_API_URL=${railwayEnvironmentValue(masterApiUrl)}`,
+    `NETWORK_API_KEY=${railwayEnvironmentValue(created.apiKey)}`,
+    `NETWORK_SHOP_ID=${railwayEnvironmentValue(created.row.shopId)}`,
+    `NETWORK_SHOP_NAME=${railwayEnvironmentValue(created.row.name)}`,
+    `NETWORK_SETTLEMENT_CURRENCY=${currency}`
+  ].join('\n');
+  const copyChunks = splitRailwayCopyChunks(rawVariables);
+
+  await bot.sendMessage(user.id, [
+    '✅ <b>بوت الشريك صار جاهز بالكامل</b>',
+    `الاسم: <b>${escapeHtml(created.row.name)}</b>`,
+    `Shop ID: <code>${escapeHtml(created.row.shopId)}</code>`,
+    `Schema المنفصل: <code>${escapeHtml(created.databaseSchema)}</code>`,
+    '',
+    'ما يحتاج تختار عملة أو تكتب أي متغير إضافي.',
+    'داخل خدمة البوت الجديدة في Railway افتح <b>Variables → Raw Editor</b>، انسخ البلوك كاملاً والصقه ثم اضغط Deploy.',
+    '',
+    `<pre>${escapeHtml(rawVariables)}</pre>`,
+    '',
+    copyChunks.length > 1
+      ? `الأزرار بالأسفل قسمت النص بسبب حد Telegram. انسخ الأجزاء <b>كلها بالترتيب من 1 إلى ${copyChunks.length}</b> داخل Raw Editor نفسه.`
+      : 'استخدم زر النسخ بالأسفل والصق النص في Raw Editor.',
+    '🔐 لا ترسل هذا البلوك لأي شخص لأنه يحتوي توكن البوت ومفتاح الشبكة.'
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: copyChunks.map((chunk, index) => [{
+      text: copyChunks.length === 1
+        ? '📋 نسخ إعدادات Railway كاملة'
+        : `📋 نسخ الجزء ${index + 1}/${copyChunks.length}`,
+      copy_text: { text: chunk }
+    }]) }
+  });
+  await clearState(user.id);
+  return created;
 }
 
 async function handleStateMessage(msg, user, state) {
@@ -5305,7 +5418,7 @@ async function handleStateMessage(msg, user, state) {
       }
       data.name = text;
       await setState(user.id, { action: 'admin_network_add', step: 'owner', data });
-      await bot.sendMessage(user.id, '2/4 أرسل Telegram ID الرقمي لصاحب البوت.');
+      await bot.sendMessage(user.id, '2/3 أرسل Telegram ID الرقمي لصاحب البوت.');
       return true;
     }
     if (state.step === 'owner') {
@@ -5316,26 +5429,45 @@ async function handleStateMessage(msg, user, state) {
       data.ownerTelegramId = text;
       await setState(user.id, { action: 'admin_network_add', step: 'bot_token', data });
       await bot.sendMessage(user.id, [
-        '3/4 أرسل <b>BOT TOKEN</b> مالالبوت الجديد من BotFather.',
+        '3/3 أرسل <b>BOT TOKEN</b> مالالبوت الجديد من BotFather.',
         '',
-        '🔐 راح أحذف رسالتك مباشرة بعد قراءتها، وما أخزن التوكن بقاعدة البيانات.'
+        '🔐 راح أحذف رسالتك مباشرة بعد قراءتها، وأفحصه مع Telegram، وما أخزن التوكن بقاعدة البيانات.',
+        'بعدها أعطيك إعدادات Railway كاملة مباشرة بدون أي سؤال إضافي.'
       ].join('\n'), { parse_mode: 'HTML' });
       return true;
     }
     if (state.step === 'bot_token') {
+      // Delete every token attempt immediately, even when the format is wrong.
+      await bot.deleteMessage(user.id, msg.message_id).catch(() => {});
       if (!/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(text)) {
         await bot.sendMessage(user.id, '❌ صيغة BOT TOKEN مو صحيحة. انسخ التوكن كامل من BotFather.');
         return true;
       }
-      pendingPartnerBotTokens.set(Number(user.id), text);
-      await bot.deleteMessage(user.id, msg.message_id).catch(() => {});
-      await setState(user.id, { action: 'admin_network_add', step: 'currency', data });
-      await bot.sendMessage(user.id, '4/4 اختَر عملة الحساب الرئيسية لهذا الشريك:', {
-        reply_markup: { inline_keyboard: [[
-          { text: '🇮🇶 دينار عراقي', callback_data: 'adm:network_currency:IQD' },
-          { text: '🇪🇬 جنيه مصري', callback_data: 'adm:network_currency:EGP' }
-        ], [{ text: '💵 دولار', callback_data: 'adm:network_currency:USD' }]] }
-      });
+      const verification = await verifyPartnerBotToken(text);
+      if (!verification.ok) {
+        await bot.sendMessage(user.id, `❌ ${verification.reason}\nأرسل التوكن الصحيح أو اكتب إغلاق للإلغاء.`, {
+          reply_markup: cancelInlineKeyboard()
+        });
+        return true;
+      }
+      try {
+        await bot.sendMessage(user.id, verification.username
+          ? `✅ تم التحقق من @${escapeHtml(verification.username)}. جاري تجهيز متغيرات Railway...`
+          : '✅ تم التحقق من البوت. جاري تجهيز متغيرات Railway...', { parse_mode: 'HTML' });
+        await completePartnerBotSetup(user, data, text);
+      } catch (error) {
+        if (error.code === 'MASTER_PUBLIC_URL_REQUIRED') {
+          await bot.sendMessage(user.id, [
+            '❌ ما قدرت أُنشئ إعدادات مكتملة لأن رابط البوت الرئيسي غير موجود.',
+            'أنشئ Domain للبوت الرئيسي في Railway أو ضع NETWORK_PUBLIC_URL فيه، ثم أرسل توكن البوت الجديد مرة ثانية.'
+          ].join('\n'), { reply_markup: cancelInlineKeyboard() });
+        } else {
+          console.error('Partner bot setup:', error.message);
+          await bot.sendMessage(user.id, '❌ تعذر إنشاء إعدادات البوت الآن. لم يُحفظ التوكن؛ أرسله مرة ثانية للمحاولة.', {
+            reply_markup: cancelInlineKeyboard()
+          });
+        }
+      }
       return true;
     }
   }
@@ -7134,81 +7266,11 @@ async function handleAdminCallback(query, user, data) {
     if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     await setState(user.id, { action: 'admin_network_add', step: 'name', data: {} });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, '1/4 أرسل اسم صاحب البوت أو اسم المتجر، مثال: أحمد', { reply_markup: cancelInlineKeyboard() });
+    return bot.sendMessage(user.id, '1/3 أرسل اسم صاحب البوت أو اسم المتجر، مثال: أحمد', { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:network_currency:')) {
-    if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
-    const currency = data.split(':')[2];
-    if (!['USD','IQD','EGP'].includes(currency)) return answerCallback(query.id, 'عملة غير صحيحة.', true);
-    const fresh = await User.findByPk(user.id);
-    const state = parseState(fresh);
-    if (!state || state.action !== 'admin_network_add' || state.step !== 'currency') return answerCallback(query.id, 'انتهت العملية.', true);
-    const partnerBotToken = pendingPartnerBotTokens.get(Number(user.id));
-    if (!partnerBotToken) {
-      await clearState(user.id);
-      await answerCallback(query.id, 'انتهت جلسة الإعداد. أعد إضافة البوت حتى أحمي التوكن.', true);
-      return;
-    }
-    const created = await network.createClient({
-      name: state.data.name,
-      ownerTelegramId: state.data.ownerTelegramId,
-      settlementCurrency: currency
-    });
-    const rawVariablesPart1 = [
-      `BOT_TOKEN=${partnerBotToken}`,
-      `ADMIN_IDS=${state.data.ownerTelegramId}`,
-      'DATABASE_URL=${{Postgres.DATABASE_URL}}',
-      `DATABASE_SCHEMA=${created.databaseSchema}`,
-      'NETWORK_ROLE=client'
-    ].join('\n');
-    const rawVariablesPart2 = [
-      `NETWORK_API_URL=${config.network.publicUrl || 'https://YOUR-MASTER.up.railway.app'}`,
-      `NETWORK_API_KEY=${created.apiKey}`,
-      `NETWORK_SHOP_ID=${created.row.shopId}`,
-      `NETWORK_SHOP_NAME=${created.row.name}`,
-      `NETWORK_SETTLEMENT_CURRENCY=${currency}`
-    ].join('\n');
-    const rawVariables = `${rawVariablesPart1}\n${rawVariablesPart2}`;
-    const copyChunks = [];
-    let copyChunk = '';
-    for (const line of rawVariables.split('\n')) {
-      const candidate = copyChunk ? `${copyChunk}\n${line}` : line;
-      if (candidate.length > 240 && copyChunk) {
-        copyChunks.push(copyChunk);
-        copyChunk = line;
-      } else {
-        copyChunk = candidate;
-      }
-    }
-    if (copyChunk) copyChunks.push(copyChunk);
-    await clearState(user.id);
-    await answerCallback(query.id, 'جاهز للنسخ إلى Railway.');
-    return bot.sendMessage(user.id, [
-      '✅ <b>بوت الشريك صار جاهز</b>',
-      `الاسم: <b>${escapeHtml(created.row.name)}</b>`,
-      `Shop ID: <code>${escapeHtml(created.row.shopId)}</code>`,
-      `قاعدة البيانات: <b>تتكوّن تلقائياً</b> داخل Schema منفصل <code>${escapeHtml(created.databaseSchema)}</code>`,
-      '',
-      '📌 <b>شنو تسوي هسه؟</b>',
-      '1) داخل <b>نفس مشروع Railway</b> مالالبوت الرئيسي، أنشئ Service جديد وارفع نفس ملفات البوت.',
-      '2) افتح <b>Variables → Raw Editor</b>.',
-      '3) انسخ البلوك كله أدناه والصقه كما هو.',
-      '4) Deploy. انتهى — لا تضيف PostgreSQL جديد ولا تنشئ جداول بيدك.',
-      '',
-      '⚠️ لازم خدمة قاعدة البيانات داخل المشروع اسمها <b>Postgres</b> حتى يعمل السطر التلقائي <code>${{Postgres.DATABASE_URL}}</code>.',
-      '',
-      '📋 <b>اضغط مطولاً وانسخ:</b>',
-      `<pre>${escapeHtml(rawVariables)}</pre>`,
-      '',
-      '🔐 BOT TOKEN وAPI KEY أسرار. لا ترسل هذا البلوك لأي شخص غير صاحب البوت.'
-    ].join('\n'), {
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: copyChunks.map((chunk, index) => [{
-        text: `📋 نسخ الإعدادات ${index + 1}/${copyChunks.length}`,
-        copy_text: { text: chunk }
-      }]) }
-    });
+    return answerCallback(query.id, 'هذا زر من مسار قديم. الإصدار الجديد يجهز الإعدادات تلقائياً بعد إرسال التوكن.', true);
   }
 
   if (data.startsWith('adm:network_client:')) {
@@ -7962,10 +8024,28 @@ async function handleAdminCallback(query, user, data) {
         [{ text: '🔑 كود', callback_data: 'adm:newtype:code', style: 'primary' }],
         [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
         [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
-        [{ text: '🛠 تنفيذ خدمة', callback_data: 'adm:newtype:service', style: 'primary' }],
         [{ text: '👥 حساب مشترك', callback_data: 'adm:newtype:shared', style: 'primary' }],
         [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
       ] }
+    });
+  }
+
+  if (data === 'adm:add_service_local') {
+    await setState(user.id, {
+      action: 'admin_new_product',
+      step: 'nameAr',
+      data: { type: 'service', localOnly: true }
+    });
+    await answerCallback(query.id, 'إضافة خدمة محلية لهذا البوت.');
+    return bot.sendMessage(user.id, [
+      '🛠 <b>إضافة خدمة محلية</b>',
+      '',
+      'هذه الخدمة ستظهر داخل هذا البوت فقط ولن تدخل كتالوج الشبكة.',
+      '1/7 أرسل اسم الخدمة بالعربي.',
+      'تقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: cancelInlineKeyboard()
     });
   }
 
@@ -7978,6 +8058,7 @@ async function handleAdminCallback(query, user, data) {
       return answerCallback(query.id, 'عملية إضافة المنتج غير فعالة.', true);
     }
     state.data.type = type;
+    if (type === 'service') state.data.localOnly = true;
     await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: state.data });
     await answerCallback(query.id, `تم اختيار: ${productTypeLabel(type)}`);
     return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nتقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة مثل: [5221980268230882832] اسم المنتج.', {
@@ -8031,7 +8112,7 @@ async function handleAdminCallback(query, user, data) {
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
     if (type === 'service' || String(product.type || '') === 'service') {
-      return answerCallback(query.id, 'تنفيذ خدمة نوع محلي خاص. أنشئه من زر «إضافة منتج جديد» ولا يتم تحويل المنتجات إليه أو منه.', true);
+      return answerCallback(query.id, 'تنفيذ خدمة نوع محلي خاص. أنشئه من زر «إضافة خدمة محلية» ولا يتم تحويل المنتجات إليه أو منه.', true);
     }
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
     if (!network.enabledClient()) {
@@ -8225,7 +8306,10 @@ async function showAdminProducts(chatId, page = 0) {
     }]);
   }
 
-  keyboard.push([{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }]);
+  keyboard.push([
+    { text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' },
+    { text: '🛠 خدمة محلية', callback_data: 'adm:add_service_local', style: 'success' }
+  ]);
   const navigation = [];
   if (safePage > 0) navigation.push({ text: '⬅️', callback_data: `adm:products:${safePage - 1}` });
   navigation.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });

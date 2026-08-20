@@ -157,8 +157,9 @@ async function catalogSnapshot() {
     where: { isActive: true, visibilityScope: 'public' },
     order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
-  const stocks = await getProductStocksMap(products);
-  const snapshot = products.map(product => {
+  const sharedProducts = products.filter(product => String(product.type || '') !== 'service');
+  const stocks = await getProductStocksMap(sharedProducts);
+  const snapshot = sharedProducts.map(product => {
     const basePrice = Number(product.networkBasePriceUsd ?? product.price ?? 0);
     return {
       networkProductId: product.networkProductId,
@@ -334,6 +335,9 @@ async function syncCatalogToLocal(options = {}) {
 }
 
 async function createRemoteProduct(payload) {
+  if (String(payload?.type || '') === 'service') {
+    throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
+  }
   const result = await clientRequest('post', '/api/v1/products', payload);
   invalidateCatalogCache();
   return result;
@@ -1144,7 +1148,8 @@ function installMasterRoutes(app, getBot) {
     const type = String(body.type || 'free');
     if (!nameAr || nameAr.length > 160) throw new Error('INVALID_PRODUCT_NAME');
     if (!Number.isFinite(price) || price < 0 || price > 1000000) throw new Error('INVALID_PRODUCT_PRICE');
-    if (!['code', 'account', 'free', 'private', 'shared', 'service'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
+    if (type === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
+    if (!['code', 'account', 'free', 'private', 'shared'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
     if (String(body.visibilityScope || 'public').toLowerCase() !== 'public') throw new Error('NETWORK_PRODUCT_MUST_BE_PUBLIC');
     const networkProductId = newProductId();
     const [product] = await Merchant.findOrCreate({
@@ -1194,6 +1199,7 @@ function installMasterRoutes(app, getBot) {
     const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
+    if (String(changes.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
     const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
     if (changes.price !== undefined && Number(changes.price) + 1e-9 < protection.maxContributionPriceUsd) {
       throw new Error(`PRICE_BELOW_STOCK_VALUE:${protection.maxContributionPriceUsd.toFixed(2)}`);
