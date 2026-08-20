@@ -7,8 +7,8 @@ const MAX_CUSTOM_ENTRIES = 120;
 // Telegram Premium Custom Emoji IDs supplied by the store owner. Aliases are
 // deliberately bilingual so one mapping works in Arabic and English screens.
 // Keep these defaults additive: owner-created mappings are stored separately
-// in Setting and always take precedence over this list. Re-saving a known
-// name is therefore an intentional override, not an error.
+// in Setting and win when they refer to the same service. A generic manual
+// keyword must not replace a more specific platform identity.
 const BUILT_INS = [
   { key: 'iraq', id: '5221980268230882832', alt: '🇮🇶', aliases: ['العراق', 'عراقي', 'iraq', 'iraqi'] },
   { key: 'binance', id: '5875443023873053217', alt: '🟡', aliases: ['بايننس', 'بينانس', 'binance'] },
@@ -64,19 +64,19 @@ const BUILT_INS = [
   { key: 'hours24', id: '5433933799027128806', alt: '🕐', aliases: ['24 ساعة', '24 ساعه', 'خلال يوم', '24 hours', '24h'] },
   { key: 'loading', id: '5434074875817898163', alt: '⏳', aliases: ['جاري التحميل', 'جاري تحميل', 'جاري الانتظار', 'loading', 'please wait', '⏳'] },
   { key: 'play_store', id: '5775925350269719113', alt: '🎮', aliases: ['متجر بلي', 'متجر بلاي', 'جوجل بلاي', 'google play', 'play store'] },
-  { key: 'settings', id: '5801152386143620268', alt: '⚙️', aliases: ['الإعدادات', 'الاعدادات', 'إعدادات', 'اعدادات', 'settings', 'setting', '⚙️', '⚙'] },
+  { key: 'settings', id: '5801152386143620268', alt: '⚙️', aliases: ['الإعدادات', 'الاعدادات', 'إعدادات', 'اعدادات', 'لوحة الإدارة', 'لوحة الادارة', 'إدارة البوت', 'ادارة البوت', 'settings', 'setting', 'admin panel', '⚙️', '⚙'] },
   { key: 'language', id: '5798420477705719523', alt: '🌐', aliases: ['اللغة', 'تغيير اللغة', 'language', 'change language', '🌐'] },
   { key: 'purchased', id: '5796205953913196373', alt: '✅', aliases: ['تم الشراء', 'تمت العملية بنجاح', 'تمت عملية الشراء', 'purchase complete', 'purchased successfully'] },
   { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'تم الحفظ', 'save', 'saved', '💾'] },
-  { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'money', 'price', '💰'] },
-  { key: 'box', id: '5366201992970518798', alt: '📦', aliases: ['علامة الصندوق', 'الصندوق', 'المخزون', 'box', 'stock', 'package', '📦'] },
+  { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'المبلغ', 'الربح', 'الدفع', 'العملة', 'money', 'price', 'amount', 'profit', 'payment', 'currency', '💰'] },
+  { key: 'box', id: '5366201992970518798', alt: '📦', aliases: ['علامة الصندوق', 'الصندوق', 'المخزون', 'الكمية', 'المتوفر', 'box', 'stock', 'package', 'quantity', 'available', '📦'] },
 
   // Existing bot-wide icons are retained so the restoration does not regress
   // menus that already used them before the owner's new dictionary arrived.
-  { key: 'support', id: '5882260605850620296', alt: '💬', aliases: ['الدعم', 'مساعدة', 'support', 'help'] },
-  { key: 'wallet', id: '6325416826100519483', alt: '👛', aliases: ['المحفظة', 'محفظتك', 'wallet', 'balance'] },
-  { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'orders', 'my orders'] },
-  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'products', 'product'] }
+  { key: 'support', id: '5882260605850620296', alt: '💬', aliases: ['الدعم', 'الدعم الفني', 'مساعدة', 'المساعدة', 'تواصل', 'support', 'help', 'contact'] },
+  { key: 'wallet', id: '6325416826100519483', alt: '👛', aliases: ['المحفظة', 'محفظتك', 'شحن المحفظة', 'الرصيد', 'wallet', 'balance', 'top up wallet'] },
+  { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'الطلبات والتسليم', 'الطلب', 'orders', 'my orders', 'order', 'delivery'] },
+  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'إدارة المنتجات', 'ادارة المنتجات', 'المنتجات والمخزون', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'المتجر', 'products', 'product', 'store'] }
 ];
 
 // These keys identify known platforms for the conservative startup repair.
@@ -115,6 +115,9 @@ function cleanEntry(entry, source = 'custom') {
   const keywordEn = String(entry?.keywordEn || '').trim().slice(0, 80);
   const emojiId = String(entry?.emojiId || entry?.id || '').trim();
   if (!keywordAr || !validEmojiId(emojiId)) return null;
+  const aliases = [...new Set([keywordAr, keywordEn, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])].map(value => String(value || '').trim()).filter(Boolean))];
+  const storedPlatformKey = String(entry?.platformKey || '').trim();
+  const storedSemanticKey = String(entry?.semanticKey || '').trim();
   return {
     id: String(entry?.entryId || entry?.customId || entry?.rowId || '').trim() || crypto.randomBytes(6).toString('hex'),
     key: String(entry?.key || '').trim() || `custom_${crypto.randomBytes(4).toString('hex')}`,
@@ -122,7 +125,13 @@ function cleanEntry(entry, source = 'custom') {
     keywordEn,
     emojiId,
     alt: String(entry?.alt || '✨').slice(0, 16) || '✨',
-    aliases: [...new Set([keywordAr, keywordEn, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])].map(value => String(value || '').trim()).filter(Boolean))],
+    aliases,
+    platformKey: source === 'custom'
+      ? (CANONICAL_PLATFORM_KEYS.has(storedPlatformKey) ? storedPlatformKey : inferCanonicalPlatformKey(aliases))
+      : '',
+    semanticKey: source === 'custom'
+      ? (BUILT_INS.some(row => row.key === storedSemanticKey) ? storedSemanticKey : inferBuiltInKey(aliases))
+      : '',
     source
   };
 }
@@ -177,13 +186,67 @@ function normalizedAliasMatch(normalizedText, alias) {
   return (` ${normalizedText} `).includes(` ${normalizedAlias} `);
 }
 
-function resolve(value) {
-  const raw = String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
-  if (!raw) return null;
-  const normalized = normalizeKeyword(raw);
-  const candidates = [];
+function inferBuiltInKey(aliases = [], canonicalOnly = false) {
+  const matches = [];
+  for (const suppliedAlias of aliases) {
+    const normalizedSupplied = normalizeKeyword(suppliedAlias);
+    if (!normalizedSupplied) continue;
+    for (const entry of BUILT_INS) {
+      if (canonicalOnly && !CANONICAL_PLATFORM_KEYS.has(entry.key)) continue;
+      for (const builtInAlias of entry.aliases || []) {
+        const normalizedBuiltIn = normalizeKeyword(builtInAlias);
+        if (!normalizedBuiltIn) continue;
+        if (
+          normalizedSupplied === normalizedBuiltIn ||
+          (` ${normalizedSupplied} `).includes(` ${normalizedBuiltIn} `)
+        ) {
+          matches.push({
+            key: entry.key,
+            tokenCount: normalizedBuiltIn.split(' ').length,
+            aliasLength: normalizedBuiltIn.length
+          });
+        }
+      }
+    }
+  }
+  matches.sort((a, b) => b.tokenCount - a.tokenCount || b.aliasLength - a.aliasLength);
+  return matches[0]?.key || '';
+}
+
+function inferCanonicalPlatformKey(aliases = []) {
+  return inferBuiltInKey(aliases, true);
+}
+
+function candidateScore({ entry, normalizedAlias, normalizedText, rawMatched }) {
+  const exact = Boolean(normalizedAlias && normalizedText === normalizedAlias);
+  const tokenCount = normalizedAlias ? normalizedAlias.split(' ').filter(Boolean).length : 0;
+  const aliasLength = normalizedAlias.length;
   const actionKeys = new Set(['error', 'success', 'search', 'delete', 'edit', 'pin', 'lock', 'notifications_on', 'notifications_off', 'settings', 'save']);
   const genericKeys = new Set(['support', 'wallet', 'orders', 'products']);
+  const actionAtEdge = normalizedAlias && actionKeys.has(entry.key) && (
+    normalizedText === normalizedAlias ||
+    normalizedText.startsWith(`${normalizedAlias} `) ||
+    normalizedText.endsWith(` ${normalizedAlias}`)
+  );
+  // Specific meaning wins before source. A manual mapping only wins a tie
+  // against the same exact service; it cannot let a generic word such as
+  // "مشترك" or "جوجل" replace CapCut/Gmail in a composite product name.
+  return (
+    (exact ? 1000000 : 0) +
+    (tokenCount * 10000) +
+    (aliasLength * 100) +
+    (rawMatched ? 20 : 0) +
+    (entry.source === 'custom' ? 10 : 0) +
+    (actionAtEdge ? 5 : 0) -
+    (genericKeys.has(entry.key) ? 2 : 0)
+  );
+}
+
+function matchingCandidates(value) {
+  const raw = String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
+  if (!raw) return [];
+  const normalized = normalizeKeyword(raw);
+  const candidates = [];
   for (const entry of allEntries()) {
     if (!validEmojiId(entry.emojiId)) continue;
     for (const alias of entry.aliases || []) {
@@ -192,41 +255,78 @@ function resolve(value) {
       const matched = rawMatched || normalizedMatched;
       if (!matched) continue;
       const normalizedAlias = normalizeKeyword(alias);
-      const aliasLength = normalizedAlias.length || String(alias).length;
-      const exact = normalizedAlias && normalized === normalizedAlias;
-      const actionAtEdge = normalizedAlias && actionKeys.has(entry.key) && (
-        normalized === normalizedAlias || normalized.startsWith(`${normalizedAlias} `) || normalized.endsWith(` ${normalizedAlias}`)
-      );
-      const score =
-        (entry.source === 'custom' ? 20000 : 0) +
-        (rawMatched ? 5000 : 0) +
-        (exact ? 2000 : 0) +
-        (actionAtEdge ? 1000 : 0) -
-        (genericKeys.has(entry.key) ? 100 : 0) +
-        aliasLength;
-      candidates.push({ entry, score });
+      candidates.push({
+        entry,
+        alias,
+        normalizedAlias,
+        exact: Boolean(normalizedAlias && normalized === normalizedAlias),
+        score: candidateScore({ entry, normalizedAlias, normalizedText: normalized, rawMatched })
+      });
     }
   }
-  candidates.sort((a, b) => b.score - a.score);
-  if (!candidates.length) return null;
-  const winner = candidates[0].entry;
+  return candidates.sort((a, b) => b.score - a.score);
+}
+
+function candidateResult(candidate, platformKey = '') {
+  if (!candidate?.entry) return null;
+  const winner = candidate.entry;
   const inferredArabic = winner.keywordAr || (winner.aliases || []).find(alias => /[\u0600-\u06FF]/.test(String(alias))) || '';
   const inferredEnglish = winner.keywordEn || (winner.aliases || []).find(alias => /[A-Za-z]/.test(String(alias))) || '';
   return {
-    key: winner.key,
+    key: platformKey || winner.key,
+    mappingKey: winner.key,
+    platformKey: platformKey || winner.platformKey || (CANONICAL_PLATFORM_KEYS.has(winner.key) ? winner.key : ''),
     id: String(winner.emojiId),
     emojiId: String(winner.emojiId),
     alt: winner.alt || '✨',
     source: winner.source,
+    exactMatch: candidate.exact === true,
     keywordAr: inferredArabic,
     keywordEn: inferredEnglish
   };
+}
+
+function resolve(value) {
+  return candidateResult(matchingCandidates(value)[0]);
+}
+
+function selectCanonicalProductCandidate(candidates) {
+  const canonical = candidates.filter(candidate => (
+    candidate.entry.source === 'built-in' && CANONICAL_PLATFORM_KEYS.has(candidate.entry.key)
+  ));
+  if (!canonical.length) return null;
+  const matchedKeys = new Set(canonical.map(candidate => candidate.entry.key));
+  const shadowedParents = new Set();
+  const googleChildren = ['google_one', 'chrome', 'gmail', 'gemini', 'play_store', 'youtube', 'youtube_premium'];
+  if (googleChildren.some(key => matchedKeys.has(key))) shadowedParents.add('google');
+  if (matchedKeys.has('youtube_premium')) shadowedParents.add('youtube');
+  return canonical.find(candidate => !shadowedParents.has(candidate.entry.key)) || canonical[0];
+}
+
+function resolveProduct(value) {
+  const candidates = matchingCandidates(value);
+  if (!candidates.length) return null;
+  const canonicalBuiltIn = selectCanonicalProductCandidate(candidates);
+  if (!canonicalBuiltIn) return candidateResult(candidates[0]);
+
+  const platformKey = canonicalBuiltIn.entry.key;
+  const samePlatform = candidates.filter(candidate => (
+    (candidate.entry.source === 'built-in' && candidate.entry.key === platformKey) ||
+    (candidate.entry.source === 'custom' && candidate.entry.platformKey === platformKey)
+  ));
+  return candidateResult(samePlatform[0] || canonicalBuiltIn, platformKey);
 }
 
 function getByKey(key) {
   const wanted = String(key || '').trim();
   const custom = customEntries.find(entry => entry.key === wanted);
   if (custom) return { id: custom.emojiId, alt: custom.alt, key: custom.key };
+  for (let index = customEntries.length - 1; index >= 0; index -= 1) {
+    const platformOverride = customEntries[index];
+    if (platformOverride.platformKey === wanted || platformOverride.semanticKey === wanted) {
+      return { id: platformOverride.emojiId, alt: platformOverride.alt, key: wanted, mappingKey: platformOverride.key };
+    }
+  }
   const entry = BUILT_INS.find(row => row.key === wanted);
   if (!entry) return null;
   const resolved = builtInEntry(entry);
@@ -253,7 +353,9 @@ async function persistCustom() {
     keywordEn: entry.keywordEn,
     emojiId: entry.emojiId,
     alt: entry.alt,
-    aliases: entry.aliases
+    aliases: entry.aliases,
+    platformKey: entry.platformKey || '',
+    semanticKey: entry.semanticKey || ''
   }))));
 }
 
@@ -298,6 +400,7 @@ module.exports = {
   normalizeKeyword,
   validEmojiId,
   resolve,
+  resolveProduct,
   getByKey,
   setBuiltInOverride,
   listCustom,
