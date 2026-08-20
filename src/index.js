@@ -106,7 +106,7 @@ async function main() {
   if (typeof botModule.startVirtualNumbersWatcher === 'function') botModule.startVirtualNumbersWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v7.9.0 is ready');
+  console.log('CD Store v8.0.0 is ready');
 }
 
 main().catch(error => {

@@ -42,7 +42,7 @@ let masterCatalogSnapshotCache = { at: 0, products: null };
 const authClientCache = new Map();
 const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
 const PREMIUM_EMOJI_STORAGE_KEY = 'premium_emoji_keyword_map_v1';
-const CATALOG_BOOTSTRAP_STORAGE_KEY = 'network_catalog_bootstrap_v1';
+const CATALOG_BOOTSTRAP_STORAGE_KEY = 'network_catalog_bootstrap_v2';
 
 function invalidateSharedMethodsCache() { sharedMethodsCache = { at: 0, data: null }; }
 function invalidateCatalogCache() {
@@ -255,7 +255,10 @@ async function syncCatalogToLocalNow(options = {}) {
   const remoteIds = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
   const existingRows = remoteIds.length ? await Merchant.findAll({
     where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
-    attributes: ['networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt'],
+    attributes: [
+      'networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt',
+      'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt'
+    ],
     raw: true
   }) : [];
   const existing = new Map(existingRows.map(row => [String(row.networkProductId), row]));
@@ -273,9 +276,13 @@ async function syncCatalogToLocalNow(options = {}) {
     return {
       nameAr: remote.nameAr,
       nameEn: remote.nameEn,
-      price: localOverride ?? basePrice,
+      price: basePrice,
       networkBasePriceUsd: basePrice,
       localPriceOverrideUsd: localOverride,
+      localNameArOverride: prior?.localNameArOverride || null,
+      localNameEnOverride: prior?.localNameEnOverride || null,
+      localNameEmojiId: prior?.localNameEmojiId || null,
+      localNameEmojiAlt: prior?.localNameEmojiAlt || null,
       category: remote.category || 'general',
       type: remote.type || 'free',
       description: remote.description || {},
@@ -300,6 +307,7 @@ async function syncCatalogToLocalNow(options = {}) {
     await Merchant.bulkCreate(values, {
       updateOnDuplicate: [
         'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'localPriceOverrideUsd',
+        'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt',
         'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
         'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock',
         'visibilityScope', 'localPublicationStatus', 'localReviewNotifiedAt',
@@ -344,14 +352,20 @@ async function syncCatalogToLocal(options = {}) {
 async function bootstrapCatalogToLocal(options = {}) {
   if (!enabledClient()) return null;
   const marker = String(await getSetting(CATALOG_BOOTSTRAP_STORAGE_KEY, '')).trim();
-  // On upgrades, an older storefront can already contain synced/pending rows
-  // without the new marker. Treat only an actually empty shared catalog as a
-  // newly joined bot, so an upgrade never publishes pending products by itself.
-  const existingManagedCount = marker ? 0 : await Merchant.count({ where: { networkManaged: true } });
+  const [existingManagedCount, visibleManagedCount, pendingManagedCount] = marker ? [0, 0, 0] : await Promise.all([
+    Merchant.count({ where: { networkManaged: true } }),
+    Merchant.count({ where: { networkManaged: true, isActive: true, localPublicationStatus: 'published' } }),
+    Merchant.count({ where: { networkManaged: true, localPublicationStatus: 'pending' } })
+  ]);
   const firstBootstrap = !marker && existingManagedCount === 0;
+  // Repair storefronts provisioned by the older bootstrap that imported every
+  // product as pending and therefore showed an empty shop (for example Ali's
+  // newly-created bot). syncCatalogToLocal changes only pending rows, so any
+  // explicit reject/hide/delete decision remains untouched.
+  const repairPendingOnlyCatalog = !marker && existingManagedCount > 0 && visibleManagedCount === 0 && pendingManagedCount > 0;
   const products = await syncCatalogToLocal({
-    force: Boolean(options?.force) || firstBootstrap,
-    publishNew: firstBootstrap
+    force: Boolean(options?.force) || firstBootstrap || repairPendingOnlyCatalog,
+    publishNew: firstBootstrap || repairPendingOnlyCatalog
   });
   if (!marker) {
     await setSetting(CATALOG_BOOTSTRAP_STORAGE_KEY, new Date().toISOString());
@@ -359,13 +373,21 @@ async function bootstrapCatalogToLocal(options = {}) {
   return products;
 }
 
-async function createRemoteProduct(payload) {
+async function createRemoteProduct(payload, options = {}) {
   if (String(payload?.type || '') === 'service') {
     throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
   }
-  const result = await clientRequest('post', '/api/v1/products', payload);
+  const result = await clientRequest('post', '/api/v1/products', {
+    ...payload,
+    suppressNotification: Boolean(options?.suppressNotification)
+  });
   invalidateCatalogCache();
   return result;
+}
+
+async function publishRemoteProduct(networkProductId) {
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/products/${encodeURIComponent(networkProductId)}/publish-event`, {});
 }
 
 async function updateRemoteProduct(networkProductId, payload) {
@@ -490,6 +512,21 @@ async function getCounterpartyPaymentProfile(shopId) {
 async function startDebtBinancePayment(counterpartyShopId) {
   if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
   return clientRequest('post', '/api/v1/accounts/pay/start', { counterpartyShopId });
+}
+
+async function startDebtManualPayment(counterpartyShopId) {
+  if (isMaster()) {
+    const request = await ledger.createDebtPaymentRequest('master', counterpartyShopId, { method: 'manual' });
+    return { request: request.toJSON(), creditor: await paymentProfileForShop(counterpartyShopId) };
+  }
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/accounts/pay/manual/start', { counterpartyShopId });
+}
+
+async function submitDebtManualProof(requestId, proof) {
+  if (isMaster()) return { request: (await ledger.submitDebtManualProof(requestId, 'master', proof)).toJSON() };
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', `/api/v1/accounts/payments/${encodeURIComponent(requestId)}/manual-proof`, proof || {});
 }
 
 async function submitDebtBinanceOrder(requestId, orderId) {
@@ -1204,7 +1241,7 @@ function installMasterRoutes(app, getBot) {
         ownerNote: `Added via ${client.shopId}`
       }
     });
-    const event = await ledger.publishNotificationEvent({
+    const event = Boolean(body.suppressNotification) ? null : await ledger.publishNotificationEvent({
       eventType: 'new_product',
       networkProductId: product.networkProductId,
       actorShopId: client.shopId,
@@ -1216,7 +1253,29 @@ function installMasterRoutes(app, getBot) {
       }
     });
     invalidateCatalogCache();
-    return { product: { ...(product.toJSON()), price: Number(product.networkBasePriceUsd ?? product.price), stock: await getProductStock(product.id) }, eventId: Number(event.id) };
+    return { product: { ...(product.toJSON()), price: Number(product.networkBasePriceUsd ?? product.price), stock: await getProductStock(product.id) }, eventId: event ? Number(event.id) : null };
+  }));
+
+  app.post('/api/v1/products/:networkProductId/publish-event', (req, res) => route(req, res, async client => {
+    const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId, isActive: true, visibilityScope: 'public' } });
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
+    const event = await ledger.publishNotificationEvent({
+      eventType: 'new_product',
+      networkProductId: product.networkProductId,
+      actorShopId: client.shopId,
+      actorName: product.createdByDisplayName || client.name,
+      payload: {
+        nameAr: product.nameAr,
+        nameEn: product.nameEn,
+        price: Number(product.networkBasePriceUsd ?? product.price),
+        type: product.type,
+        description: product.description || {},
+        createdByAdminId: product.createdByAdminId,
+        createdByDisplayName: product.createdByDisplayName
+      }
+    });
+    return { eventId: Number(event.id) };
   }));
 
   app.patch('/api/v1/products/:networkProductId', (req, res) => route(req, res, async client => {
@@ -1241,9 +1300,10 @@ function installMasterRoutes(app, getBot) {
     if (changes.price !== undefined) {
       const nextBase = Number(changes.price);
       changes.networkBasePriceUsd = nextBase;
-      // Master's own storefront may have a local override; do not overwrite it.
+      // Keep the catalog price canonical. Master's storefront markup lives only
+      // in localPriceOverrideUsd, exactly like every client storefront.
       if (!(Number(product.localPriceOverrideUsd) > nextBase + 1e-9)) changes.localPriceOverrideUsd = null;
-      changes.price = Number(product.localPriceOverrideUsd) > nextBase + 1e-9 ? Number(product.localPriceOverrideUsd) : nextBase;
+      changes.price = nextBase;
     }
     await product.update(changes);
     invalidateCatalogCache();
@@ -1715,6 +1775,13 @@ function installMasterRoutes(app, getBot) {
     return { request: request.toJSON(), creditor: profile, accounts: await ledger.accountsForShop(client.shopId) };
   }));
 
+  app.post('/api/v1/accounts/pay/manual/start', (req, res) => route(req, res, async client => {
+    const counterpartyShopId = String(req.body?.counterpartyShopId || '').trim();
+    if (!counterpartyShopId) throw new Error('COUNTERPARTY_REQUIRED');
+    const request = await ledger.createDebtPaymentRequest(client.shopId, counterpartyShopId, { method: 'manual' });
+    return { request: request.toJSON(), creditor: await paymentProfileForShop(counterpartyShopId), accounts: await ledger.accountsForShop(client.shopId) };
+  }));
+
   // Legacy endpoint kept so old buttons still start the Binance settlement flow.
   app.post('/api/v1/accounts/pay', (req, res) => route(req, res, async client => {
     const counterpartyShopId = String(req.body?.counterpartyShopId || '').trim();
@@ -1727,6 +1794,14 @@ function installMasterRoutes(app, getBot) {
 
   app.post('/api/v1/accounts/payments/:id/order-id', (req, res) => route(req, res, async client => {
     const request = await ledger.submitDebtBinanceOrder(req.params.id, client.shopId, req.body?.orderId);
+    return { request: request.toJSON() };
+  }));
+
+  app.post('/api/v1/accounts/payments/:id/manual-proof', (req, res) => route(req, res, async client => {
+    const request = await ledger.submitDebtManualProof(req.params.id, client.shopId, {
+      base64: req.body?.base64,
+      mime: req.body?.mime
+    });
     return { request: request.toJSON() };
   }));
 
@@ -1779,6 +1854,7 @@ module.exports = {
   syncCatalogToLocal,
   bootstrapCatalogToLocal,
   createRemoteProduct,
+  publishRemoteProduct,
   updateRemoteProduct,
   deleteRemoteProduct,
   addRemoteInventory,
@@ -1792,6 +1868,8 @@ module.exports = {
   syncPublicPaymentProfile,
   getCounterpartyPaymentProfile,
   startDebtBinancePayment,
+  startDebtManualPayment,
+  submitDebtManualProof,
   submitDebtBinanceOrder,
   ownedDebtBinanceVerifications,
   finishDebtBinanceVerification,

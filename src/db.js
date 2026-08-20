@@ -90,6 +90,12 @@ const Merchant = sequelize.define('Merchant', {
   // their own schema without changing the master catalog.
   networkBasePriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
   localPriceOverrideUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  // Storefront-only presentation overrides. The shared source name/price stay
+  // untouched, especially on Master where the catalog and storefront share a row.
+  localNameArOverride: { type: DataTypes.STRING, allowNull: true },
+  localNameEnOverride: { type: DataTypes.STRING, allowNull: true },
+  localNameEmojiId: { type: DataTypes.STRING(32), allowNull: true },
+  localNameEmojiAlt: { type: DataTypes.STRING(16), allowNull: true },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'free' },
   description: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
@@ -366,11 +372,16 @@ const NetworkDebtPayment = sequelize.define('NetworkDebtPayment', {
   status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'pending' },
   requestedByShopId: { type: DataTypes.STRING(80), allowNull: false },
   confirmedByShopId: { type: DataTypes.STRING(80), allowNull: true },
-  // Network debt is settled only in USD/USDT via the creditor's Binance ID.
+  // Network debt is settled in USD/USDT either by verified Binance Order ID
+  // or by a manual proof image accepted by the creditor shop.
   binancePayId: { type: DataTypes.STRING(120), allowNull: true },
   submittedOrderId: { type: DataTypes.STRING(128), allowNull: true },
   transactionId: { type: DataTypes.STRING(128), allowNull: true },
   verificationError: { type: DataTypes.STRING(80), allowNull: true },
+  paymentMethod: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'binance' },
+  manualProofBase64: { type: DataTypes.TEXT, allowNull: true },
+  manualProofMime: { type: DataTypes.STRING(64), allowNull: true },
+  manualProofSubmittedAt: { type: DataTypes.DATE, allowNull: true },
   debtorNotified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   verifiedAt: { type: DataTypes.DATE, allowNull: true },
   rejectedAt: { type: DataTypes.DATE, allowNull: true },
@@ -670,6 +681,10 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'networkStock', { type: DataTypes.INTEGER, defaultValue: 0 });
   await addColumnIfMissing('Merchants', 'networkBasePriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
   await addColumnIfMissing('Merchants', 'localPriceOverrideUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Merchants', 'localNameArOverride', { type: DataTypes.STRING, allowNull: true });
+  await addColumnIfMissing('Merchants', 'localNameEnOverride', { type: DataTypes.STRING, allowNull: true });
+  await addColumnIfMissing('Merchants', 'localNameEmojiId', { type: DataTypes.STRING(32), allowNull: true });
+  await addColumnIfMissing('Merchants', 'localNameEmojiAlt', { type: DataTypes.STRING(16), allowNull: true });
   await addColumnIfMissing('Merchants', 'visibilityScope', { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' });
   await addColumnIfMissing('Merchants', 'localPublicationStatus', { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'published' });
   await addColumnIfMissing('Merchants', 'createdByAdminId', { type: DataTypes.BIGINT, allowNull: true });
@@ -708,6 +723,10 @@ async function initializeDatabase() {
   await addColumnIfMissing('NetworkDebtPayments', 'submittedOrderId', { type: DataTypes.STRING(128), allowNull: true });
   await addColumnIfMissing('NetworkDebtPayments', 'transactionId', { type: DataTypes.STRING(128), allowNull: true });
   await addColumnIfMissing('NetworkDebtPayments', 'verificationError', { type: DataTypes.STRING(80), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'paymentMethod', { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'binance' });
+  await addColumnIfMissing('NetworkDebtPayments', 'manualProofBase64', { type: DataTypes.TEXT, allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'manualProofMime', { type: DataTypes.STRING(64), allowNull: true });
+  await addColumnIfMissing('NetworkDebtPayments', 'manualProofSubmittedAt', { type: DataTypes.DATE, allowNull: true });
   await addColumnIfMissing('NetworkDebtPayments', 'debtorNotified', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
   await addColumnIfMissing('NetworkDebtPayments', 'verifiedAt', { type: DataTypes.DATE, allowNull: true });
 
