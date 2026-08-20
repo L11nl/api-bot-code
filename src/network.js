@@ -16,7 +16,8 @@ const {
   NetworkDebtPayment,
   getIqdRate,
   getSuperQiNumber,
-  getSetting
+  getSetting,
+  setSetting
 } = require('./db');
 const { encryptPayload, decryptPayload } = require('./cryptoStore');
 const { inventoryFingerprint, inventoryPayloadIsValid, escapeHtml } = require('./utils');
@@ -41,6 +42,7 @@ let masterCatalogSnapshotCache = { at: 0, products: null };
 const authClientCache = new Map();
 const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
 const PREMIUM_EMOJI_STORAGE_KEY = 'premium_emoji_keyword_map_v1';
+const CATALOG_BOOTSTRAP_STORAGE_KEY = 'network_catalog_bootstrap_v1';
 
 function invalidateSharedMethodsCache() { sharedMethodsCache = { at: 0, data: null }; }
 function invalidateCatalogCache() {
@@ -240,15 +242,16 @@ async function productStockProtection(merchantId, productOwnerShopId = 'master')
   };
 }
 
-async function syncCatalogToLocalNow() {
+async function syncCatalogToLocalNow(options = {}) {
   if (!enabledClient()) return null;
-  const thisShopId = String(config.network.shopId || '');
+  const publishNew = Boolean(options?.publishNew);
   const data = await clientRequest('get', '/api/v1/catalog');
   const remoteProducts = Array.isArray(data.products) ? data.products : [];
 
-  // Preserve every storefront-local decision while refreshing shared metadata.
-  // New remote products are PENDING until this bot's admin explicitly publishes
-  // them. Existing rows keep their prior published/hidden/rejected/deleted state.
+  // The first successful catalog bootstrap publishes all products that already
+  // existed when a new bot joined the network. Products first seen after that
+  // stay pending until this bot's admin prices/publishes or rejects them.
+  // Explicit published/hidden/rejected/deleted decisions always survive sync.
   const remoteIds = remoteProducts.map(remote => String(remote.networkProductId || '')).filter(Boolean);
   const existingRows = remoteIds.length ? await Merchant.findAll({
     where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
@@ -260,6 +263,10 @@ async function syncCatalogToLocalNow() {
   const values = remoteProducts.map(remote => {
     const basePrice = Number(remote.price || 0);
     const prior = existing.get(String(remote.networkProductId || '')) || null;
+    const priorPublicationStatus = String(prior?.localPublicationStatus || '').trim().toLowerCase();
+    const localPublicationStatus = !priorPublicationStatus
+      ? (publishNew ? 'published' : 'pending')
+      : (publishNew && priorPublicationStatus === 'pending' ? 'published' : priorPublicationStatus);
     const parsedOverride = prior?.localPriceOverrideUsd == null ? null : Number(prior.localPriceOverrideUsd);
     const canKeepOverride = Number.isFinite(parsedOverride) && parsedOverride > basePrice + 1e-9;
     const localOverride = canKeepOverride ? parsedOverride : null;
@@ -282,7 +289,7 @@ async function syncCatalogToLocalNow() {
       networkOwnerShopId: remote.networkOwnerShopId || null,
       networkStock: Number(remote.stock || 0),
       visibilityScope: 'public',
-      localPublicationStatus: prior?.localPublicationStatus || 'pending',
+      localPublicationStatus,
       localReviewNotifiedAt: prior?.localReviewNotifiedAt || null,
       createdByAdminId: remote.createdByAdminId || null,
       createdByDisplayName: remote.createdByDisplayName || null
@@ -319,7 +326,7 @@ async function syncCatalogToLocal(options = {}) {
     return catalogSyncCache.products;
   }
   if (catalogSyncPromise) return catalogSyncPromise;
-  catalogSyncPromise = syncCatalogToLocalNow()
+  catalogSyncPromise = syncCatalogToLocalNow(options)
     .then(products => {
       catalogSyncCache = { at: Date.now(), products: Array.isArray(products) ? products : [] };
       return catalogSyncCache.products;
@@ -332,6 +339,24 @@ async function syncCatalogToLocal(options = {}) {
     })
     .finally(() => { catalogSyncPromise = null; });
   return catalogSyncPromise;
+}
+
+async function bootstrapCatalogToLocal(options = {}) {
+  if (!enabledClient()) return null;
+  const marker = String(await getSetting(CATALOG_BOOTSTRAP_STORAGE_KEY, '')).trim();
+  // On upgrades, an older storefront can already contain synced/pending rows
+  // without the new marker. Treat only an actually empty shared catalog as a
+  // newly joined bot, so an upgrade never publishes pending products by itself.
+  const existingManagedCount = marker ? 0 : await Merchant.count({ where: { networkManaged: true } });
+  const firstBootstrap = !marker && existingManagedCount === 0;
+  const products = await syncCatalogToLocal({
+    force: Boolean(options?.force) || firstBootstrap,
+    publishNew: firstBootstrap
+  });
+  if (!marker) {
+    await setSetting(CATALOG_BOOTSTRAP_STORAGE_KEY, new Date().toISOString());
+  }
+  return products;
 }
 
 async function createRemoteProduct(payload) {
@@ -1168,6 +1193,9 @@ function installMasterRoutes(app, getBot) {
         deliveryMode: body.deliveryMode || (type === 'service' ? 'service_request' : 'instant'),
         isActive: true,
         visibilityScope: 'public',
+        // The creator's own bot already publishes its local copy. Every other
+        // storefront, including Master when a partner created the product,
+        // makes an independent publish/reject decision.
         localPublicationStatus: 'pending',
         createdByAdminId: body.createdByAdminId || null,
         createdByDisplayName: String(body.createdByDisplayName || client.name || '').slice(0, 160) || null,
@@ -1749,6 +1777,7 @@ module.exports = {
   clientDatabaseSchema,
   getSharedPremiumEmojiMappings,
   syncCatalogToLocal,
+  bootstrapCatalogToLocal,
   createRemoteProduct,
   updateRemoteProduct,
   deleteRemoteProduct,

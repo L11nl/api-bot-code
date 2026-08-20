@@ -40,6 +40,7 @@ const {
 const {
   getProductStock,
   getProductStocksMap,
+  productAccessibleInCurrentShop,
   productVisibleInCurrentShop,
   sortProductStockRows,
   listActiveProducts,
@@ -625,10 +626,22 @@ function isAdmin(id) {
   return config.admins.has(Number(id));
 }
 
+function currentProductShopId() {
+  return network.enabledClient() ? String(config.network.shopId || '') : 'master';
+}
+
+function isForeignPublicProduct(product) {
+  if (!product) return false;
+  const scope = String(product.visibilityScope || (product.type === 'service' ? 'private' : 'public')).toLowerCase();
+  if (scope !== 'public' || !product.networkProductId) return false;
+  const ownerShopId = String(product.networkOwnerShopId || '').trim();
+  if (!ownerShopId) return Boolean(product.networkManaged);
+  return ownerShopId !== currentProductShopId();
+}
+
 function canManageNetworkProduct(product) {
   if (!product) return false;
-  if (!network.enabledClient() || !product.networkManaged) return true;
-  return String(product.networkOwnerShopId || '') === String(config.network.shopId);
+  return !isForeignPublicProduct(product);
 }
 
 function networkProductBasePrice(product) {
@@ -638,7 +651,7 @@ function networkProductBasePrice(product) {
 }
 
 function hasLocalNetworkPriceOverride(product) {
-  if (!network.enabledClient() || !product?.networkManaged || canManageNetworkProduct(product)) return false;
+  if (!isForeignPublicProduct(product)) return false;
   const override = Number(product.localPriceOverrideUsd);
   const base = networkProductBasePrice(product);
   return Number.isFinite(override) && override > base + 1e-9;
@@ -646,7 +659,7 @@ function hasLocalNetworkPriceOverride(product) {
 
 function canEditProductField(product, field) {
   if (canManageNetworkProduct(product)) return true;
-  return field === 'price' && network.enabledClient() && Boolean(product?.networkManaged) && String(product?.type || '') !== 'service';
+  return field === 'price' && isForeignPublicProduct(product) && String(product?.type || '') !== 'service';
 }
 
 function canContributeStock(product) {
@@ -2887,7 +2900,7 @@ async function broadcastCopiedMessage(sourceChatId, sourceMessageId) {
 
 async function broadcastStockNotification(product, added, actorName = '') {
   if (!(await automaticNotificationsEnabled())) return { sent: 0, failed: 0, disabled: true };
-  if (!product?.isActive || !Number.isInteger(added) || added < 1) {
+  if (!product?.isActive || !productVisibleInCurrentShop(product) || !Number.isInteger(added) || added < 1) {
     return { sent: 0, failed: 0 };
   }
 
@@ -2937,7 +2950,7 @@ async function broadcastStockNotification(product, added, actorName = '') {
 
 async function broadcastNewProductNotification(product, actorName = '') {
   if (!(await automaticNotificationsEnabled())) return { sent: 0, failed: 0, disabled: true };
-  if (!product?.isActive) return { sent: 0, failed: 0 };
+  if (!product?.isActive || !productVisibleInCurrentShop(product)) return { sent: 0, failed: 0 };
 
   const users = await getBroadcastUsers();
   const stock = await getProductStock(product.id);
@@ -2978,6 +2991,64 @@ Price: <b>${customerMoney(product.price, moneyContext, lang)}</b>`
     else await wait(45);
   }
   return { sent, failed };
+}
+
+async function notifyAdminsForNetworkProductReview(product, actorName = '') {
+  if (!product?.isActive || !isForeignPublicProduct(product)) return { sent: 0, failed: 0 };
+  if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') return { sent: 0, failed: 0 };
+  if (product.localReviewNotifiedAt) return { sent: 0, failed: 0, alreadyNotified: true };
+
+  const description = parseDescription(product.description);
+  const creator = String(actorName || product.createdByDisplayName || product.networkOwnerShopId || 'إدارة متجر آخر').trim();
+  const basePrice = networkProductBasePrice(product);
+  const message = [
+    '🌐 <b>منتج عام جديد ينتظر قرارك</b>',
+    '',
+    `أضاف <b>${escapeHtml(creator)}</b> منتجاً جديداً.`,
+    `الاسم: <b>${escapeHtml(product.nameAr || product.nameEn || '—')}</b>`,
+    `النوع: <b>${escapeHtml(productTypeLabel(product.type))}</b>`,
+    `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+    `الوصف: ${escapeHtml(description.ar || '—')}`,
+    `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
+    '',
+    'اختَر تسعير المنتج ونشره داخل بوتك، أو ارفضه في هذا البوت فقط.'
+  ].join('\n');
+  let sent = 0;
+  let failed = 0;
+  for (const adminId of config.admins) {
+    try {
+      await bot.sendMessage(adminId, message, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: '💵 تسعير المنتج ونشره', callback_data: `adm:netprod:price:${product.id}`, style: 'success' }],
+          [{ text: '❌ رفض في هذا البوت فقط', callback_data: `adm:netprod:reject:${product.id}`, style: 'danger' }]
+        ] }
+      });
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(`Network product review notify ${adminId}:`, error.message);
+    }
+  }
+  if (sent > 0) {
+    product.localReviewNotifiedAt = new Date();
+    await product.save({ fields: ['localReviewNotifiedAt'] });
+  }
+  return { sent, failed };
+}
+
+async function notifyPendingNetworkProductReviews() {
+  const pending = await Merchant.findAll({
+    where: { isActive: true, visibilityScope: 'public', localPublicationStatus: 'pending' },
+    order: [['createdAt', 'ASC']],
+    limit: 100
+  });
+  for (const product of pending) {
+    if (!isForeignPublicProduct(product) || product.localReviewNotifiedAt) continue;
+    await notifyAdminsForNetworkProductReview(product).catch(error => {
+      console.error(`Pending product review ${product.id}:`, error.message);
+    });
+  }
 }
 
 async function notifyNewUser(user) {
@@ -4245,6 +4316,9 @@ async function repairLegacyFreeFragmentsLocal(product, rawText, transaction) {
 
 async function finalizeNewProduct(user, data) {
   const imageValue = data.imageValue || '-';
+  const requestedScope = String(data.scope || (data.localOnly ? 'local' : 'public')).toLowerCase();
+  const visibilityScope = requestedScope === 'local' ? 'private' : 'public';
+  const creatorDisplayName = String(user.firstName || user.username || config.network.shopName || config.network.ownerName || user.id).trim();
   const productPayload = {
     nameAr: data.nameAr,
     nameEn: data.nameEn || data.nameAr,
@@ -4268,15 +4342,19 @@ async function finalizeNewProduct(user, data) {
     },
     image: imageValue === '-' ? null : (/^https?:\/\//i.test(imageValue) ? imageValue : null),
     isActive: true,
+    visibilityScope,
+    createdByAdminId: Number(user.id),
+    createdByDisplayName: creatorDisplayName,
     sharedLimit: (data.type || 'free') === 'shared' ? 5 : 1,
     deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant'
   };
 
   const isService = productPayload.type === 'service';
+  const isLocalOnly = isService || visibilityScope === 'private';
   let product;
-  if (isService) {
-    // Service products are private to the bot/shop that created them.
-    // They are never published to the shared product catalog.
+  if (isLocalOnly) {
+    // Local products and all service products belong only to the bot/shop that
+    // created them and never enter the shared catalog.
     product = await Merchant.create({
       ...productPayload,
       image: imageValue === '-' ? null : imageValue,
@@ -4287,12 +4365,13 @@ async function finalizeNewProduct(user, data) {
       visibilityScope: 'private',
       localPublicationStatus: 'published',
       createdByAdminId: Number(user.id),
-      ownerNote: 'Local service'
+      createdByDisplayName: creatorDisplayName,
+      ownerNote: isService ? 'Local service' : 'Local product'
     });
   } else if (network.enabledClient()) {
     const remote = await network.createRemoteProduct(productPayload);
     const rp = remote.product;
-    product = await Merchant.create({
+    const localValues = {
       ...productPayload,
       image: productPayload.image || (imageValue === '-' ? null : imageValue),
       networkProductId: rp.networkProductId,
@@ -4301,8 +4380,21 @@ async function finalizeNewProduct(user, data) {
       networkStock: Number(rp.stock || 0),
       networkBasePriceUsd: Number(rp.price ?? productPayload.price),
       localPriceOverrideUsd: null,
+      visibilityScope: 'public',
+      localPublicationStatus: 'published',
+      createdByAdminId: Number(user.id),
+      createdByDisplayName: creatorDisplayName,
       ownerNote: 'Network product'
+    };
+    // The 30-second catalog watcher can observe the remote product between the
+    // API response and this local write. Reuse that row if it won the race, then
+    // mark the creator's own copy published instead of failing on the UUID.
+    const [localProduct, created] = await Merchant.findOrCreate({
+      where: { networkProductId: rp.networkProductId },
+      defaults: localValues
     });
+    if (!created) await localProduct.update(localValues);
+    product = localProduct;
   } else {
     product = await Merchant.create({
       ...productPayload,
@@ -4311,17 +4403,29 @@ async function finalizeNewProduct(user, data) {
       networkManaged: false,
       networkOwnerShopId: network.isMaster() ? 'master' : config.network.shopId,
       networkStock: 0,
+      visibilityScope: 'public',
+      localPublicationStatus: 'published',
+      createdByAdminId: Number(user.id),
+      createdByDisplayName: creatorDisplayName,
       ownerNote: null
     });
   }
 
-  if (network.isMaster() && !isService) {
+  if (network.isMaster() && !isLocalOnly) {
     await network.publishNotificationEvent({
       eventType: 'new_product',
       networkProductId: product.networkProductId,
       actorShopId: 'master',
-      actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي',
-      payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+      actorName: creatorDisplayName,
+      payload: {
+        nameAr: product.nameAr,
+        nameEn: product.nameEn,
+        price: Number(product.price),
+        type: product.type,
+        description: product.description || {},
+        createdByAdminId: Number(user.id),
+        createdByDisplayName: creatorDisplayName
+      }
     }).catch(error => console.error('Publish product notification:', error.message));
   }
 
@@ -4334,9 +4438,18 @@ async function finalizeNewProduct(user, data) {
   }
 
   await setState(user.id, { action: 'admin_add_stock', productId: product.id, afterCreate: true });
-  await bot.sendMessage(user.id, '✅ تم إنشاء المنتج ونشره. حالياً مخزونه صفر لذلك يظهر بالأحمر.\n\n' + stockPrompt(product), {
+  const publicationText = isLocalOnly
+    ? '✅ تم إنشاء المنتج محلياً داخل هذا البوت فقط.'
+    : '✅ تم إنشاء المنتج العام داخل هذا البوت، وسيصل لبقية إدارات البوتات حتى يقرر كل أدمن تسعيره ونشره أو رفضه.';
+  await bot.sendMessage(user.id, `${publicationText}\nحالياً مخزونه صفر لذلك يظهر بالأحمر.\n\n${stockPrompt(product)}`, {
     parse_mode: 'HTML',
-    reply_markup: cancelInlineKeyboard()
+    reply_markup: { inline_keyboard: [
+      [
+        { text: '✏️ تعديل المنتج', callback_data: `adm:edit:${product.id}`, style: 'primary' },
+        { text: '🗑 حذف المنتج', callback_data: `adm:delete:${product.id}`, style: 'danger' }
+      ],
+      [{ text: '❌ إغلاق إضافة المخزون', callback_data: 'flow:cancel', style: 'danger' }]
+    ] }
   });
   return true;
 }
@@ -5975,10 +6088,66 @@ async function handleStateMessage(msg, user, state) {
     return true;
   }
 
+  if (state.action === 'admin_publish_network_product') {
+    const product = await Merchant.findByPk(state.productId);
+    if (!product || !product.isActive || !isForeignPublicProduct(product)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '❌ المنتج العام غير موجود أو لم يعد متاحاً.');
+      return true;
+    }
+    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, 'ℹ️ اتخذ أدمن آخر قراراً بهذا المنتج داخل البوت قبل إكمال التسعير.');
+      return true;
+    }
+    const value = Number(String(msg.text || '').trim().replace(/,/g, ''));
+    const basePrice = networkProductBasePrice(product);
+    if (!Number.isFinite(value) || value < 0 || value > 1000000) {
+      await bot.sendMessage(user.id, '❌ السعر غير صحيح. أرسل رقماً بالدولار مثل 5 أو 1.50.');
+      return true;
+    }
+    if (value + 1e-9 < basePrice) {
+      await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأنه حق صاحب المنتج.`);
+      return true;
+    }
+
+    product.price = value;
+    product.localPriceOverrideUsd = value > basePrice + 1e-9 ? value : null;
+    product.localPublicationStatus = 'published';
+    product.localReviewNotifiedAt = new Date();
+    await product.save({ fields: ['price', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt'] });
+    await clearState(user.id);
+    const profit = Math.max(0, value - basePrice);
+    await bot.sendMessage(user.id, [
+      '✅ <b>تم تسعير المنتج ونشره داخل هذا البوت</b>',
+      `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+      `سعر البيع في بوتك: <b>${moneyUsd(value)}</b>`,
+      `ربح فرق السعر لك: <b>${moneyUsd(profit)}</b> لكل وحدة.`,
+      '',
+      'هذا القرار والسعر خاصان بهذا البوت ولا يغيّران بقية البوتات.'
+    ].join('\n'), { parse_mode: 'HTML' });
+    await broadcastNewProductNotification(product, product.createdByDisplayName || '').catch(error => {
+      console.error('Publish reviewed product notification:', error.message);
+    });
+    await showAdminProductEditor(user.id, product.id);
+    return true;
+  }
+
   if (state.action === 'admin_new_product') {
     const data = state.data || {};
     const text = String(msg.text || '').trim();
     const photoFileId = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : '';
+
+    if (state.step === 'scope') {
+      await bot.sendMessage(user.id, 'اختَر من الأزرار: منتج محلي لهذا البوت فقط، أو منتج عام يُرسل لبقية الإدارات للموافقة.', {
+        reply_markup: { inline_keyboard: [
+          [{ text: '🔒 محلي — داخل هذا البوت فقط', callback_data: 'adm:newscope:local', style: 'primary' }],
+          [{ text: '🌐 عام — لكل البوتات بعد الموافقة', callback_data: 'adm:newscope:public', style: 'success' }],
+          [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
+        ] }
+      });
+      return true;
+    }
 
     if (state.step === 'type') {
       await bot.sendMessage(user.id, 'اختَر نوع المنتج من الأزرار أدناه.', { reply_markup: cancelInlineKeyboard() });
@@ -6131,7 +6300,7 @@ async function handleStateMessage(msg, user, state) {
         return true;
       }
 
-      if (network.enabledClient() && product.networkManaged && !canManageNetworkProduct(product)) {
+      if (isForeignPublicProduct(product)) {
         const basePrice = networkProductBasePrice(product);
         if (number + 1e-9 < basePrice) {
           await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأن هذا هو سعر صاحب المنتج. تگدر تخليه نفسه أو ترفعه فقط.`);
@@ -8016,15 +8185,13 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:add_product') {
-    await setState(user.id, { action: 'admin_new_product', step: 'type', data: {} });
+    await setState(user.id, { action: 'admin_new_product', step: 'scope', data: {} });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, '➕ <b>إضافة منتج جديد</b>\n\nما نوع المنتج؟', {
+    return bot.sendMessage(user.id, '➕ <b>إضافة منتج جديد</b>\n\nوين تريد نشر المنتج؟', {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [
-        [{ text: '🔑 كود', callback_data: 'adm:newtype:code', style: 'primary' }],
-        [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
-        [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
-        [{ text: '👥 حساب مشترك', callback_data: 'adm:newtype:shared', style: 'primary' }],
+        [{ text: '🔒 محلي — داخل هذا البوت فقط', callback_data: 'adm:newscope:local', style: 'primary' }],
+        [{ text: '🌐 عام — يُعرض على كل إدارات البوتات', callback_data: 'adm:newscope:public', style: 'success' }],
         [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
       ] }
     });
@@ -8034,7 +8201,7 @@ async function handleAdminCallback(query, user, data) {
     await setState(user.id, {
       action: 'admin_new_product',
       step: 'nameAr',
-      data: { type: 'service', localOnly: true }
+      data: { type: 'service', scope: 'local', localOnly: true }
     });
     await answerCallback(query.id, 'إضافة خدمة محلية لهذا البوت.');
     return bot.sendMessage(user.id, [
@@ -8046,6 +8213,32 @@ async function handleAdminCallback(query, user, data) {
     ].join('\n'), {
       parse_mode: 'HTML',
       reply_markup: cancelInlineKeyboard()
+    });
+  }
+
+  if (data.startsWith('adm:newscope:')) {
+    const scope = data.split(':')[2];
+    if (!['local', 'public'].includes(scope)) return answerCallback(query.id, 'خيار النشر غير صحيح.', true);
+    const fresh = await User.findByPk(user.id);
+    const state = parseState(fresh);
+    if (!state || state.action !== 'admin_new_product' || state.step !== 'scope') {
+      return answerCallback(query.id, 'عملية إضافة المنتج غير فعالة.', true);
+    }
+    if (scope === 'public' && network.isClient() && !network.enabledClient()) {
+      return answerCallback(query.id, 'ربط الشبكة غير مكتمل؛ لا يمكن نشر منتج عام حالياً. اختَر محلي أو أكمل إعداد الشبكة.', true);
+    }
+    state.data.scope = scope;
+    state.data.localOnly = scope === 'local';
+    await setState(user.id, { action: 'admin_new_product', step: 'type', data: state.data });
+    await answerCallback(query.id, scope === 'local' ? 'سيُنشر داخل هذا البوت فقط.' : 'سيُرسل لبقية إدارات البوتات للموافقة والتسعير.');
+    return bot.sendMessage(user.id, 'ما نوع المنتج؟', {
+      reply_markup: { inline_keyboard: [
+        [{ text: '🔑 كود', callback_data: 'adm:newtype:code', style: 'primary' }],
+        [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
+        [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
+        [{ text: '👥 حساب مشترك', callback_data: 'adm:newtype:shared', style: 'primary' }],
+        [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
+      ] }
     });
   }
 
@@ -8080,6 +8273,56 @@ async function handleAdminCallback(query, user, data) {
     return bot.sendMessage(user.id, '7/7 اكتب الرسالة التي ستظهر للزبون ليرسل البيانات المطلوبة.\nمثال: ارسل ايميلك فقط', { reply_markup: cancelInlineKeyboard() });
   }
 
+  if (data.startsWith('adm:netprod:price:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
+    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
+      return answerCallback(query.id, 'تم اتخاذ قرار بهذا المنتج مسبقاً داخل هذا البوت.', true);
+    }
+    const basePrice = networkProductBasePrice(product);
+    await setState(user.id, { action: 'admin_publish_network_product', productId: product.id });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      `💵 <b>تسعير ونشر: ${escapeHtml(product.nameAr || product.nameEn || '')}</b>`,
+      `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+      '',
+      `أرسل سعر البيع داخل بوتك. يجب أن يكون ${moneyUsd(basePrice)} أو أكثر.`,
+      'فرق السعر فوق السعر الأساسي يكون ربحاً لهذا البوت.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:netprod:reject:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
+    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
+      return answerCallback(query.id, 'تم اتخاذ قرار بهذا المنتج مسبقاً داخل هذا البوت.', true);
+    }
+    product.localPublicationStatus = 'rejected';
+    product.localPriceOverrideUsd = null;
+    product.price = networkProductBasePrice(product);
+    product.localReviewNotifiedAt = new Date();
+    await product.save({ fields: ['localPublicationStatus', 'localPriceOverrideUsd', 'price', 'localReviewNotifiedAt'] });
+    await clearState(user.id);
+    await answerCallback(query.id, 'تم رفضه في هذا البوت فقط.');
+    return bot.sendMessage(user.id, `❌ تم رفض <b>${escapeHtml(product.nameAr || product.nameEn || '')}</b> داخل هذا البوت فقط. بقية البوتات تتخذ قرارها بشكل مستقل.`, { parse_mode: 'HTML' });
+  }
+
+  if (data.startsWith('adm:netprod:hide:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
+    product.localPublicationStatus = 'rejected';
+    product.localPriceOverrideUsd = null;
+    product.price = networkProductBasePrice(product);
+    product.localReviewNotifiedAt = new Date();
+    await product.save({ fields: ['localPublicationStatus', 'localPriceOverrideUsd', 'price', 'localReviewNotifiedAt'] });
+    await clearState(user.id);
+    await answerCallback(query.id, 'تم إخفاؤه من هذا البوت فقط.');
+    return showAdminProducts(query.message.chat.id, 0);
+  }
+
   if (data.startsWith('adm:edit:')) {
     await answerCallback(query.id);
     return showAdminProductEditor(query.message.chat.id, Number(data.split(':')[2]));
@@ -8096,7 +8339,7 @@ async function handleAdminCallback(query, user, data) {
     await answerCallback(query.id);
     const prompts = {
       nameAr: 'أرسل اسم المنتج بالعربي. تقدر تستخدم Custom Emoji Premium مباشرة أو ID بين [] مثل [5221980268230882832] اسم المنتج.',
-      price: !canManageNetworkProduct(managedProduct) && managedProduct?.networkManaged
+      price: isForeignPublicProduct(managedProduct)
         ? `أرسل السعر الذي تريد عرضه داخل بوتك فقط. أقل سعر مسموح: ${moneyUsd(networkProductBasePrice(managedProduct))}. تگدر ترفع السعر لكن ما تگدر تنزله عن سعر صاحب المنتج.`
         : 'أرسل السعر الجديد بالدولار.',
       descriptionAr: 'أرسل الوصف بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
@@ -8286,7 +8529,11 @@ function stockPrompt(product) {
 async function showAdminProducts(chatId, page = 0) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => {});
   const allProducts = await Merchant.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-  const products = allProducts.filter(productVisibleInCurrentShop);
+  const products = allProducts.filter(product => {
+    if (!productAccessibleInCurrentShop(product)) return false;
+    if (canManageNetworkProduct(product)) return true;
+    return String(product.localPublicationStatus || 'published').toLowerCase() === 'published';
+  });
   const stocks = await getProductStocksMap(products);
   const sortedRows = sortProductStockRows(products.map(product => ({
     product,
@@ -8325,23 +8572,30 @@ async function showAdminProducts(chatId, page = 0) {
 
 async function showAdminProductEditor(chatId, productId) {
   const product = await Merchant.findByPk(productId);
-  if (!product || !productVisibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
+  const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
+  if (!canManageNetworkProduct(product) && publicationStatus !== 'published') {
+    return bot.sendMessage(chatId, 'هذا المنتج غير منشور داخل هذا البوت.');
+  }
   const description = parseDescription(product.description);
   const stock = await getProductStock(product.id);
   const manageable = canManageNetworkProduct(product);
+  const foreignPublic = isForeignPublicProduct(product);
+  const scopeLabel = String(product.visibilityScope || 'public').toLowerCase() === 'private' ? 'محلي — هذا البوت فقط' : 'عام — كتالوج الشبكة';
   const text = [
     `📝 <b>${escapeHtml(product.nameAr)}</b>`,
     '',
     `النوع: <b>${productTypeLabel(product.type)}</b>`,
     `السعر: <b>${moneyUsd(product.price)}</b>`,
-    product.networkManaged && !manageable ? `السعر الأساسي لصاحب المنتج: <b>${moneyUsd(networkProductBasePrice(product))}</b>` : '',
-    product.networkManaged && !manageable && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(Number(product.price) - networkProductBasePrice(product))}</b> لكل وحدة` : '',
+    foreignPublic ? `السعر الأساسي لصاحب المنتج: <b>${moneyUsd(networkProductBasePrice(product))}</b>` : '',
+    foreignPublic && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(Number(product.price) - networkProductBasePrice(product))}</b> لكل وحدة` : '',
     `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
     product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
     `ظهور المنتج: <b>${product.isActive ? 'ظاهر' : 'مخفي'}</b>`,
+    `نطاق النشر: <b>${scopeLabel}</b>`,
     `الترجمة الإنجليزية: <b>تلقائية</b>`,
-    product.networkManaged ? `الشبكة: <b>منتج مشترك</b> — المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>` : '',
-    product.networkManaged && !manageable ? '💵 <b>صلاحيتك:</b> تگدر تغيّر سعر البيع داخل بوتك فقط، بدون تغيير سعر البوتات الثانية.' : '',
+    String(product.visibilityScope || 'public').toLowerCase() === 'public' ? `المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>${product.createdByDisplayName ? ` — ${escapeHtml(product.createdByDisplayName)}` : ''}` : '',
+    foreignPublic ? '💵 <b>صلاحيتك:</b> تگدر تغيّر سعر البيع داخل بوتك أو تخفي المنتج من بوتك، بدون تغيير بقية البوتات.' : '',
     '',
     `الوصف: ${escapeHtml(description.ar || '—')}`,
     `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
@@ -8366,6 +8620,7 @@ async function showAdminProductEditor(chatId, productId) {
   ] : [
     [{ text: '💵 تعديل سعر هذا البوت', callback_data: `adm:field:${product.id}:price`, style: 'primary' }],
     ...commonRows,
+    [{ text: '🙈 إخفاء من هذا البوت فقط', callback_data: `adm:netprod:hide:${product.id}`, style: 'danger' }],
     [{ text: '⬅️ كل المنتجات', callback_data: 'adm:products:0' }]
   ];
   await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
@@ -8619,6 +8874,8 @@ async function processSharedPaymentResults() {
 
 async function processNetworkNotificationEvents() {
   if (!network.isMaster() && !network.enabledClient()) return;
+  if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => null);
+  await notifyPendingNetworkProductReviews().catch(error => console.error('Pending product reviews:', error.message));
   const rawCursor = await getSetting('network_notification_cursor_v11', '');
   if (!rawCursor) {
     let latestId = 0;
@@ -8634,8 +8891,10 @@ async function processNetworkNotificationEvents() {
   else events = (await network.getNotificationEvents(cursor))?.events || [];
   if (!events.length) return;
 
-  if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => null);
-  const enabled = await automaticNotificationsEnabled();
+  if (network.enabledClient()) {
+    await network.syncCatalogToLocal({ force: true }).catch(() => null);
+    await notifyPendingNetworkProductReviews().catch(error => console.error('Pending product reviews after sync:', error.message));
+  }
 
   for (const event of events) {
     const eventId = Number(event.id || 0);
@@ -8643,10 +8902,13 @@ async function processNetworkNotificationEvents() {
       const product = event.networkProductId
         ? await Merchant.findOne({ where: { networkProductId: String(event.networkProductId) } })
         : null;
-      if (enabled && product?.isActive) {
-        if (event.eventType === 'new_product') {
+      if (product?.isActive) {
+        const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
+        if (event.eventType === 'new_product' && publicationStatus === 'pending' && isForeignPublicProduct(product)) {
+          await notifyAdminsForNetworkProductReview(product, event.actorName || '');
+        } else if (event.eventType === 'new_product' && productVisibleInCurrentShop(product)) {
           await broadcastNewProductNotification(product, event.actorName || '');
-        } else if (event.eventType === 'stock_added' && Number(event.amount || 0) > 0) {
+        } else if (event.eventType === 'stock_added' && Number(event.amount || 0) > 0 && productVisibleInCurrentShop(product)) {
           await broadcastStockNotification(product, Number(event.amount), event.actorName || '');
         }
       }
@@ -8860,6 +9122,11 @@ function startNetworkAccountWatcher() {
     if (networkAccountWatcherRunning) return;
     networkAccountWatcherRunning = true;
     try {
+      if (network.enabledClient()) {
+        await network.bootstrapCatalogToLocal().catch(error => {
+          console.error('Shared catalog watcher sync:', error.message);
+        });
+      }
       await syncNetworkPremiumEmojiMappings({ repairProducts: true }).catch(error => {
         console.error('Shared Premium emoji watcher sync:', error.message);
       });

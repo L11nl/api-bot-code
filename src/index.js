@@ -71,6 +71,19 @@ async function main() {
   await initializeDatabase();
   console.log('Database ready');
 
+  // Bootstrap a client storefront before Telegram starts accepting customer
+  // commands. A temporary Master/API outage must not prevent the bot itself
+  // from starting; the background watcher retries the catalog every 30s.
+  if (network.enabledClient()) {
+    startupState = 'catalog';
+    try {
+      const products = await network.bootstrapCatalogToLocal({ force: true });
+      console.log(`Shared catalog ready (${Array.isArray(products) ? products.length : 0} products)`);
+    } catch (error) {
+      console.error('Initial shared catalog sync:', error.message);
+    }
+  }
+
   startupState = 'telegram';
   const botModule = require('./bot');
   ({ bot } = botModule);
@@ -93,7 +106,7 @@ async function main() {
   if (typeof botModule.startVirtualNumbersWatcher === 'function') botModule.startVirtualNumbersWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v7.8.0 is ready');
+  console.log('CD Store v7.9.0 is ready');
 }
 
 main().catch(error => {
