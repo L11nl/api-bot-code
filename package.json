@@ -1,12 +1,12 @@
 {
   "name": "my-bot-store-clean",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "private": true,
-  "description": "Easy Telegram digital store v7 with two fully independent virtual-number providers, dynamic service ranking, 10-minute SMS timeout, per-provider profit, admin API management, notifications, direct Binance Order ID verification, translation, and Premium custom emoji support",
+  "description": "Easy Telegram digital store v7 with three independent virtual-number providers, dynamic service ranking, 10-minute SMS timeout, per-provider profit, admin API management, notifications, direct Binance Order ID verification, translation, and Premium custom emoji support",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/payments/binancePay.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/orders.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/providers/grizzly.js && node --check src/payments/binancePay.js"
   },
   "engines": {
     "node": ">=20"
