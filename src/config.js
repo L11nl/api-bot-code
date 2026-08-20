@@ -96,6 +96,8 @@ module.exports = {
     smsBowerWalletUrl: String(process.env.SMSBOWER_WALLET_URL || 'https://smsbower.page/api/payment/getActualWalletAddress').trim(),
     smsmanApiKey: String(process.env.SMSMAN_API_KEY || '').trim(),
     smsmanBaseUrl: String(process.env.SMSMAN_BASE_URL || 'https://api.sms-man.com/stubs/handler_api.php').trim(),
+    grizzlyApiKey: String(process.env.GRIZZLYSMS_API_KEY || '').trim(),
+    grizzlyBaseUrl: String(process.env.GRIZZLYSMS_BASE_URL || 'https://api.grizzlysms.com/stubs/handler_api.php').trim(),
     timeoutMs: Math.min(30000, Math.max(3000, Number(process.env.VIRTUAL_NUMBERS_TIMEOUT_MS || 12000))),
     pollIntervalMs: Math.max(5000, Number(process.env.VIRTUAL_NUMBERS_POLL_INTERVAL_MS || 7000)),
     // Virtual numbers are auto-cancelled after exactly 10 minutes if no SMS code arrives.

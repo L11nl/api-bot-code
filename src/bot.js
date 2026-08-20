@@ -183,6 +183,8 @@ const PREMIUM_EMOJI = {
   delete: premiumEmojis.getByKey('delete'),
   edit: premiumEmojis.getByKey('edit'),
   save: premiumEmojis.getByKey('save'),
+  money: premiumEmojis.getByKey('money'),
+  box: premiumEmojis.getByKey('box'),
   success: premiumEmojis.getByKey('success'),
   error: premiumEmojis.getByKey('error')
 };
@@ -195,11 +197,7 @@ async function loadPersistentRuntimeConfig() {
     const key = `premium_emoji:${name}:id`;
     const missingToken = '__CD_MISSING_SETTING__';
     const stored = await getSetting(key, missingToken);
-    if (premiumEmojis.isOwnerSuppliedKey(name)) {
-      const canonicalId = String(premiumEmojis.getByKey(name)?.id || emoji.id || '');
-      emoji.id = canonicalId;
-      if (stored === missingToken || String(stored || '') !== canonicalId) await setSetting(key, canonicalId);
-    } else if (stored === missingToken || (!String(stored || '').trim() && emoji.id)) {
+    if (stored === missingToken || (!String(stored || '').trim() && emoji.id)) {
       await setSetting(key, String(emoji.id || ''));
     } else {
       emoji.id = String(stored || '');
@@ -224,15 +222,57 @@ function premiumEmojiHtml(emoji) {
   return `<tg-emoji emoji-id="${escapeHtml(String(emoji.id))}">${escapeHtml(emoji.alt || '✨')}</tg-emoji>`;
 }
 
+const ESSENTIAL_PLAIN_EMOJI_RE = /(?:⚠\uFE0F?|⛔\uFE0F?|🚨|🛑|❗\uFE0F?|❕\uFE0F?|‼\uFE0F?|⁉\uFE0F?|⬅\uFE0F?|➡\uFE0F?|↩\uFE0F?|↪\uFE0F?|🔄)/gu;
+const ORDINARY_EMOJI_RE = /(?:[\p{Regional_Indicator}]{2}|[\p{Extended_Pictographic}](?:\uFE0F|\uFE0E)?(?:\p{Emoji_Modifier})?(?:\u200D[\p{Extended_Pictographic}](?:\uFE0F|\uFE0E)?(?:\p{Emoji_Modifier})?)*)/gu;
+
+function stripOrdinaryEmojiText(value, preserveEssential = true) {
+  const protectedSymbols = [];
+  let text = String(value || '').replace(/([#*0-9])\uFE0F?\u20E3/gu, '$1');
+  if (preserveEssential) {
+    text = text.replace(ESSENTIAL_PLAIN_EMOJI_RE, symbol => {
+      const token = `\uE000${protectedSymbols.length}\uE001`;
+      protectedSymbols.push(symbol);
+      return token;
+    });
+  }
+  text = text
+    .replace(ORDINARY_EMOJI_RE, '')
+    .replace(/\uFE0F/gu, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ');
+  protectedSymbols.forEach((symbol, index) => {
+    text = text.replace(`\uE000${index}\uE001`, symbol);
+  });
+  return text;
+}
+
 function cleanProductNameForEmoji(value, oldAlt = '') {
   let name = String(value || '').trim();
   const alt = String(oldAlt || '').trim();
   if (alt && name.startsWith(alt)) name = name.slice(alt.length).trim();
-  return name;
+  // Old product names sometimes retained these decorative symbols after the
+  // Custom Emoji entity had already been stored separately. Hide only the
+  // unwanted decoration; never rewrite the product name or inventory record.
+  return name
+    .replace(/(?:🌹|📱|📞|📲|☎️?)/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function resolvedProductNameEmoji(product) {
   return premiumEmojis.resolve(`${product?.nameAr || ''} ${product?.nameEn || ''}`);
+}
+
+function usableProductNameEmoji(...candidates) {
+  const blockedIds = new Set([
+    '5897488197650223178',
+    String(PREMIUM_EMOJI.phone?.id || '')
+  ].filter(Boolean));
+  return candidates.find(candidate => (
+    candidate?.id &&
+    !blockedIds.has(String(candidate.id)) &&
+    !/(?:🌹|📱|📞|📲|☎)/u.test(String(candidate.alt || ''))
+  )) || null;
 }
 
 async function repairKnownProductEmojiMappings() {
@@ -285,9 +325,16 @@ function mapKeyboardButtons(rows, mapper) {
 function replyMarkupWithPremiumIcons(replyMarkup) {
   if (!replyMarkup || typeof replyMarkup !== 'object') return replyMarkup;
   const decorate = button => {
-    if (!button.icon_custom_emoji_id && typeof button.text === 'string') {
+    const skipAutomaticIcon = button.__skipPremiumEmoji === true;
+    delete button.__skipPremiumEmoji;
+    if (!skipAutomaticIcon && !button.icon_custom_emoji_id && typeof button.text === 'string') {
       const emoji = premiumEmojis.resolve(button.text);
       if (emoji?.id) button.icon_custom_emoji_id = String(emoji.id);
+    }
+    if (typeof button.text === 'string') {
+      const originalText = button.text;
+      button.text = stripOrdinaryEmojiText(originalText, !button.icon_custom_emoji_id).trim();
+      if (!button.text) button.text = button.icon_custom_emoji_id ? '\u2060' : originalText;
     }
     return button;
   };
@@ -318,7 +365,11 @@ function decoratePremiumHtmlSymbols(value) {
     ['⚙️', 'settings'], ['⚙', 'settings'], ['✅', 'success'], ['❌', 'error'],
     ['🔎', 'search'], ['🔍', 'search'], ['📌', 'pin'], ['🔒', 'lock'],
     ['📱', 'phone'], ['🔔', 'notifications_on'], ['🔕', 'notifications_off'],
-    ['⏳', 'loading'], ['🌐', 'language'], ['💾', 'save']
+    ['⏳', 'loading'], ['🌐', 'language'], ['💾', 'save'],
+    ['💰', 'money'], ['📦', 'box'],
+    ['1️⃣', 'digit_1'], ['2️⃣', 'digit_2'], ['3️⃣', 'digit_3'],
+    ['4️⃣', 'digit_4'], ['5️⃣', 'digit_5'], ['6️⃣', 'digit_6'],
+    ['7️⃣', 'digit_7'], ['8️⃣', 'digit_8'], ['9️⃣', 'digit_9']
   ];
   // Never recurse into a Custom Emoji tag that was already rendered by a
   // product, service, payment method, or explicit UI helper.
@@ -330,7 +381,9 @@ function decoratePremiumHtmlSymbols(value) {
       const emoji = premiumEmojis.getByKey(key);
       if (emoji?.id) out = out.split(symbol).join(premiumEmojiHtml(emoji));
     }
-    return out;
+    return out.split(/(<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>)/gi).map(fragment => (
+      /^<tg-emoji\b/i.test(fragment) ? fragment : stripOrdinaryEmojiText(fragment, true)
+    )).join('');
   }).join('');
 }
 
@@ -340,6 +393,8 @@ function optionsWithPremiumIcons(options) {
   if (options.reply_markup) decorated.reply_markup = replyMarkupWithPremiumIcons(options.reply_markup);
   if (options.parse_mode === 'HTML' && typeof options.caption === 'string' && !options.caption_entities) {
     decorated.caption = decoratePremiumHtmlSymbols(options.caption);
+  } else if (typeof options.caption === 'string' && !options.caption_entities) {
+    decorated.caption = stripOrdinaryEmojiText(options.caption, true);
   }
   return decorated;
 }
@@ -360,6 +415,7 @@ function isPremiumButtonApiError(error) {
 function installPremiumEmojiButtonDecorator() {
   const methods = [
     ['sendMessage', 2, 1], ['editMessageText', 1, 0], ['sendPhoto', 2, null],
+    ['editMessageCaption', 1, 0],
     ['sendVideo', 2, null], ['sendAnimation', 2, null], ['sendDocument', 2, null],
     ['sendAudio', 2, null], ['sendVoice', 2, null]
   ];
@@ -369,8 +425,10 @@ function installPremiumEmojiButtonDecorator() {
     bot[method] = (...originalArgs) => {
       const args = [...originalArgs];
       args[optionsIndex] = optionsWithPremiumIcons(args[optionsIndex]);
-      if (textIndex !== null && args[optionsIndex]?.parse_mode === 'HTML' && typeof args[textIndex] === 'string' && !args[optionsIndex]?.entities) {
-        args[textIndex] = decoratePremiumHtmlSymbols(args[textIndex]);
+      if (textIndex !== null && typeof args[textIndex] === 'string' && !args[optionsIndex]?.entities) {
+        args[textIndex] = args[optionsIndex]?.parse_mode === 'HTML'
+          ? decoratePremiumHtmlSymbols(args[textIndex])
+          : stripOrdinaryEmojiText(args[textIndex], true);
       }
       return original(...args).catch(error => {
         const textHasPremium = textIndex !== null && /<tg-emoji\b/i.test(String(args[textIndex] || ''));
@@ -386,6 +444,13 @@ function installPremiumEmojiButtonDecorator() {
         return original(...retryArgs);
       });
     };
+  }
+  if (typeof bot.answerCallbackQuery === 'function') {
+    const originalAnswerCallbackQuery = bot.answerCallbackQuery.bind(bot);
+    bot.answerCallbackQuery = (callbackQueryId, options = {}) => originalAnswerCallbackQuery(callbackQueryId, {
+      ...options,
+      text: typeof options?.text === 'string' ? stripOrdinaryEmojiText(options.text, true).trim() : options?.text
+    });
   }
 }
 
@@ -704,6 +769,17 @@ function providerBalanceAdminText(status) {
   return Number.isFinite(Number(status?.balance)) ? `$${Number(status.balance).toFixed(2)}` : 'غير معروف';
 }
 
+const VIRTUAL_PROVIDER_NAMES = Object.freeze({
+  smsbower: 'SMSBower',
+  smsman: 'SMS-MAN',
+  grizzly: 'GrizzlySMS'
+});
+const VIRTUAL_PROVIDER_IDS = new Set(Object.keys(VIRTUAL_PROVIDER_NAMES));
+
+function virtualProviderName(providerId) {
+  return VIRTUAL_PROVIDER_NAMES[String(providerId || '').toLowerCase()] || 'مزود الأرقام';
+}
+
 async function showVirtualProviderAdmin(chatId, user) {
   if (!canManageVirtualProviders(user)) {
     return bot.sendMessage(chatId, '⛔ إعدادات مزودي الأرقام ومفاتيح API متاحة للمالك الرئيسي فقط.');
@@ -718,8 +794,10 @@ async function showVirtualProviderAdmin(chatId, user) {
   catch (error) { console.error('Virtual provider admin statuses:', error.message); }
   const byId = new Map(statuses.map(row => [String(row.id), row]));
   const adminById = new Map(adminRows.map(row => [String(row.id), row]));
-  const sms = { ...(byId.get('smsbower') || { id: 'smsbower', name: 'SMSBower', configured: false, keyValid: false }), ...(adminById.get('smsbower') || {}) };
-  const smsman = { ...(byId.get('smsman') || { id: 'smsman', name: 'SMS-MAN', configured: false, keyValid: false }), ...(adminById.get('smsman') || {}) };
+  const providers = [...VIRTUAL_PROVIDER_IDS].map(id => ({
+    ...(byId.get(id) || { id, name: virtualProviderName(id), configured: false, keyValid: false }),
+    ...(adminById.get(id) || {})
+  }));
 
   const serviceLine = status => {
     if (!status?.configured) return 'قائمة الخدمات: ⚪ لم تُفحص';
@@ -731,46 +809,38 @@ async function showVirtualProviderAdmin(chatId, user) {
   const lines = [
     '📱 <b>إعدادات مزود الأرقام الافتراضية</b>',
     '',
-    `الحالة العامة: ${sms.keyValid || smsman.keyValid ? '✅ يوجد موقع جاهز للبيع' : '⚠️ يحتاج إعداد API لأحد الموقعين'}`,
-    '',
-    '1️⃣ <b>الموقع الأساسي — SMSBower</b>',
-    `• مفتاح الدخول: ${sms.configured ? (sms.keyValid ? '✅ موجود وصالح' : '❌ موجود لكن الفحص فشل') : '⚠️ غير مضاف'}`,
-    `• رابط الـAPI: ${sms.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
-    `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(sms))}</b>`,
-    `• ${serviceLine(sms)}`,
-    `• الربح لكل رقم: <b>${moneyUsd(sms.profit ?? 0.15)}</b>`,
-    `• الطلبات: شراء ${Number(sms.purchased || 0)} | مكتمل ${Number(sms.completed || 0)} | نشط ${Number(sms.active || 0)}`,
-    '',
-    '2️⃣ <b>الموقع الثاني — SMS-MAN</b>',
-    `• مفتاح الدخول: ${smsman.configured ? (smsman.keyValid ? '✅ موجود وصالح' : '❌ موجود لكن الفحص فشل') : '⚠️ غير مضاف'}`,
-    `• رابط الـAPI: ${smsman.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
-    `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(smsman))}</b>`,
-    `• ${serviceLine(smsman)}`,
-    `• الربح لكل رقم: <b>${moneyUsd(smsman.profit ?? 0.15)}</b>`,
-    `• الطلبات: شراء ${Number(smsman.purchased || 0)} | مكتمل ${Number(smsman.completed || 0)} | نشط ${Number(smsman.active || 0)}`,
-    '',
-    '🔐 مفاتيح API لا تُعرض هنا نهائياً، والزر يحفظ المفتاح مشفراً ويحذف رسالتك بعد قراءتها.'
+    `الحالة العامة: ${providers.some(row => row.keyValid) ? '✅ يوجد مزود جاهز للبيع' : '⚠️ يحتاج إعداد API لأحد المزودات'}`
   ];
+  const numberLabels = ['1️⃣', '2️⃣', '3️⃣'];
+  providers.forEach((status, index) => {
+    lines.push(
+      '',
+      `${numberLabels[index] || `${index + 1}.`} <b>${escapeHtml(virtualProviderName(status.id))}</b>`,
+      `• مفتاح الدخول: ${status.configured ? (status.keyValid ? '✅ موجود وصالح' : '❌ موجود لكن الفحص فشل') : '⚠️ غير مضاف'}`,
+      `• رابط الـAPI: ${status.baseUrl ? '✅ مضبوط' : '❌ غير مضبوط'}`,
+      `• الرصيد بالموقع: <b>${escapeHtml(providerBalanceAdminText(status))}</b>`,
+      `• ${serviceLine(status)}`,
+      `• الربح لكل رقم: <b>${moneyUsd(status.profit ?? 0.15)}</b>`,
+      `• الطلبات: شراء ${Number(status.purchased || 0)} | مكتمل ${Number(status.completed || 0)} | نشط ${Number(status.active || 0)}`
+    );
+  });
+  lines.push('', 'مفاتيح API لا تُعرض هنا نهائياً، والزر يحفظ المفتاح مشفراً ويحذف رسالتك بعد قراءتها.');
+
+  const providerButtons = providers.map(status => [
+    { text: status.configured ? `تغيير API ${virtualProviderName(status.id)}` : `إضافة API ${virtualProviderName(status.id)}`, callback_data: `adm:vnprovider:key:${status.id}`, style: 'primary' },
+    { text: `ربح ${virtualProviderName(status.id)}`, callback_data: `adm:vnprovider:profit:${status.id}`, style: 'success' }
+  ]);
+  const deleteButtons = providers.map(status => [
+    { text: `حذف API ${virtualProviderName(status.id)}`, callback_data: `adm:vnprovider:clear:${status.id}`, style: 'danger' }
+  ]);
 
   return bot.sendMessage(chatId, lines.join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
-      [
-        { text: sms.configured ? '🔑 تغيير API SMSBower' : '➕ إضافة API SMSBower', callback_data: 'adm:vnprovider:key:smsbower', style: 'primary' },
-        { text: '📈 ربح SMSBower', callback_data: 'adm:vnprovider:profit:smsbower', style: 'success' }
-      ],
-      [
-        { text: smsman.configured ? '🔑 تغيير API SMS-MAN' : '➕ إضافة API SMS-MAN', callback_data: 'adm:vnprovider:key:smsman', style: 'primary' },
-        { text: '📈 ربح SMS-MAN', callback_data: 'adm:vnprovider:profit:smsman', style: 'success' }
-      ],
+      ...providerButtons,
       [{ text: '💰 شحن SMSBower', callback_data: 'adm:vnprovider:topup:smsbower', style: 'success' }],
-      [
-        { text: '🧪 فحص الموقعين', callback_data: 'adm:vnprovider:test', style: 'primary' }
-      ],
-      [
-        { text: '🗑 حذف API SMSBower', callback_data: 'adm:vnprovider:clear:smsbower', style: 'danger' },
-        { text: '🗑 حذف API SMS-MAN', callback_data: 'adm:vnprovider:clear:smsman', style: 'danger' }
-      ],
+      [{ text: 'فحص المزودات', callback_data: 'adm:vnprovider:test', style: 'primary' }],
+      ...deleteButtons,
       [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
     ] }
   });
@@ -803,7 +873,7 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
     `الروابط التي أضفتها: <b>${custom.length}</b>.`,
     '',
     'عند إضافة منتج أو خدمة، أو عند ظهور اسم معروف في زر، يختار البوت الإيموجي تلقائياً بالعربي والإنجليزي.',
-    'لإضافة ربط جديد ترسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً.'
+    'أرسل الاسم العربي فقط؛ الترجمة الإنجليزية تُنشأ وتحفظ تلقائياً. إذا كان الاسم موجوداً مسبقاً فسيُحدَّث ربطه بالإيموجي الجديد.'
   ];
   if (visible.length) {
     lines.push('', '<b>روابطك المخصصة:</b>');
@@ -813,7 +883,7 @@ async function showPremiumEmojiAdmin(chatId, user, page = 0) {
   }
 
   const keyboard = [
-    [emojiButton('إضافة ربط جديد', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })]
+    [emojiButton('إضافة أو تغيير ربط', PREMIUM_EMOJI.save, { callback_data: 'adm:emoji:add', style: 'success' })]
   ];
   for (const entry of visible) {
     keyboard.push([emojiButton(`حذف ${entry.keywordAr}`.slice(0, 48), PREMIUM_EMOJI.delete, {
@@ -1299,6 +1369,8 @@ function virtualNumberErrorText(error, lang = 'ar') {
     VIRTUAL_NUMBERS_NOT_CONFIGURED: 'خدمة الأرقام غير مهيأة.',
     PROVIDER_NOT_CONFIGURED: 'هذه الخدمة غير مفعلة حالياً.',
     PROVIDER_UNAVAILABLE: 'تعذر الاتصال بمزود الأرقام حالياً. حاول بعد قليل.',
+    SERVICE_UNAVAILABLE_REGION: 'مزود الأرقام يمنع الاتصال من منطقة السيرفر الحالية.',
+    BAD_PROVIDER_RESPONSE: 'مزود الأرقام أعاد استجابة غير متوقعة. حاول بعد قليل.',
     BAD_KEY: 'مفتاح API الخاص بمزود الأرقام غير صحيح.',
     BAD_SERVICE: 'الخدمة غير صحيحة أو لم تعد متوفرة.',
     BAD_COUNTRY: 'الدولة غير صحيحة أو لم تعد متوفرة.',
@@ -1324,6 +1396,8 @@ function virtualNumberErrorText(error, lang = 'ar') {
     VIRTUAL_NUMBERS_NOT_CONFIGURED: 'Virtual numbers are not configured.',
     PROVIDER_NOT_CONFIGURED: 'This service is not enabled right now.',
     PROVIDER_UNAVAILABLE: 'The number provider is temporarily unavailable. Try again shortly.',
+    SERVICE_UNAVAILABLE_REGION: 'The number provider blocks requests from the server region.',
+    BAD_PROVIDER_RESPONSE: 'The number provider returned an unexpected response. Try again shortly.',
     BAD_KEY: 'The provider API key is invalid.',
     BAD_SERVICE: 'The service is invalid or no longer available.',
     BAD_COUNTRY: 'The country is invalid or no longer available.',
@@ -2210,7 +2284,7 @@ async function showMain(chatId, user) {
 }
 
 function stripTelegramCustomEmojiHtml(value) {
-  return String(value || '').replace(/<tg-emoji[^>]*>/g, '').replace(/<\/tg-emoji>/g, '');
+  return String(value || '').replace(/<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>/gi, '');
 }
 
 function productCaption(product, stock, lang, moneyContext) {
@@ -2220,7 +2294,7 @@ function productCaption(product, stock, lang, moneyContext) {
   const storedNameEmoji = descriptionData.nameEmojiId
     ? { id: descriptionData.nameEmojiId, alt: descriptionData.nameEmojiAlt || '✨' }
     : null;
-  const nameEmoji = automaticNameEmoji?.id ? automaticNameEmoji : storedNameEmoji;
+  const nameEmoji = usableProductNameEmoji(automaticNameEmoji, storedNameEmoji);
   const description = lang === 'en'
     ? (descriptionData.en || descriptionData.ar || '')
     : (descriptionData.ar || descriptionData.en || '');
@@ -2228,13 +2302,10 @@ function productCaption(product, stock, lang, moneyContext) {
     ? (descriptionData.warrantyEn || descriptionData.warrantyAr || '—')
     : (descriptionData.warrantyAr || descriptionData.warrantyEn || '—');
 
-  let richName = escapeHtml(name);
-  if (automaticNameEmoji?.id) {
-    richName = `${premiumEmojiHtml(automaticNameEmoji)} ${escapeHtml(cleanProductNameForEmoji(name, descriptionData.nameEmojiAlt))}`;
-  } else if (lang === 'ar' && descriptionData.nameArHtml) richName = descriptionData.nameArHtml;
-  else if (nameEmoji?.id) {
-    richName = `${premiumEmojiHtml(nameEmoji)} ${escapeHtml(name)}`;
-  }
+  const cleanName = cleanProductNameForEmoji(name, descriptionData.nameEmojiAlt) || name;
+  const richName = nameEmoji?.id
+    ? `${premiumEmojiHtml(nameEmoji)} ${escapeHtml(cleanName)}`
+    : escapeHtml(cleanName);
 
   const richDescription = lang === 'ar' && descriptionData.descriptionArHtml
     ? descriptionData.descriptionArHtml
@@ -2258,41 +2329,57 @@ function productCaption(product, stock, lang, moneyContext) {
   ].join('\n');
 }
 
-function productButton(product, stock, lang, moneyContext) {
+function productButtonRow(product, stock, lang, moneyContext) {
   const descriptionData = parseDescription(product.description);
   const name = lang === 'en' ? (product.nameEn || product.nameAr) : (product.nameAr || product.nameEn);
   const automaticNameEmoji = resolvedProductNameEmoji(product);
   const storedNameEmoji = descriptionData.nameEmojiId
     ? { id: descriptionData.nameEmojiId, alt: descriptionData.nameEmojiAlt || '✨' }
     : null;
-  const nameEmoji = automaticNameEmoji?.id ? automaticNameEmoji : storedNameEmoji;
+  const nameEmoji = usableProductNameEmoji(automaticNameEmoji, storedNameEmoji);
   let displayName = cleanProductNameForEmoji(name, descriptionData.nameEmojiAlt);
   if (nameEmoji?.id && nameEmoji.alt) displayName = cleanProductNameForEmoji(displayName, nameEmoji.alt);
   if (!displayName) displayName = name;
-  // Unicode LTR isolates keep price and stock as separate visual blocks even inside Arabic RTL buttons.
+  // Telegram supports one Custom Emoji per inline button. Three adjacent
+  // buttons let the product, money and box icons all remain real Custom Emoji
+  // without embedding unsupported HTML inside button text.
   const ltrIsolate = value => `⁦${String(value)}⁩`;
-  const priceBadge = `💰 ${ltrIsolate(customerMoneyCompact(product.price, moneyContext))}`;
-  const stockBadge = product.type === 'service'
-    ? (lang === 'en' ? '⚙️ service' : '⚙️ خدمة')
-    : `📦 ${ltrIsolate(stock)}`;
-  const button = {
-    text: `${displayName} | ${priceBadge} | ${stockBadge}`,
+  const style = product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger');
+  const common = {
     callback_data: `prod:${product.id}`,
-    style: product.type === 'service' ? 'success' : (stock > 0 ? 'success' : 'danger')
+    style
   };
-  if (nameEmoji?.id) button.icon_custom_emoji_id = String(nameEmoji.id);
-  return button;
+  const nameButton = { text: displayName, ...common };
+  if (nameEmoji?.id) nameButton.icon_custom_emoji_id = String(nameEmoji.id);
+  else nameButton.__skipPremiumEmoji = true;
+  const priceButton = emojiButton(
+    ltrIsolate(customerMoneyCompact(product.price, moneyContext)),
+    PREMIUM_EMOJI.money,
+    common
+  );
+  const availabilityButton = product.type === 'service'
+    ? { text: lang === 'en' ? 'service' : 'خدمة', __skipPremiumEmoji: true, ...common }
+    : emojiButton(ltrIsolate(stock), PREMIUM_EMOJI.box, common);
+  return lang === 'en'
+    ? [nameButton, priceButton, availabilityButton]
+    : [availabilityButton, priceButton, nameButton];
 }
 
 async function sendProductKeyboard(chatId, user, rows) {
   const moneyContext = await customerMoneyContext(user);
-  const keyboard = rows.map(({ product, stock }) => [productButton(product, stock, user.lang, moneyContext)]);
+  const keyboard = rows.map(({ product, stock }) => productButtonRow(product, stock, user.lang, moneyContext));
   try {
     return await bot.sendMessage(chatId, t(user.lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
   } catch (error) {
     // If the bot owner does not have Telegram Premium, custom button icons can be rejected.
     if (/custom emoji|icon_custom_emoji|BUTTON/i.test(String(error.message || ''))) {
-      for (const row of keyboard) { delete row[0].icon_custom_emoji_id; delete row[0].style; }
+      for (const row of keyboard) {
+        for (const button of row) {
+          delete button.icon_custom_emoji_id;
+          delete button.__skipPremiumEmoji;
+          delete button.style;
+        }
+      }
       return bot.sendMessage(chatId, t(user.lang, 'chooseProduct'), { reply_markup: { inline_keyboard: keyboard } });
     }
     throw error;
@@ -4944,9 +5031,7 @@ async function handleStateMessage(msg, user, state) {
       } catch (error) {
         const reason = error.code === 'PREMIUM_EMOJI_LIMIT'
           ? 'وصلت للحد الأعلى للروابط المخصصة.'
-          : error.code === 'PROTECTED_PREMIUM_EMOJI_MAPPING'
-            ? `هذا الاسم مرتبط مسبقاً بإيموجيه الرسمي داخل القاموس، ولن أستبدله بمعرّف خاطئ. المعرّف الصحيح: ${error.canonical?.id || 'محفوظ بالنظام'}.`
-            : 'تعذر حفظ الربط. تحقق من الاسم ومعرّف الإيموجي.';
+          : 'تعذر حفظ الربط. تحقق من الاسم ومعرّف الإيموجي.';
         await bot.sendMessage(user.id, `❌ ${reason}`, { reply_markup: cancelInlineKeyboard() });
       }
       return true;
@@ -4959,11 +5044,13 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
       return true;
     }
-    const providerId = String(state.providerId || '').trim().toLowerCase();
-    if (!['smsbower', 'smsman'].includes(providerId)) {
+    const requestedProviderId = String(state.providerId || '').trim().toLowerCase();
+    if (!VIRTUAL_PROVIDER_IDS.has(requestedProviderId)) {
       await clearState(user.id);
       return true;
     }
+    const detectedProviderId = virtualNumbers.detectProviderFromApiInput(msg.text || '');
+    const providerId = detectedProviderId || requestedProviderId;
     const apiKey = virtualNumbers.normalizeProviderApiKeyInput(msg.text || '');
     if (!virtualNumbers.validProviderApiKeyInput(apiKey)) {
       await bot.sendMessage(user.id, '❌ صيغة المفتاح غير صحيحة. أرسل قيمة API Key أو رابط الـAPI الكامل؛ البوت يزيل المسافات الخفية تلقائياً. اكتب إغلاق للإلغاء.');
@@ -4972,13 +5059,16 @@ async function handleStateMessage(msg, user, state) {
     // The Telegram message containing the secret should disappear immediately.
     await bot.deleteMessage(user.id, msg.message_id).catch(() => {});
     try {
-      const providerName = providerId === 'smsman' ? 'SMS-MAN' : 'SMSBower';
+      const providerName = virtualProviderName(providerId);
       const result = await virtualNumbers.setProviderApiKey(providerId, apiKey);
       await clearState(user.id);
-      await bot.sendMessage(user.id, `✅ تم فحص API ${providerName} وحفظه بشكل مشفر. الرصيد الحالي: $${Number(result.balance || 0).toFixed(4)}`);
+      const detectedNote = detectedProviderId && detectedProviderId !== requestedProviderId
+        ? `\nتم التعرف تلقائياً أن المفتاح يخص ${providerName} وحُفظ في مكانه الصحيح.`
+        : '';
+      await bot.sendMessage(user.id, `✅ تم فحص API ${providerName} وحفظه بشكل مشفر. الرصيد الحالي: $${Number(result.balance || 0).toFixed(4)}${detectedNote}`);
       await showVirtualProviderAdmin(user.id, user);
     } catch (error) {
-      const providerName = providerId === 'smsman' ? 'SMS-MAN' : 'SMSBower';
+      const providerName = virtualProviderName(providerId);
       const badKeyHint = String(error.code || '') === 'BAD_KEY'
         ? `\n\nالموقع <b>${providerName}</b> نفسه رفض المفتاح بعد تنظيفه. تأكد أن المفتاح صادر من حساب ${providerName} وأنك اخترت الموقع الصحيح. يقبل البوت المفتاح وحده أو رابط الـAPI الكامل.`
         : '';
@@ -4998,7 +5088,7 @@ async function handleStateMessage(msg, user, state) {
     }
     const providerId = String(state.providerId || '').trim().toLowerCase();
     const value = Number(String(msg.text || '').trim());
-    if (!['smsbower', 'smsman'].includes(providerId) || !Number.isFinite(value) || value < 0 || value > 100) {
+    if (!VIRTUAL_PROVIDER_IDS.has(providerId) || !Number.isFinite(value) || value < 0 || value > 100) {
       await bot.sendMessage(user.id, '❌ أرسل قيمة الربح بالدولار، مثال: 0.15 أو 0.20.');
       return true;
     }
@@ -6678,10 +6768,11 @@ async function handleAdminCallback(query, user, data) {
     await setState(user.id, { action: 'admin_premium_emoji_add', step: 'keyword_ar', data: {} });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, [
-      `${premiumEmojiHtml(PREMIUM_EMOJI.edit)} <b>إضافة إيموجي مميز</b>`,
+      `${premiumEmojiHtml(PREMIUM_EMOJI.edit)} <b>إضافة أو تغيير إيموجي مميز</b>`,
       '',
       'أرسل الاسم أو المعنى <b>بالعربية فقط</b>، مثال: <code>كانفا</code>.',
       'سأولّد الاسم الإنجليزي وأزامنه تلقائياً، ثم أطلب منك الإيموجي.',
+      'إذا كان الاسم محفوظاً من قبل، سيتم استبدال ربطه بالإيموجي الجديد.',
       'اكتب إغلاق للإلغاء.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
@@ -6739,8 +6830,8 @@ async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:vnprovider:key:')) {
     if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
-    if (!['smsbower', 'smsman'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
-    const providerName = providerId === 'smsman' ? 'SMS-MAN' : 'SMSBower';
+    if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    const providerName = virtualProviderName(providerId);
     await setState(user.id, { action: 'admin_virtual_provider_api_key', providerId });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, [
@@ -6754,21 +6845,21 @@ async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:vnprovider:clear:')) {
     if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
-    if (!['smsbower', 'smsman'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
     try {
       await virtualNumbers.removeProviderApiKey(providerId);
     } catch (error) {
       return answerCallback(query.id, virtualNumberErrorText(error, 'ar'), true);
     }
-    await answerCallback(query.id, providerId === 'smsman' ? 'تم حذف API SMS-MAN المحفوظ داخل البوت.' : 'تم حذف API SMSBower المحفوظ داخل البوت.');
+    await answerCallback(query.id, `تم حذف API ${virtualProviderName(providerId)} المحفوظ داخل البوت.`);
     return showVirtualProviderAdmin(query.message.chat.id, user);
   }
 
   if (data.startsWith('adm:vnprovider:profit:')) {
     if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
-    if (!['smsbower', 'smsman'].includes(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
-    const providerName = providerId === 'smsman' ? 'SMS-MAN' : 'SMSBower';
+    if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
+    const providerName = virtualProviderName(providerId);
     const current = await virtualNumbers.getProviderProfit(providerId);
     await setState(user.id, { action: 'admin_virtual_provider_profit', providerId });
     await answerCallback(query.id);
@@ -6781,7 +6872,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data === 'adm:vnprovider:test') {
     if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
-    await answerCallback(query.id, 'جاري فحص الموقعين...');
+    await answerCallback(query.id, 'جاري فحص المزودات...');
     return showVirtualProviderAdmin(query.message.chat.id, user);
   }
 
