@@ -363,7 +363,9 @@ async function fulfillOrder(orderId, options = {}) {
       const inventoryOwnerShopId = String(delivery.inventoryOwnerShopId || 'master');
       const retailUnitPriceUsd = Number(order.unitPrice || product.price || 0);
       const externalStock = inventoryOwnerShopId !== sellerShopId;
-      const resellerPriceOverride = externalStock && Boolean(options.resellerPriceOverride);
+      const basePriceUsd = Number(product.networkBasePriceUsd ?? product.price ?? 0);
+      const hasLocalPriceOverride = Number(product.localPriceOverrideUsd || 0) > basePriceUsd + 1e-9;
+      const resellerPriceOverride = externalStock && (Boolean(options.resellerPriceOverride) || hasLocalPriceOverride);
       let split;
       if (resellerPriceOverride) {
         // Reseller markup model: the stock owner keeps the exact value recorded
@@ -405,10 +407,10 @@ async function fulfillOrder(orderId, options = {}) {
         supplierValueUsd: Number(split.supplierUsd || 0)
       }, { transaction });
 
-      // Cross-shop sale rule: the shop that brought the customer keeps a 10%
-      // sales commission (configurable by NETWORK_SELLER_COMMISSION_PERCENT),
-      // while the stock owner receives the remaining 90%. The commission is
-      // stored as an audit ledger entry but does not create a debt by itself.
+      // Cross-shop sale rule: a deliberate local markup pays the stock owner
+      // their recorded contribution value and leaves the exact difference with
+      // the selling bot. Without a local markup, the legacy configurable 10%
+      // commission split remains in force.
       if (Number(split.supplierUsd || 0) > 0) {
         await networkLedger.recordObligation({
           debtorShopId: sellerShopId,
