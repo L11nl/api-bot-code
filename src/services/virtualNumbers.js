@@ -39,6 +39,46 @@ const PROVIDERS = {
 
 const providerKeyPresence = new Map(Object.values(PROVIDERS).map(provider => [provider.id, Boolean(provider.envKey())]));
 
+function normalizeProviderApiKeyInput(value) {
+  let input = String(value ?? '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
+  if (!input) return '';
+
+  // Accept the common copy formats shown by provider dashboards: a full API
+  // URL, "api_key=...", "API Key: ...", or a quoted/Bearer value. Only the
+  // extracted token is ever verified or stored.
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const parsed = new URL(input);
+      const fromUrl = parsed.searchParams.get('api_key') || parsed.searchParams.get('apikey') || parsed.searchParams.get('token');
+      if (fromUrl) input = fromUrl;
+    } catch {}
+  }
+
+  const labelled = input.match(/(?:^|[?&\s])(?:api[\s_-]*key|apikey|token)\s*[:=]\s*["'`]?([^&\s"'`]+)/i);
+  if (labelled?.[1]) input = labelled[1];
+  input = input.replace(/^bearer\s+/i, '').trim();
+
+  const pairs = [['"', '"'], ["'", "'"], ['`', '`'], ['[', ']'], ['(', ')']];
+  for (const [left, right] of pairs) {
+    if (input.startsWith(left) && input.endsWith(right) && input.length > 2) {
+      input = input.slice(left.length, -right.length).trim();
+      break;
+    }
+  }
+
+  return input
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/\s+/gu, '')
+    .trim();
+}
+
+function validProviderApiKeyInput(value) {
+  const key = normalizeProviderApiKeyInput(value);
+  return key.length >= 8 && key.length <= 512 && !/[<>{}\\]/.test(key);
+}
+
 function providerRecord(providerId) {
   const row = PROVIDERS[String(providerId || '').toLowerCase()];
   if (!row) {
@@ -81,12 +121,13 @@ function clearAvailabilityCaches(providerId = null) {
 
 async function getProviderApiKey(providerId) {
   const provider = providerRecord(providerId);
-  const stored = String(await getSecureSetting(provider.secureKey, '') || '').trim();
+  const storedRaw = String(await getSecureSetting(provider.secureKey, '') || '').trim();
+  const stored = storedRaw === '__DISABLED__' ? storedRaw : normalizeProviderApiKeyInput(storedRaw);
   if (stored === '__DISABLED__') {
     providerKeyPresence.set(provider.id, false);
     return '';
   }
-  const value = stored || provider.envKey();
+  const value = stored || normalizeProviderApiKeyInput(provider.envKey());
   providerKeyPresence.set(provider.id, Boolean(value));
   return value;
 }
@@ -127,21 +168,22 @@ async function setProviderProfit(providerId, value) {
 
 async function testProviderApi(providerId, apiKey = null) {
   const provider = providerRecord(providerId);
-  const key = String(apiKey || await getProviderApiKey(providerId) || '').trim();
-  if (!key) throw apiError('BAD_KEY');
+  const key = normalizeProviderApiKeyInput(apiKey || await getProviderApiKey(providerId) || '');
+  if (!validProviderApiKeyInput(key)) throw apiError('BAD_KEY');
   const balance = await provider.adapter.getBalance(key);
   return { providerId: provider.id, balance };
 }
 
 async function setProviderApiKey(providerId, apiKey) {
   const provider = providerRecord(providerId);
-  const key = String(apiKey || '').trim();
+  const key = normalizeProviderApiKeyInput(apiKey);
   if (!key) {
     await setSecureSetting(provider.secureKey, '__DISABLED__');
     providerKeyPresence.set(provider.id, false);
     provider.adapter.clearCaches?.();
     return { configured: false, removed: true };
   }
+  if (!validProviderApiKeyInput(key)) throw apiError('BAD_KEY');
   const test = await testProviderApi(providerId, key);
   await setSecureSetting(provider.secureKey, key);
   providerKeyPresence.set(provider.id, true);
@@ -735,6 +777,8 @@ module.exports = {
   retailPrice,
   clearAvailabilityCaches,
   getProviderApiKey,
+  normalizeProviderApiKeyInput,
+  validProviderApiKeyInput,
   hasProviderApi,
   hasAnyConfiguredProvider,
   getProviderProfit,
