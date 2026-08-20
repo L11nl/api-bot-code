@@ -122,7 +122,7 @@ function salePrice(providerCost, profit) {
   const cost = Number(providerCost || 0);
   const margin = Number(profit || 0);
   if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(margin) || margin < 0) return 0;
-  return roundMoney(cost + margin, 2);
+  return roundMoney(cost + margin, 4);
 }
 
 // Compatibility helper for older callers that used the former single-provider
@@ -622,7 +622,16 @@ async function refundOrder(orderId, status = 'cancelled', providerStatus = '') {
   }
 }
 
-async function purchase({ providerId = 'smsbower', userId, serviceCode, serviceName, countryId, countryName, expectedRetailCents }) {
+async function purchase({
+  providerId = 'smsbower',
+  userId,
+  serviceCode,
+  serviceName,
+  countryId,
+  countryName,
+  expectedRetailUnits,
+  expectedRetailCents
+}) {
   const provider = providerRecord(providerId);
   const apiKey = await getProviderApiKey(providerId);
   if (!apiKey) throw apiError('PROVIDER_NOT_CONFIGURED');
@@ -633,8 +642,13 @@ async function purchase({ providerId = 'smsbower', userId, serviceCode, serviceN
   try {
     const freshQuote = await quote(providerId, serviceCode, countryId, true);
     if (!freshQuote || freshQuote.count < 1) throw apiError('NO_NUMBERS');
-    const currentCents = Math.round(Number(freshQuote.retailPrice) * 100);
-    if (Number(expectedRetailCents) !== currentCents) {
+    const currentUnits = Math.round(Number(freshQuote.retailPrice) * 10_000);
+    // New buttons use 1/10,000 USD units. Keep accepting old cent-based
+    // buttons that may still be visible in an open Telegram message.
+    const suppliedUnits = Number.isFinite(Number(expectedRetailUnits))
+      ? Number(expectedRetailUnits)
+      : Math.round(Number(expectedRetailCents) * 100);
+    if (suppliedUnits !== currentUnits) {
       const error = apiError('PRICE_CHANGED');
       error.quote = freshQuote;
       throw error;

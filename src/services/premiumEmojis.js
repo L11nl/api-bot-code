@@ -6,9 +6,9 @@ const MAX_CUSTOM_ENTRIES = 120;
 
 // Telegram Premium Custom Emoji IDs supplied by the store owner. Aliases are
 // deliberately bilingual so one mapping works in Arabic and English screens.
-// Keep these defaults additive: owner-created mappings are stored separately
-// in Setting and win when they refer to the same service. A generic manual
-// keyword must not replace a more specific platform identity.
+// Keep these defaults additive: owner-created mappings are stored separately.
+// A newly confirmed mapping may override the same service, while unmarked
+// mappings written by older releases cannot replace a canonical platform.
 const BUILT_INS = [
   { key: 'iraq', id: '5221980268230882832', alt: '🇮🇶', aliases: ['العراق', 'عراقي', 'iraq', 'iraqi'] },
   { key: 'binance', id: '5875443023873053217', alt: '🟡', aliases: ['بايننس', 'بينانس', 'binance'] },
@@ -19,7 +19,7 @@ const BUILT_INS = [
   { key: 'capcut', id: '5364339557712020484', alt: '✂️', aliases: ['كاب كات', 'كابكات', 'كاب كت', 'capcut', 'cap cut'] },
   { key: 'verified', id: '5436335853976692415', alt: '✅', aliases: ['علامة التوثيق', 'موثق', 'موثقة', 'verified', 'verification badge'] },
   { key: 'error', id: '5271934564699226262', alt: '❌', aliases: ['❌', 'خطأ', 'فشل', 'error', 'failed', 'invalid'] },
-  { key: 'success', id: '5273806972871787310', alt: '✅', aliases: ['✅', 'علامة الصح', 'صحيح', 'نجاح', 'تم بنجاح', 'success', 'correct'] },
+  { key: 'success', id: '5273806972871787310', alt: '✅', aliases: ['✅', 'علامة الصح', 'صحيح', 'نجاح', 'تم بنجاح', 'تفعيل', 'موافقة', 'تنفيذ خدمة', 'success', 'correct', 'enable', 'approve'] },
   { key: 'youtube', id: '5805401092346875873', alt: '▶️', aliases: ['يوتيوب', 'youtube'] },
   { key: 'instagram', id: '6274016787805775396', alt: '📷', aliases: ['انستغرام', 'إنستغرام', 'انستا', 'instagram'] },
   { key: 'netflix', id: '6276168506291527077', alt: '🎬', aliases: ['نتفلكس', 'نيتفلكس', 'نت فلكس', 'netflix'] },
@@ -35,7 +35,7 @@ const BUILT_INS = [
   { key: 'tiktok', id: '6273825678940970726', alt: '🎵', aliases: ['تيك توك', 'تيكتوك', 'tiktok', 'tik tok'] },
   { key: 'authenticator', id: '6273712905984679845', alt: '🔐', aliases: ['المصدقة الثنائية', 'المصادقة الثنائية', 'التحقق بخطوتين', 'توثيق ثنائي', '2fa', 'authenticator', 'two factor'] },
   { key: 'spotify', id: '6276001354754302528', alt: '🎵', aliases: ['سبوتي فاي', 'سبوتيفاي', 'spotify'] },
-  { key: 'telegram', id: '6273877888563421002', alt: '✈️', aliases: ['تيليجرام', 'تلغرام', 'تليجرام', 'telegram'] },
+  { key: 'telegram', id: '6273877888563421002', alt: '✈️', aliases: ['تيليجرام', 'تلغرام', 'تليجرام', 'قناتنا', 'القناة', 'فتح القناة', 'الانضمام للقناة', 'القناة الإجبارية', 'قناة تيليجرام', 'telegram', 'our channel', 'channel', 'open channel', 'join channel', 'telegram channel'] },
   { key: 'facebook', id: '6273966236040699752', alt: '👤', aliases: ['فيسبوك', 'فيس بوك', 'facebook'] },
   { key: 'paypal', id: '6276017886083423354', alt: '💳', aliases: ['باي بال', 'بايبال', 'paypal', 'pay pal'] },
   { key: 'api', id: '5881713916643382055', alt: '🔑', aliases: ['واجهة برمجة التطبيقات', 'مفتاح api', 'api key', 'api'] },
@@ -44,11 +44,11 @@ const BUILT_INS = [
   { key: 'whatsapp', id: '5875114677918240630', alt: '💬', aliases: ['واتساب', 'واتس اب', 'whatsapp', 'whats app'] },
   { key: 'search', id: '5874960879434338403', alt: '🔎', aliases: ['بحث عن', 'البحث', 'بحث', 'search', 'find', '🔎', '🔍'] },
   { key: 'delete', id: '5841541824803509441', alt: '🗑️', aliases: ['حذف', 'قمامة', 'مسح', 'delete', 'remove', 'trash', '🗑️', '🗑'] },
-  { key: 'edit', id: '5879841310902324730', alt: '✏️', aliases: ['تعديل', 'تغيير', 'edit', 'change', '✏️', '✏'] },
+  { key: 'edit', id: '5879841310902324730', alt: '✏️', aliases: ['تعديل', 'تغيير', 'رد', 'الوصف', 'نص', 'كتابة', 'edit', 'change', 'reply', 'description', 'text', 'write', '✏️', '✏'] },
   { key: 'pin', id: '5796440171364749940', alt: '📌', aliases: ['تثبيت', 'مثبت', 'pin', 'pinned', '📌'] },
-  { key: 'lock', id: '5879895758202735862', alt: '🔒', aliases: ['قفل', 'مغلق', 'lock', 'locked', '🔒'] },
+  { key: 'lock', id: '5879895758202735862', alt: '🔒', aliases: ['قفل', 'مغلق', 'الضمان', 'ضمان', 'lock', 'locked', 'warranty', 'guarantee', '🔒'] },
   { key: 'phone', id: '5897488197650223178', alt: '📱', aliases: ['الأرقام الافتراضية', 'الارقام الافتراضية', 'رقم افتراضي', 'شراء رقم', 'اتصال', 'virtual numbers', 'virtual number', 'phone number', '📱'] },
-  { key: 'notifications_on', id: '5909201569898827582', alt: '🔔', aliases: ['تفعيل الجرس', 'تشغيل الإشعارات', 'تشغيل الاشعارات', 'notifications on', 'enable notifications', '🔔'] },
+  { key: 'notifications_on', id: '5909201569898827582', alt: '🔔', aliases: ['تفعيل الجرس', 'تشغيل الإشعارات', 'تشغيل الاشعارات', 'الإشعارات', 'الاشعارات', 'إعلان', 'اعلان', 'notifications on', 'enable notifications', 'notifications', 'announcement', '🔔'] },
   { key: 'notifications_off', id: '5909123362839335003', alt: '🔕', aliases: ['تعطيل الجرس', 'إيقاف الإشعارات', 'ايقاف الاشعارات', 'notifications off', 'disable notifications', '🔕'] },
   { key: 'digit_1', id: '5794182096603847292', alt: '1️⃣', aliases: ['1️⃣', '1'] },
   { key: 'digit_2', id: '5794303034292968945', alt: '2️⃣', aliases: ['2️⃣', '2'] },
@@ -62,21 +62,21 @@ const BUILT_INS = [
   { key: 'english', id: '5224518800061245598', alt: '🇬🇧', aliases: ['اللغة الانجليزية', 'الإنجليزية', 'انجليزي', 'english language', 'english'] },
   { key: 'arabic', id: '5222041677673282461', alt: '🇸🇦', aliases: ['اللغة العربية', 'العربية', 'عربي', 'arabic language', 'arabic'] },
   { key: 'hours24', id: '5433933799027128806', alt: '🕐', aliases: ['24 ساعة', '24 ساعه', 'خلال يوم', '24 hours', '24h'] },
-  { key: 'loading', id: '5434074875817898163', alt: '⏳', aliases: ['جاري التحميل', 'جاري تحميل', 'جاري الانتظار', 'loading', 'please wait', '⏳'] },
+  { key: 'loading', id: '5434074875817898163', alt: '⏳', aliases: ['جاري التحميل', 'جاري تحميل', 'جاري الانتظار', 'تحديث', 'إعادة تحميل', 'اعادة تحميل', 'loading', 'please wait', 'refresh', 'update', 'reload', '⏳'] },
   { key: 'play_store', id: '5775925350269719113', alt: '🎮', aliases: ['متجر بلي', 'متجر بلاي', 'جوجل بلاي', 'google play', 'play store'] },
   { key: 'settings', id: '5801152386143620268', alt: '⚙️', aliases: ['الإعدادات', 'الاعدادات', 'إعدادات', 'اعدادات', 'لوحة الإدارة', 'لوحة الادارة', 'إدارة البوت', 'ادارة البوت', 'settings', 'setting', 'admin panel', '⚙️', '⚙'] },
   { key: 'language', id: '5798420477705719523', alt: '🌐', aliases: ['اللغة', 'تغيير اللغة', 'language', 'change language', '🌐'] },
-  { key: 'purchased', id: '5796205953913196373', alt: '✅', aliases: ['تم الشراء', 'تمت العملية بنجاح', 'تمت عملية الشراء', 'purchase complete', 'purchased successfully'] },
-  { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'تم الحفظ', 'save', 'saved', '💾'] },
-  { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'المبلغ', 'الربح', 'الدفع', 'العملة', 'money', 'price', 'amount', 'profit', 'payment', 'currency', '💰'] },
+  { key: 'purchased', id: '5796205953913196373', alt: '✅', aliases: ['تم الشراء', 'تمت العملية بنجاح', 'تمت عملية الشراء', 'شراء', 'اشتري', 'purchase complete', 'purchased successfully', 'purchase', 'buy'] },
+  { key: 'save', id: '5366201992970518798', alt: '💾', aliases: ['حفظ', 'تم الحفظ', 'إضافة', 'اضافة', 'رفع', 'استيراد', 'نسخ', 'save', 'saved', 'add', 'upload', 'import', 'copy', '💾'] },
+  { key: 'money', id: '5361656830944624968', alt: '💰', aliases: ['علامة الفلوس', 'فلوس', 'المال', 'السعر', 'المبلغ', 'الربح', 'الدفع', 'العملة', 'دولار', 'money', 'price', 'amount', 'profit', 'payment', 'currency', 'dollar', 'usd', '💰'] },
   { key: 'box', id: '5366201992970518798', alt: '📦', aliases: ['علامة الصندوق', 'الصندوق', 'المخزون', 'الكمية', 'المتوفر', 'box', 'stock', 'package', 'quantity', 'available', '📦'] },
 
   // Existing bot-wide icons are retained so the restoration does not regress
   // menus that already used them before the owner's new dictionary arrived.
-  { key: 'support', id: '5882260605850620296', alt: '💬', aliases: ['الدعم', 'الدعم الفني', 'مساعدة', 'المساعدة', 'تواصل', 'support', 'help', 'contact'] },
+  { key: 'support', id: '5882260605850620296', alt: '💬', aliases: ['الدعم', 'الدعم الفني', 'مساعدة', 'المساعدة', 'تواصل', 'العملاء', 'محادثة', 'الزبون', 'support', 'help', 'contact', 'customers', 'conversation', 'customer'] },
   { key: 'wallet', id: '6325416826100519483', alt: '👛', aliases: ['المحفظة', 'محفظتك', 'شحن المحفظة', 'الرصيد', 'wallet', 'balance', 'top up wallet'] },
-  { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'الطلبات والتسليم', 'الطلب', 'orders', 'my orders', 'order', 'delivery'] },
-  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'إدارة المنتجات', 'ادارة المنتجات', 'المنتجات والمخزون', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'المتجر', 'products', 'product', 'store'] }
+  { key: 'orders', id: '5882175861850903857', alt: '📦', aliases: ['طلباتي', 'الطلبات', 'الطلبات والتسليم', 'الطلب', 'التسليم', 'استرجاع طلب', 'orders', 'my orders', 'order', 'delivery'] },
+  { key: 'products', id: '5800639128961814362', alt: '🛍️', aliases: ['المنتجات', 'إدارة المنتجات', 'ادارة المنتجات', 'المنتجات والمخزون', 'منتج', 'منتج جديد', 'إضافة منتج', 'اضافة منتج', 'المتجر', 'products', 'product', 'store'] }
 ];
 
 // These keys identify known platforms for the conservative startup repair.
@@ -132,6 +132,7 @@ function cleanEntry(entry, source = 'custom') {
     semanticKey: source === 'custom'
       ? (BUILT_INS.some(row => row.key === storedSemanticKey) ? storedSemanticKey : inferBuiltInKey(aliases))
       : '',
+    confirmedPlatformOverride: source === 'custom' && entry?.confirmedPlatformOverride === true,
     source
   };
 }
@@ -312,7 +313,11 @@ function resolveProduct(value) {
   const platformKey = canonicalBuiltIn.entry.key;
   const samePlatform = candidates.filter(candidate => (
     (candidate.entry.source === 'built-in' && candidate.entry.key === platformKey) ||
-    (candidate.entry.source === 'custom' && candidate.entry.platformKey === platformKey)
+    (
+      candidate.entry.source === 'custom' &&
+      candidate.entry.platformKey === platformKey &&
+      candidate.entry.confirmedPlatformOverride === true
+    )
   ));
   return candidateResult(samePlatform[0] || canonicalBuiltIn, platformKey);
 }
@@ -323,7 +328,11 @@ function getByKey(key) {
   if (custom) return { id: custom.emojiId, alt: custom.alt, key: custom.key };
   for (let index = customEntries.length - 1; index >= 0; index -= 1) {
     const platformOverride = customEntries[index];
-    if (platformOverride.platformKey === wanted || platformOverride.semanticKey === wanted) {
+    const isCanonicalPlatform = CANONICAL_PLATFORM_KEYS.has(wanted);
+    if (
+      (platformOverride.platformKey === wanted && (!isCanonicalPlatform || platformOverride.confirmedPlatformOverride === true)) ||
+      (!isCanonicalPlatform && platformOverride.semanticKey === wanted)
+    ) {
       return { id: platformOverride.emojiId, alt: platformOverride.alt, key: wanted, mappingKey: platformOverride.key };
     }
   }
@@ -355,12 +364,22 @@ async function persistCustom() {
     alt: entry.alt,
     aliases: entry.aliases,
     platformKey: entry.platformKey || '',
-    semanticKey: entry.semanticKey || ''
+    semanticKey: entry.semanticKey || '',
+    confirmedPlatformOverride: entry.confirmedPlatformOverride === true
   }))));
 }
 
 async function upsertCustom({ keywordAr, keywordEn, emojiId, alt = '✨' }) {
-  const candidate = cleanEntry({ keywordAr, keywordEn, emojiId, alt }, 'custom');
+  const candidate = cleanEntry({
+    keywordAr,
+    keywordEn,
+    emojiId,
+    alt,
+    // Only mappings deliberately saved through the current owner workflow
+    // may replace a known platform. This quarantines bad legacy assignments
+    // without deleting any Setting rows from the database.
+    confirmedPlatformOverride: true
+  }, 'custom');
   if (!candidate) {
     const error = new Error('INVALID_PREMIUM_EMOJI_MAPPING');
     error.code = 'INVALID_PREMIUM_EMOJI_MAPPING';

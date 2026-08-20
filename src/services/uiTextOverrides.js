@@ -12,6 +12,8 @@ let overrides = [];
 let catalog = [];
 let catalogSaveTimer = null;
 let catalogDirty = false;
+const replyButtonAliases = new Map();
+const MAX_REPLY_BUTTON_ALIASES = 500;
 
 function normalizeText(value) {
   return String(value || '')
@@ -336,11 +338,51 @@ function findCandidate(id) {
   };
 }
 
+function registerReplyButtonAlias(displayedText, originalText) {
+  const shown = String(displayedText || '').trim();
+  const original = String(originalText || '').trim();
+  if (!shown || !original) return false;
+  replyButtonAliases.delete(shown);
+  replyButtonAliases.set(shown, original);
+  while (replyButtonAliases.size > MAX_REPLY_BUTTON_ALIASES) {
+    replyButtonAliases.delete(replyButtonAliases.keys().next().value);
+  }
+  return true;
+}
+
 function originalButtonText(displayedText) {
   const shown = String(displayedText || '').trim();
   if (!shown) return '';
-  const matches = overrides.filter(row => row.kind === 'button' && row.replyKeyboard && row.replacementText === shown);
-  return matches.length === 1 ? matches[0].originalText : '';
+  const runtimeOriginal = replyButtonAliases.get(shown);
+  if (runtimeOriginal) return runtimeOriginal;
+
+  const exactOverrides = overrides.filter(row => (
+    row.kind === 'button' && row.replyKeyboard && row.replacementText === shown
+  ));
+  if (exactOverrides.length === 1) return exactOverrides[0].originalText;
+
+  // Reply keyboards send their visible label back as a normal message. The
+  // Premium Emoji decorator may remove an old Unicode icon from that label,
+  // so compare normalized text as a restart-safe fallback for keyboards that
+  // were already open before the current process started.
+  const normalizedShown = normalizeText(shown);
+  if (!normalizedShown) return '';
+  const matches = new Map();
+  for (const row of catalog) {
+    if (row.kind !== 'button' || !row.replyKeyboard) continue;
+    const override = overrides.find(item => item.id === row.id);
+    const visibleCandidates = [row.text, row.plainText, override?.replacementText].filter(Boolean);
+    if (visibleCandidates.some(value => normalizeText(value) === normalizedShown)) {
+      matches.set(row.text, row.text);
+    }
+  }
+  for (const row of overrides) {
+    if (row.kind !== 'button' || !row.replyKeyboard) continue;
+    if ([row.originalText, row.originalPlainText, row.replacementText].some(value => normalizeText(value) === normalizedShown)) {
+      matches.set(row.originalText, row.originalText);
+    }
+  }
+  return matches.size === 1 ? [...matches.values()][0] : '';
 }
 
 module.exports = {
@@ -353,6 +395,7 @@ module.exports = {
   list,
   findCandidate,
   persistCatalog,
+  registerReplyButtonAlias,
   originalButtonText,
   normalizeText,
   plainText,
