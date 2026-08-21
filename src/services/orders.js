@@ -54,6 +54,7 @@ async function getProductStock(merchantId) {
     FROM ${quotedSchema()}."Codes"
     WHERE "merchantId" = :merchantId
       AND COALESCE("isUsed", FALSE) = FALSE
+      AND COALESCE("isHidden", FALSE) = FALSE
       AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
   `, { replacements: { merchantId } });
   return Number(rows[0]?.stock || 0);
@@ -84,6 +85,7 @@ async function getProductStocksMap(products = []) {
     FROM ${quotedSchema()}."Codes"
     WHERE "merchantId" IN (:merchantIds)
       AND COALESCE("isUsed", FALSE) = FALSE
+      AND COALESCE("isHidden", FALSE) = FALSE
       AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
     GROUP BY "merchantId"
   `, {
@@ -317,6 +319,7 @@ async function fulfillOrder(orderId, options = {}) {
           ON os.owner = COALESCE(NULLIF(c."stockOwnerShopId", ''), 'master')
         WHERE c."merchantId" = :merchantId
           AND COALESCE(c."isUsed", FALSE) = FALSE
+          AND COALESCE(c."isHidden", FALSE) = FALSE
           AND COALESCE(c."usedCount",0) < COALESCE(c."maxUses",1)
           AND (c."expiresAt" IS NULL OR c."expiresAt" > NOW())
         ORDER BY

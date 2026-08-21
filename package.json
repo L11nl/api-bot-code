@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "private": true,
-  "description": "Telegram digital store v9 with persistent multi-admin access, per-bot product overrides, approval-safe global publishing, payment ordering, virtual-number provider administration, and preserved PostgreSQL data",
+  "description": "Telegram digital store v10 with unified admin UI, full add/remove controls, safe product distribution, reveal/edit/hide inventory management, persistent multi-admin access, payment ordering, and preserved PostgreSQL data",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

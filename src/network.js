@@ -39,7 +39,7 @@ let sharedDiscoveryPromise = null;
 let fallbackPaymentsCache = { at: 0, data: null };
 let publicPaymentProfileHash = '';
 let publicPaymentProfileSyncedAt = 0;
-let masterCatalogSnapshotCache = { at: 0, products: null };
+let masterCatalogSnapshotCache = { at: 0, products: null, viewerShopId: '' };
 const authClientCache = new Map();
 const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
 const PREMIUM_EMOJI_STORAGE_KEY = 'premium_emoji_keyword_map_v1';
@@ -48,7 +48,7 @@ const CATALOG_BOOTSTRAP_STORAGE_KEY = 'network_catalog_bootstrap_v2';
 function invalidateSharedMethodsCache() { sharedMethodsCache = { at: 0, data: null }; }
 function invalidateCatalogCache() {
   catalogSyncCache = { at: 0, products: null };
-  masterCatalogSnapshotCache = { at: 0, products: null };
+  masterCatalogSnapshotCache = { at: 0, products: null, viewerShopId: '' };
 }
 
 
@@ -150,17 +150,25 @@ async function createClient({ name, ownerTelegramId, settlementCurrency = 'USD' 
   return { row, apiKey, databaseSchema: clientDatabaseSchema(shopId) };
 }
 
-async function catalogSnapshot() {
-  if (masterCatalogSnapshotCache.products && Date.now() - masterCatalogSnapshotCache.at < 5000) {
+async function catalogSnapshot(viewerShopId = '') {
+  const viewer = String(viewerShopId || '').trim();
+  if (masterCatalogSnapshotCache.products
+      && masterCatalogSnapshotCache.viewerShopId === viewer
+      && Date.now() - masterCatalogSnapshotCache.at < 5000) {
     return masterCatalogSnapshotCache.products;
   }
-  // Only PUBLIC source products belong to the shared catalog. A storefront's
-  // local publish/hide/reject decision is intentionally not exported here.
+  // Public products can be temporarily hidden from OTHER storefronts while
+  // remaining available to their owner. This is reversible and never deletes
+  // inventory or publication decisions.
   const products = await Merchant.findAll({
     where: { isActive: true, visibilityScope: 'public' },
     order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
-  const sharedProducts = products.filter(product => String(product.type || '') !== 'service');
+  const sharedProducts = products.filter(product => {
+    if (String(product.type || '') === 'service') return false;
+    if (product.networkDistributionEnabled !== false) return true;
+    return viewer && String(product.networkOwnerShopId || 'master') === viewer;
+  });
   const stocks = await getProductStocksMap(sharedProducts);
   const snapshot = sharedProducts.map(product => {
     const basePrice = Number(product.networkBasePriceUsd ?? product.price ?? 0);
@@ -181,10 +189,11 @@ async function catalogSnapshot() {
       networkOwnerShopId: product.networkOwnerShopId || 'master',
       visibilityScope: 'public',
       createdByAdminId: product.createdByAdminId || null,
-      createdByDisplayName: product.createdByDisplayName || null
+      createdByDisplayName: product.createdByDisplayName || null,
+      networkDistributionEnabled: product.networkDistributionEnabled !== false
     };
   });
-  masterCatalogSnapshotCache = { at: Date.now(), products: snapshot };
+  masterCatalogSnapshotCache = { at: Date.now(), products: snapshot, viewerShopId: viewer };
   return snapshot;
 }
 
@@ -258,7 +267,8 @@ async function syncCatalogToLocalNow(options = {}) {
     where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
     attributes: [
       'networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt',
-      'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride'
+      'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride',
+      'networkDistributionEnabled'
     ],
     raw: true
   }) : [];
@@ -301,7 +311,8 @@ async function syncCatalogToLocalNow(options = {}) {
       localPublicationStatus,
       localReviewNotifiedAt: prior?.localReviewNotifiedAt || null,
       createdByAdminId: remote.createdByAdminId || null,
-      createdByDisplayName: remote.createdByDisplayName || null
+      createdByDisplayName: remote.createdByDisplayName || null,
+      networkDistributionEnabled: remote.networkDistributionEnabled !== false
     };
   }).filter(row => row.networkProductId);
 
@@ -313,7 +324,7 @@ async function syncCatalogToLocalNow(options = {}) {
         'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
         'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock',
         'visibilityScope', 'localPublicationStatus', 'localReviewNotifiedAt',
-        'createdByAdminId', 'createdByDisplayName'
+        'createdByAdminId', 'createdByDisplayName', 'networkDistributionEnabled'
       ]
     });
   }
@@ -417,8 +428,11 @@ async function listMyRemoteInventory(networkProductId) {
   return clientRequest('get', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/mine`);
 }
 
-async function updateMyRemoteInventory(networkProductId, codeId, payload) {
-  const result = await clientRequest('patch', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/${encodeURIComponent(codeId)}`, { payload });
+async function updateMyRemoteInventory(networkProductId, codeId, changes = {}) {
+  const body = changes && typeof changes === 'object' && !Array.isArray(changes)
+    ? changes
+    : { payload: changes };
+  const result = await clientRequest('patch', `/api/v1/products/${encodeURIComponent(networkProductId)}/inventory/${encodeURIComponent(codeId)}`, body);
   invalidateCatalogCache();
   return result;
 }
@@ -1067,7 +1081,7 @@ async function repairLegacyFreeFragmentsNetwork(product, rawText, ownerShopId) {
     .filter(Boolean);
   if (fragments.length < 2) return 0;
   const candidates = await Code.findAll({
-    where: { merchantId: product.id, isUsed: false, usedCount: 0, maxUses: 1, stockOwnerShopId: String(ownerShopId || '') },
+    where: { merchantId: product.id, isUsed: false, isHidden: false, usedCount: 0, maxUses: 1, stockOwnerShopId: String(ownerShopId || '') },
     order: [['id', 'ASC']]
   });
   const buckets = new Map();
@@ -1185,8 +1199,8 @@ function installMasterRoutes(app, getBot) {
     }
   };
 
-  app.get('/api/v1/catalog', (req, res) => route(req, res, async () => ({
-    products: await catalogSnapshot()
+  app.get('/api/v1/catalog', (req, res) => route(req, res, async client => ({
+    products: await catalogSnapshot(client?.shopId || '')
   })));
 
   app.get('/api/v1/premium-emojis', (req, res) => route(req, res, async () => premiumEmojiSnapshot()));
@@ -1240,7 +1254,8 @@ function installMasterRoutes(app, getBot) {
         createdByDisplayName: String(body.createdByDisplayName || client.name || '').slice(0, 160) || null,
         networkManaged: false,
         networkOwnerShopId: client.shopId,
-        ownerNote: `Added via ${client.shopId}`
+        ownerNote: `Added via ${client.shopId}`,
+        networkDistributionEnabled: true
       }
     });
     const event = Boolean(body.suppressNotification) ? null : await ledger.publishNotificationEvent({
@@ -1285,7 +1300,7 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
     const body = req.body || {};
-    const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder'];
+    const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder','networkDistributionEnabled'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
     if (String(changes.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
@@ -1405,6 +1420,7 @@ function installMasterRoutes(app, getBot) {
       soldAt: row.soldAt || null,
       buyers: Array.isArray(row.buyers) ? row.buyers : [],
       remaining: Math.max(0, Number(row.maxUses || 1) - Number(row.usedCount || 0)),
+      hidden: Boolean(row.isHidden),
       editable: !row.isUsed && Number(row.usedCount || 0) === 0
     })) };
   }));
@@ -1414,15 +1430,24 @@ function installMasterRoutes(app, getBot) {
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     const row = await Code.findOne({ where: { id: Number(req.params.codeId), merchantId: product.id, stockOwnerShopId: client.shopId } });
     if (!row) throw new Error('INVENTORY_NOT_OWNED');
-    if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
-    const payload = req.body?.payload;
-    if (!inventoryPayloadIsValid(product.type, payload)) throw new Error('INVALID_INVENTORY_PAYLOAD');
-    const fingerprint = inventoryFingerprint(product.type, payload);
-    const duplicate = await Code.findOne({ where: { merchantId: product.id, fingerprint, id: { [require('sequelize').Op.ne]: row.id } } });
-    if (duplicate) throw new Error('DUPLICATE_INVENTORY');
-    await row.update({ value: encryptPayload(payload), extra: null, fingerprint });
+    const changes = {};
+    if (req.body?.payload !== undefined) {
+      if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
+      const payload = req.body.payload;
+      if (!inventoryPayloadIsValid(product.type, payload)) throw new Error('INVALID_INVENTORY_PAYLOAD');
+      const fingerprint = inventoryFingerprint(product.type, payload);
+      const duplicate = await Code.findOne({ where: { merchantId: product.id, fingerprint, id: { [require('sequelize').Op.ne]: row.id } } });
+      if (duplicate) throw new Error('DUPLICATE_INVENTORY');
+      changes.value = encryptPayload(payload);
+      changes.extra = null;
+      changes.fingerprint = fingerprint;
+    }
+    if (req.body?.isHidden !== undefined) changes.isHidden = Boolean(req.body.isHidden);
+    if (!Object.keys(changes).length) throw new Error('NO_INVENTORY_CHANGES');
+    await row.update(changes);
     invalidateCatalogCache();
-    return { item: { id: Number(row.id), payload, editable: true } };
+    const payload = decryptPayload(row.value, row.extra);
+    return { item: { id: Number(row.id), payload, hidden: Boolean(row.isHidden), editable: !row.isUsed && Number(row.usedCount || 0) === 0 } };
   }));
 
   app.delete('/api/v1/products/:networkProductId/inventory/:codeId', (req, res) => route(req, res, async client => {

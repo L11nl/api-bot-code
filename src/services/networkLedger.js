@@ -781,7 +781,9 @@ async function salesStatsForProduct(product) {
     SELECT COALESCE(NULLIF("stockOwnerShopId", ''), 'master') AS "shopId",
            COALESCE(SUM(COALESCE("maxUses",1)),0)::int AS "addedUnits",
            COALESCE(SUM(COALESCE("usedCount",0)),0)::int AS "soldUnits",
-           COALESCE(SUM(GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)),0)::int AS "availableUnits"
+           COALESCE(SUM(CASE WHEN COALESCE("isHidden", FALSE) = FALSE
+                             THEN GREATEST(COALESCE("maxUses",1)-COALESCE("usedCount",0),0)
+                             ELSE 0 END),0)::int AS "availableUnits"
     FROM "${String(config.databaseSchema).replace(/"/g, '""')}"."Codes"
     WHERE "merchantId" = :merchantId
     GROUP BY COALESCE(NULLIF("stockOwnerShopId", ''), 'master')

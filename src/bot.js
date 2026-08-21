@@ -723,6 +723,10 @@ function isPublicProduct(product) {
   return Boolean(product) && String(product.visibilityScope || (product.type === 'service' ? 'private' : 'public')).toLowerCase() === 'public';
 }
 
+function productSharedWithOtherBots(product) {
+  return isPublicProduct(product) && product.networkDistributionEnabled !== false;
+}
+
 function canManageNetworkProduct(product) {
   if (!product) return false;
   return !isForeignPublicProduct(product);
@@ -1011,9 +1015,9 @@ function canManageVirtualProviders(user) {
 }
 
 function canManagePremiumEmojis(user) {
-  // Use the same single-owner gate as provider secrets. Other admins can use
-  // the resulting icons but cannot rewrite the global keyword dictionary.
-  return canSeeVirtualProviderCost(user);
+  // Full-admin policy: any admin explicitly added to this bot may manage the
+  // premium-emoji dictionary as well as the rest of the local bot settings.
+  return Boolean(user?.id && isAdmin(user.id));
 }
 
 function providerAdminStatusIcon(status) {
@@ -2539,10 +2543,10 @@ async function showAdminAccessManager(chatId) {
     const label = String(row.displayName || '').trim();
     lines.push(`• <code>${id}</code>${label ? ` — ${escapeHtml(label)}` : ''}${row.isProtected ? ' — محمي' : ''}`);
     if (!row.isProtected) {
-      keyboard.push([{ text: `🗑 إزالة الأدمن ${id}`, callback_data: `adm:admin_remove_confirm:${id}`, style: 'danger' }]);
+      keyboard.push([{ text: `➖ حذف صلاحية الأدمن ${id}`, callback_data: `adm:admin_remove_confirm:${id}`, style: 'danger' }]);
     }
   }
-  keyboard.unshift([{ text: '➕ إضافة أدمن بالـ Telegram ID', callback_data: 'adm:admin_add', style: 'success' }]);
+  keyboard.unshift([{ text: '➕ تعيين أدمن بالـ Telegram ID', callback_data: 'adm:admin_add', style: 'success' }]);
   keyboard.push([{ text: '🔄 تحديث القائمة', callback_data: 'adm:admins' }]);
   keyboard.push([{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]);
   return bot.sendMessage(chatId, lines.join('\n'), {
@@ -2602,7 +2606,7 @@ async function adminDashboardText() {
 
 async function adminMenu() {
   const rows = [
-    [emojiButton('المنتجات والمخزون', PREMIUM_EMOJI.products, { callback_data: 'adm:menu:products', style: 'primary' })],
+    [emojiButton('إدارة المنتجات', PREMIUM_EMOJI.products, { callback_data: 'adm:menu:products', style: 'primary' })],
     [{ text: '🧾 الطلبات والتسليم', callback_data: 'adm:menu:orders', style: 'primary' }],
     [{ text: '💳 الدفع والمحفظة', callback_data: 'adm:menu:payments', style: 'primary' }],
     [{ text: '👥 العملاء والتواصل', callback_data: 'adm:menu:users', style: 'primary' }],
@@ -2622,12 +2626,10 @@ async function adminSectionMenu(section, user = null) {
 
   if (section === 'products') {
     return {
-      title: '🛍️ <b>المنتجات والمخزون</b>\nإضافة المنتجات، إضافة خدمة محلية، تعديل المخزون واسترجاع أي تسليم.',
+      title: '🛍️ <b>إدارة المنتجات</b>\nمسار واحد مرتب: أضف المنتج، اختر محلي أو عام، ثم اختر النوع. ومن إدارة المنتجات تقدر تعدل المنتج ومخزونه بالكامل.',
       keyboard: [
-        [{ text: '➕ إضافة منتج جديد', callback_data: 'adm:add_product', style: 'success' }],
-        [{ text: '🛠 إضافة خدمة محلية', callback_data: 'adm:add_service_local', style: 'success' }],
-        [emojiButton('إدارة المنتجات', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' })],
-        [{ text: '📥 إضافة مخزون', callback_data: 'adm:stock', style: 'success' }],
+        [{ text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' }],
+        [emojiButton('إدارة المنتجات المضافة', PREMIUM_EMOJI.products, { callback_data: 'adm:products:0', style: 'primary' })],
         [{ text: '🔎 استرجاع منتج / طلب', callback_data: 'adm:delivery_lookup' }],
         back
       ]
@@ -2663,7 +2665,11 @@ async function adminSectionMenu(section, user = null) {
     return {
       title: '👥 <b>العملاء والتواصل</b>\nإدارة حسابات الزبائن، الرصيد، الدعم والإعلانات.',
       keyboard: [
-        [{ text: '👤 البحث عن مستخدم', callback_data: 'adm:user_lookup' }, { text: '💰 شحن مستخدم', callback_data: 'adm:user_credit' }],
+        [{ text: '👤 البحث عن مستخدم', callback_data: 'adm:user_lookup', style: 'primary' }],
+        [
+          { text: '➕ إضافة رصيد', callback_data: 'adm:user_credit', style: 'success' },
+          { text: '➖ خصم رصيد', callback_data: 'adm:user_debit', style: 'danger' }
+        ],
         [emojiButton('الدعم', PREMIUM_EMOJI.support, { callback_data: 'adm:support', style: 'primary' })],
         [{ text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
         back
@@ -4422,7 +4428,7 @@ async function repairLegacyFreeFragmentsLocal(product, rawText, transaction) {
 
   const ownerShopId = network.enabledClient() ? String(config.network.shopId || '') : 'master';
   const candidates = await Code.findAll({
-    where: { merchantId: product.id, isUsed: false, usedCount: 0, maxUses: 1, stockOwnerShopId: ownerShopId },
+    where: { merchantId: product.id, isUsed: false, isHidden: false, usedCount: 0, maxUses: 1, stockOwnerShopId: ownerShopId },
     order: [['id', 'ASC']],
     transaction,
     lock: transaction?.LOCK?.UPDATE
@@ -4482,7 +4488,8 @@ async function finalizeNewProduct(user, data) {
     createdByAdminId: Number(user.id),
     createdByDisplayName: creatorDisplayName,
     sharedLimit: (data.type || 'free') === 'shared' ? 5 : 1,
-    deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant'
+    deliveryMode: (data.type || 'free') === 'service' ? 'service_request' : 'instant',
+    networkDistributionEnabled: true
   };
 
   const isService = productPayload.type === 'service';
@@ -4600,11 +4607,16 @@ async function promoteLocalProductToNetwork(product, admin) {
     ? await Code.count({ where: { merchantId: product.id, isUsed: false, usedCount: { [Op.gt]: 0 } } })
     : 0;
   if (partialShared > 0) throw new Error(`PARTIAL_SHARED_INVENTORY:${partialShared}`);
+  const hiddenInventory = await Code.count({
+    where: { merchantId: product.id, isUsed: false, isHidden: true, usedCount: 0 }
+  });
+  if (hiddenInventory > 0) throw new Error(`HIDDEN_INVENTORY_EXISTS:${hiddenInventory}`);
 
   const transferableRows = await Code.findAll({
     where: {
       merchantId: product.id,
       isUsed: false,
+      isHidden: false,
       usedCount: 0,
       [Op.or]: [{ expiresAt: null }, { expiresAt: { [Op.gt]: new Date() } }]
     },
@@ -4668,11 +4680,13 @@ async function promoteLocalProductToNetwork(product, admin) {
         product.networkStock = inventoryItems.length ? remoteStock : Number(remoteProduct.stock || 0);
         product.networkBasePriceUsd = Number(remoteProduct.price ?? product.price ?? 0);
         product.visibilityScope = 'public';
+        product.networkDistributionEnabled = true;
         product.localPublicationStatus = 'published';
         product.localReviewNotifiedAt = new Date();
         await product.save({ transaction, fields: [
           'networkProductId', 'networkManaged', 'networkOwnerShopId', 'networkStock',
-          'networkBasePriceUsd', 'visibilityScope', 'localPublicationStatus', 'localReviewNotifiedAt'
+          'networkBasePriceUsd', 'visibilityScope', 'networkDistributionEnabled',
+          'localPublicationStatus', 'localReviewNotifiedAt'
         ] });
         if (transferableRows.length) {
           await Code.destroy({ where: { id: { [Op.in]: transferableRows.map(row => row.id) } }, transaction });
@@ -4695,12 +4709,13 @@ async function promoteLocalProductToNetwork(product, admin) {
   }
 
   product.visibilityScope = 'public';
+  product.networkDistributionEnabled = true;
   product.localPublicationStatus = 'published';
   product.networkOwnerShopId = 'master';
   product.networkBasePriceUsd = Number(product.price || 0);
   product.localReviewNotifiedAt = new Date();
   await product.save({ fields: [
-    'visibilityScope', 'localPublicationStatus', 'networkOwnerShopId',
+    'visibilityScope', 'networkDistributionEnabled', 'localPublicationStatus', 'networkOwnerShopId',
     'networkBasePriceUsd', 'localReviewNotifiedAt'
   ] });
   if (network.isMaster()) {
@@ -6999,6 +7014,47 @@ async function handleStateMessage(msg, user, state) {
     return true;
   }
 
+  if (state.action === 'admin_edit_inventory') {
+    const product = await Merchant.findByPk(state.productId);
+    if (!product || !productAccessibleInCurrentShop(product)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '❌ المنتج غير موجود.');
+      return true;
+    }
+    const text = String(msg.text || '').replace(/\r\n/g, '\n').trim();
+    if (!text) {
+      await bot.sendMessage(user.id, '❌ أرسل المحتوى الجديد كنص.');
+      return true;
+    }
+    const parsed = parseInventoryTextForProduct(text, product.type);
+    if (parsed.errors.length) {
+      const details = parsed.errors.slice(0, 6).map(row => `السطر ${row.line}: ${escapeHtml(row.error)}\n<code>${escapeHtml(row.value)}</code>`).join('\n\n');
+      await bot.sendMessage(user.id, `❌ المحتوى الجديد غير صالح:\n\n${details}`, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+    if (parsed.items.length !== 1) {
+      await bot.sendMessage(user.id, '❌ بالتعديل أرسل عنصر واحد فقط. إذا تريد إضافة أكثر من عنصر استخدم زر «إضافة مخزون».', { reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+    try {
+      await updateOwnedInventoryPayload(product, state.codeId, parsed.items[0]);
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '✅ تم تعديل المخزون بعد التحقق منه. المحتوى القديم استُبدل فقط بعد نجاح الحفظ.');
+      await showAdminInventoryItem(user.id, product.id, state.codeId, Number(state.page || 0));
+    } catch (error) {
+      const message = String(error.message || error);
+      const friendly = message === 'INVENTORY_ALREADY_CONSUMED'
+        ? '❌ لا يمكن تعديل عنصر تم استخدامه أو تسليمه سابقاً.'
+        : message === 'DUPLICATE_INVENTORY'
+          ? '❌ هذه القيمة موجودة مسبقاً في المخزون.'
+          : message === 'INVENTORY_NOT_OWNED'
+            ? '❌ هذا المخزون غير مملوك لهذا البوت.'
+            : `❌ تعذر تعديل المخزون: ${escapeHtml(message)}`;
+      await bot.sendMessage(user.id, friendly, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+    }
+    return true;
+  }
+
   if (state.action === 'admin_setting') {
     let value = msg.text?.trim();
     if (!value) return true;
@@ -7100,6 +7156,46 @@ async function handleStateMessage(msg, user, state) {
     return true;
   }
 
+  if (state.action === 'admin_user_debit_id') {
+    const targetId = Number(String(msg.text || '').trim());
+    if (!Number.isFinite(targetId)) {
+      await bot.sendMessage(user.id, '❌ أرسل آيدي رقمي صحيح.');
+      return true;
+    }
+    const target = await User.findByPk(targetId);
+    if (!target) {
+      await bot.sendMessage(user.id, '❌ المستخدم ما مستخدم البوت بعد.');
+      return true;
+    }
+    await setState(user.id, { action: 'admin_user_debit_amount', targetId });
+    await bot.sendMessage(user.id, `أرسل مبلغ الخصم بالدولار للمستخدم <code>${targetId}</code>. الرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+    return true;
+  }
+
+  if (state.action === 'admin_user_debit_amount') {
+    const amount = Number(String(msg.text || '').trim());
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
+      await bot.sendMessage(user.id, '❌ مبلغ الخصم غير صحيح.');
+      return true;
+    }
+    try {
+      const result = await adminDebitUser(state.targetId, amount, user.id);
+      await clearState(user.id);
+      await bot.sendMessage(user.id, `✅ تم خصم ${moneyUsd(amount)} من المستخدم <code>${state.targetId}</code>.\nالرصيد الجديد: <b>${moneyUsd(result.balance)}</b>`, { parse_mode: 'HTML' });
+      const debitedUser = await User.findByPk(state.targetId);
+      const debitedContext = await customerMoneyContext(debitedUser || { paymentCurrency: 'USD' });
+      await bot.sendMessage(state.targetId, `ℹ️ قامت الإدارة بخصم <b>${customerMoney(amount, debitedContext, debitedUser?.lang || 'ar')}</b> من محفظتك.\nرصيدك الجديد: <b>${customerMoney(result.balance, debitedContext, debitedUser?.lang || 'ar')}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+    } catch (error) {
+      if (String(error.message || '') === 'INSUFFICIENT_USER_BALANCE') {
+        const target = await User.findByPk(state.targetId);
+        await bot.sendMessage(user.id, `❌ مبلغ الخصم أكبر من رصيد المستخدم. الرصيد الحالي: <b>${moneyUsd(target?.balance || 0)}</b>`, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+        return true;
+      }
+      throw error;
+    }
+    return true;
+  }
+
   return false;
 }
 
@@ -7121,6 +7217,36 @@ async function adminCreditUser(targetId, amount, adminId) {
     }, { transaction });
     await transaction.commit();
     return { balance: Number(target.balance) };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function adminDebitUser(targetId, amount, adminId) {
+  const transaction = await sequelize.transaction();
+  try {
+    const target = await User.findByPk(targetId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!target) throw new Error('USER_NOT_FOUND');
+    const current = Number(target.balance || 0);
+    const debit = Number(amount);
+    if (!Number.isFinite(debit) || debit <= 0) throw new Error('INVALID_DEBIT');
+    if (debit > current + 1e-9) throw new Error('INSUFFICIENT_USER_BALANCE');
+    target.balance = Math.max(0, current - debit);
+    await target.save({ transaction, fields: ['balance'] });
+    await BalanceTransaction.create({
+      userId: target.id,
+      amount: -debit,
+      type: 'admin_debit',
+      txid: `ADMIN-DEBIT-${adminId}-${Date.now()}`,
+      caption: `Manual debit by admin ${adminId}`,
+      status: 'completed',
+      lastReminderAt: new Date(),
+      approvedByTelegramId: adminId || null,
+      approvalSource: 'admin_debit'
+    }, { transaction });
+    await transaction.commit();
+    return { previousBalance: current, balance: Number(target.balance), debited: debit };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -7770,9 +7896,16 @@ async function showProductContributors(chatId, product) {
     );
   }
   if (!contributors.length) lines.push('— ماكو مخزون بعد.');
+  const contributorKeyboard = [];
+  if (product.isActive !== false) {
+    contributorKeyboard.push([{ text: '📥 إضافة مخزون', callback_data: `adm:stockprod:${product.id}`, style: 'success' }]);
+  } else {
+    contributorKeyboard.push([{ text: '♻️ المنتج متوقف — افتح النشر للاستعادة', callback_data: `adm:product_publish:${product.id}`, style: 'primary' }]);
+  }
+  contributorKeyboard.push([{ text: '⬅️ رجوع للمنتج', callback_data: `adm:edit:${product.id}` }]);
   return bot.sendMessage(chatId, lines.join('\n'), {
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [[{ text: '📥 إضافة مخزون', callback_data: `adm:stockprod:${product.id}`, style: 'success' }]] }
+    reply_markup: { inline_keyboard: contributorKeyboard }
   });
 }
 
@@ -8646,7 +8779,15 @@ async function handleAdminCallback(query, user, data) {
   if (data === 'adm:user_credit') {
     await setState(user.id, { action: 'admin_user_credit_id' });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي الذي تريد شحنه، أو اكتب إغلاق:', {
+    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي الذي تريد إضافة رصيد له، أو اكتب إغلاق:', {
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+
+  if (data === 'adm:user_debit') {
+    await setState(user.id, { action: 'admin_user_debit_id' });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي الذي تريد خصم رصيد منه، أو اكتب إغلاق:', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -8672,7 +8813,19 @@ async function handleAdminCallback(query, user, data) {
     const targetId = Number(data.split(':')[2]);
     await setState(user.id, { action: 'admin_user_credit_amount', targetId });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار للمستخدم <code>${targetId}</code>، أو اكتب إغلاق:`, {
+    return bot.sendMessage(user.id, `أرسل مبلغ الإضافة بالدولار للمستخدم <code>${targetId}</code>، أو اكتب إغلاق:`, {
+      parse_mode: 'HTML',
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+
+  if (data.startsWith('adm:userdebit:')) {
+    const targetId = Number(data.split(':')[2]);
+    const target = await User.findByPk(targetId);
+    if (!target) return answerCallback(query.id, 'المستخدم غير موجود.', true);
+    await setState(user.id, { action: 'admin_user_debit_amount', targetId });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, `أرسل مبلغ الخصم بالدولار للمستخدم <code>${targetId}</code>.\nالرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`, {
       parse_mode: 'HTML',
       reply_markup: cancelInlineKeyboard()
     });
@@ -8857,7 +9010,7 @@ async function handleAdminCallback(query, user, data) {
     return showAdminProducts(query.message.chat.id, Number(data.split(':')[2]));
   }
 
-  if (data === 'adm:add_product') {
+  if (data === 'adm:add_product' || data === 'adm:add_service_local') {
     await setState(user.id, { action: 'admin_new_product', step: 'scope', data: {} });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, '➕ <b>إضافة منتج جديد</b>\n\nوين تريد نشر المنتج؟', {
@@ -8870,24 +9023,6 @@ async function handleAdminCallback(query, user, data) {
     });
   }
 
-  if (data === 'adm:add_service_local') {
-    await setState(user.id, {
-      action: 'admin_new_product',
-      step: 'nameAr',
-      data: { type: 'service', scope: 'local', localOnly: true }
-    });
-    await answerCallback(query.id, 'إضافة خدمة محلية لهذا البوت.');
-    return bot.sendMessage(user.id, [
-      '🛠 <b>إضافة خدمة محلية</b>',
-      '',
-      'هذه الخدمة ستظهر داخل هذا البوت فقط ولن تدخل كتالوج الشبكة.',
-      '1/7 أرسل اسم الخدمة بالعربي.',
-      'تقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة.'
-    ].join('\n'), {
-      parse_mode: 'HTML',
-      reply_markup: cancelInlineKeyboard()
-    });
-  }
 
   if (data.startsWith('adm:newscope:')) {
     const scope = data.split(':')[2];
@@ -8910,6 +9045,7 @@ async function handleAdminCallback(query, user, data) {
         [{ text: '📧 إيميل وباسورد', callback_data: 'adm:newtype:account', style: 'primary' }],
         [{ text: '📝 منتج حر', callback_data: 'adm:newtype:free', style: 'primary' }],
         [{ text: '👥 حساب مشترك', callback_data: 'adm:newtype:shared', style: 'primary' }],
+        [{ text: '🛠 تنفيذ خدمة', callback_data: 'adm:newtype:service', style: 'primary' }],
         [{ text: '❌ إغلاق', callback_data: 'flow:cancel', style: 'danger' }]
       ] }
     });
@@ -8924,9 +9060,16 @@ async function handleAdminCallback(query, user, data) {
       return answerCallback(query.id, 'عملية إضافة المنتج غير فعالة.', true);
     }
     state.data.type = type;
-    if (type === 'service') state.data.localOnly = true;
+    if (type === 'service') {
+      // Manual services are fulfilled by the admins of this bot, so they stay
+      // local even if the admin initially picked the public scope.
+      state.data.scope = 'local';
+      state.data.localOnly = true;
+    }
     await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: state.data });
-    await answerCallback(query.id, `تم اختيار: ${productTypeLabel(type)}`);
+    await answerCallback(query.id, type === 'service'
+      ? 'تم اختيار تنفيذ خدمة. هذا النوع يبقى داخل بوتك لأن التنفيذ يدوي من إدارتك.'
+      : `تم اختيار: ${productTypeLabel(type)}`);
     return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nتقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة مثل: [5221980268230882832] اسم المنتج.', {
       reply_markup: cancelInlineKeyboard()
     });
@@ -9032,6 +9175,16 @@ async function handleAdminCallback(query, user, data) {
     return showAdminProductEditor(query.message.chat.id, Number(data.split(':')[2]));
   }
 
+  if (data.startsWith('adm:product_fields:')) {
+    await answerCallback(query.id);
+    return showAdminProductFieldsMenu(query.message.chat.id, Number(data.split(':')[2]));
+  }
+
+  if (data.startsWith('adm:product_publish:')) {
+    await answerCallback(query.id);
+    return showAdminProductPublishMenu(query.message.chat.id, Number(data.split(':')[2]));
+  }
+
   if (data.startsWith('adm:publish_network_confirm:')) {
     const product = await Merchant.findByPk(Number(data.split(':')[2]));
     if (!product || !canManageNetworkProduct(product)) return answerCallback(query.id, 'المنتج غير موجود أو لا تملكه.', true);
@@ -9050,9 +9203,11 @@ async function handleAdminCallback(query, user, data) {
       const message = String(error.message || '');
       const friendly = message.startsWith('PARTIAL_SHARED_INVENTORY:')
         ? `❌ يوجد ${Number(message.split(':')[1] || 0)} حساب مشترك بيع منه بعض الاستخدامات. انتظر نفاد هذه الحسابات أو عالجها قبل النشر حتى لا تتكرر الاستخدامات.`
-        : message === 'SERVICE_PRODUCTS_MUST_BE_LOCAL'
-          ? '❌ الخدمات التنفيذية تبقى محلية لأنها تعتمد على إدارة البوت المنفذ.'
-          : `❌ تعذر نشر المنتج: ${escapeHtml(message)}`;
+        : message.startsWith('HIDDEN_INVENTORY_EXISTS:')
+          ? `❌ يوجد ${Number(message.split(':')[1] || 0)} عنصر مخزون مخفي. افتح «إدارة وكشف المخزون» وأظهره أو احذفه قبل تحويل المنتج إلى عام حتى لا يضيع أي محتوى.`
+          : message === 'SERVICE_PRODUCTS_MUST_BE_LOCAL'
+            ? '❌ الخدمات التنفيذية تبقى محلية لأنها تعتمد على إدارة البوت المنفذ.'
+            : `❌ تعذر نشر المنتج: ${escapeHtml(message)}`;
       return bot.sendMessage(query.message.chat.id, friendly, { parse_mode: 'HTML' });
     }
   }
@@ -9077,6 +9232,64 @@ async function handleAdminCallback(query, user, data) {
         { text: '✅ نشر في باقي البوتات', callback_data: `adm:publish_network_confirm:${product.id}`, style: 'success' },
         { text: '❌ إلغاء', callback_data: `adm:edit:${product.id}` }
       ]] }
+    });
+  }
+
+  if (data.startsWith('adm:networkshare:')) {
+    const product = await Merchant.findByPk(Number(data.split(':')[2]));
+    if (!product || !canManageNetworkProduct(product) || !isPublicProduct(product)) {
+      return answerCallback(query.id, 'المنتج غير موجود أو لا تملك صلاحية توزيعه.', true);
+    }
+    if (String(product.type || '') === 'service') return answerCallback(query.id, 'الخدمات التنفيذية تبقى محلية.', true);
+    const nextEnabled = !productSharedWithOtherBots(product);
+    try {
+      if (product.networkManaged && network.enabledClient()) {
+        await network.updateRemoteProduct(product.networkProductId, { networkDistributionEnabled: nextEnabled });
+      }
+      product.networkDistributionEnabled = nextEnabled;
+      await product.save({ fields: ['networkDistributionEnabled'] });
+      if (nextEnabled) {
+        if (product.networkManaged && network.enabledClient()) {
+          await network.publishRemoteProduct(product.networkProductId).catch(() => {});
+        } else if (network.isMaster()) {
+          await network.publishNotificationEvent({
+            eventType: 'new_product',
+            networkProductId: product.networkProductId,
+            actorShopId: 'master',
+            actorName: product.createdByDisplayName || config.network.ownerName || 'الإدارة',
+            payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price), type: product.type, description: product.description || {} }
+          }).catch(() => {});
+        }
+      }
+      await answerCallback(query.id, nextEnabled ? 'تم إظهار المنتج لبقية البوتات.' : 'تم إخفاء المنتج من بقية البوتات مع حفظه ومخزونه.');
+      await bot.sendMessage(query.message.chat.id, nextEnabled
+        ? '🌐 تم تفعيل توزيع المنتج على البوتات الأخرى. كل بوت يحتفظ بقراره المحلي بالنشر أو الإخفاء.'
+        : '🙈 تم إخفاء المنتج من البوتات الأخرى فقط. المنتج ومخزونه لم يُحذفا، ويبقى ظاهراً في بوتك ويمكنك إعادته للشبكة بأي وقت.');
+      return showAdminProductEditor(query.message.chat.id, product.id);
+    } catch (error) {
+      return answerCallback(query.id, `تعذر تغيير توزيع المنتج: ${String(error.message || error)}`, true);
+    }
+  }
+
+  if (data.startsWith('adm:change_type:')) {
+    const product = await Merchant.findByPk(Number(data.split(':')[2]));
+    if (!product || !canManageNetworkProduct(product)) return answerCallback(query.id, 'المنتج غير موجود أو لا تملكه.', true);
+    if (String(product.type || '') === 'service') return answerCallback(query.id, 'الخدمة التنفيذية لا تتحول إلى نوع مخزون.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '🔄 <b>تغيير نوع المنتج</b>',
+      `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+      '',
+      'اختَر النوع الجديد. إذا كان هناك مخزون مساهمين من متاجر أخرى، البوت سيمنع أي تغيير قد يضر بياناتهم.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '🔑 كود', callback_data: `adm:type:${product.id}:code` }],
+        [{ text: '📧 إيميل وباسورد', callback_data: `adm:type:${product.id}:account` }],
+        [{ text: '📝 منتج حر', callback_data: `adm:type:${product.id}:free` }],
+        [{ text: '👥 حساب مشترك', callback_data: `adm:type:${product.id}:shared` }],
+        [{ text: '⬅️ رجوع', callback_data: `adm:edit:${product.id}` }]
+      ] }
     });
   }
 
@@ -9112,9 +9325,25 @@ async function handleAdminCallback(query, user, data) {
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
     if (type === 'service' || String(product.type || '') === 'service') {
-      return answerCallback(query.id, 'تنفيذ خدمة نوع محلي خاص. أنشئه من زر «إضافة خدمة محلية» ولا يتم تحويل المنتجات إليه أو منه.', true);
+      return answerCallback(query.id, 'تنفيذ الخدمة نوع محلي خاص. لإضافته استخدم «إضافة منتج» ثم اختر «تنفيذ خدمة». لا نحول منتج مخزون موجود إلى خدمة أو العكس حتى نحافظ على البيانات.', true);
     }
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
+    if (String(product.type || '') === type) return answerCallback(query.id, 'هذا هو نوع المنتج الحالي أصلاً.', true);
+
+    // A structural type change is safe only when there is no unsold inventory.
+    // Hidden stock counts too: changing code/account/free/shared while payloads are
+    // still available can make old stock unreadable or deliver it in the wrong format.
+    let ownAvailable = 0;
+    if (product.networkManaged && network.enabledClient()) {
+      const owned = await ownedInventoryRows(product).catch(() => []);
+      ownAvailable = owned.reduce((sum, item) => sum + Math.max(0, Number(item.remaining || 0)), 0);
+    } else {
+      ownAvailable = await Code.count({ where: { merchantId: product.id, isUsed: false } });
+    }
+    if (ownAvailable > 0) {
+      return answerCallback(query.id, `قبل تغيير النوع لازم تستهلك أو تحذف المخزون المتبقي (${ownAvailable}). المخزون المخفي محسوب أيضاً حتى ما تضيع بياناته.`, true);
+    }
+
     if (!network.enabledClient()) {
       const protection = await network.productStockProtection(product.id, product.networkOwnerShopId || 'master');
       if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تغيّر نوع المنتج لأن بيه ${protection.externalAvailable} وحدات مخزون لأشخاص آخرين.`, true);
@@ -9151,22 +9380,133 @@ async function handleAdminCallback(query, user, data) {
     return showAdminProductEditor(query.message.chat.id, product.id);
   }
 
-  if (data.startsWith('adm:delete:')) {
+  if (data.startsWith('adm:delete_confirm:')) {
     const product = await Merchant.findByPk(Number(data.split(':')[2]));
-    if (!product) return;
+    if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
     if (!network.enabledClient()) {
       const protection = await network.productStockProtection(product.id, product.networkOwnerShopId || 'master');
-      if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تحذف المنتج؛ بيه ${protection.externalAvailable} وحدات مخزون لأشخاص آخرين.`, true);
+      if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تحذف/توقف المنتج؛ بيه ${protection.externalAvailable} وحدات مخزون لأشخاص آخرين.`, true);
     }
     if (product.networkManaged && network.enabledClient()) {
       try { await network.deleteRemoteProduct(product.networkProductId); }
-      catch (error) { return answerCallback(query.id, error.message.startsWith('EXTERNAL_STOCK_EXISTS:') ? 'ما تگدر تحذف المنتج لأن بيه مخزون لأشخاص آخرين.' : error.message, true); }
+      catch (error) { return answerCallback(query.id, error.message.startsWith('EXTERNAL_STOCK_EXISTS:') ? 'ما تگدر تحذف/توقف المنتج لأن بيه مخزون لأشخاص آخرين.' : error.message, true); }
     }
-    await Code.destroy({ where: { merchantId: product.id } });
-    await product.destroy();
-    await answerCallback(query.id, 'تم الحذف.');
-    return showAdminProducts(query.message.chat.id, 0);
+    // Safe deletion: archive instead of destroying the product or inventory.
+    // This keeps orders, delivery history and stock recoverable.
+    product.isActive = false;
+    await product.save({ fields: ['isActive'] });
+    await answerCallback(query.id, 'تم حذف/أرشفة المنتج من واجهة البيع بدون مسح بياناته.');
+    await bot.sendMessage(query.message.chat.id, '🗑 تم إخفاء المنتج عن الزبائن وأرشفته بأمان. المخزون والطلبات لم تُحذف، وتقدر تستعيده من إدارة المنتجات.');
+    return showAdminProductEditor(query.message.chat.id, product.id);
+  }
+
+  if (data.startsWith('adm:delete:')) {
+    const product = await Merchant.findByPk(Number(data.split(':')[2]));
+    if (!product) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>تأكيد حذف/أرشفة المنتج</b>',
+      `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+      '',
+      'للحفاظ على قاعدة البيانات، الحذف هنا آمن: المنتج يختفي من البيع لكن المخزون والطلبات وسجل التسليم يبقون محفوظين ويمكن استعادة المنتج لاحقاً.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        { text: '🗑 نعم، احذف/أرشف', callback_data: `adm:delete_confirm:${product.id}`, style: 'danger' },
+        { text: '❌ إلغاء', callback_data: `adm:edit:${product.id}` }
+      ]] }
+    });
+  }
+
+  if (data.startsWith('adm:inventory:')) {
+    const [, , productIdRaw, pageRaw] = data.split(':');
+    await answerCallback(query.id);
+    return showAdminInventory(query.message.chat.id, Number(productIdRaw), Number(pageRaw || 0));
+  }
+
+  if (data.startsWith('adm:invview:')) {
+    const [, , productIdRaw, codeIdRaw, pageRaw] = data.split(':');
+    await answerCallback(query.id);
+    return showAdminInventoryItem(query.message.chat.id, Number(productIdRaw), Number(codeIdRaw), Number(pageRaw || 0));
+  }
+
+  if (data.startsWith('adm:invhide:')) {
+    const [, , productIdRaw, codeIdRaw, hiddenRaw, pageRaw] = data.split(':');
+    const product = await Merchant.findByPk(Number(productIdRaw));
+    if (!product || !productAccessibleInCurrentShop(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    const item = await ownedInventoryItem(product, Number(codeIdRaw));
+    if (!item) return answerCallback(query.id, 'عنصر المخزون غير موجود أو ليس مملوكاً لهذا البوت.', true);
+    if (Number(item.remaining || 0) <= 0) return answerCallback(query.id, 'هذا العنصر مستخدم بالكامل.', true);
+    try {
+      await updateOwnedInventoryHidden(product, Number(codeIdRaw), hiddenRaw === '1');
+      await answerCallback(query.id, hiddenRaw === '1' ? 'تم إخفاء العنصر من البيع.' : 'تم إظهار العنصر للبيع.');
+      return showAdminInventoryItem(query.message.chat.id, product.id, Number(codeIdRaw), Number(pageRaw || 0));
+    } catch (error) {
+      return answerCallback(query.id, `تعذر تغيير حالة المخزون: ${String(error.message || error)}`, true);
+    }
+  }
+
+  if (data.startsWith('adm:invedit:')) {
+    const [, , productIdRaw, codeIdRaw, pageRaw] = data.split(':');
+    const product = await Merchant.findByPk(Number(productIdRaw));
+    if (!product || !productAccessibleInCurrentShop(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    const item = await ownedInventoryItem(product, Number(codeIdRaw));
+    if (!item) return answerCallback(query.id, 'عنصر المخزون غير موجود.', true);
+    if (!item.editable) return answerCallback(query.id, 'لا يمكن تعديل عنصر تم استخدامه أو تسليمه سابقاً.', true);
+    await setState(user.id, {
+      action: 'admin_edit_inventory',
+      productId: product.id,
+      codeId: Number(codeIdRaw),
+      page: Number(pageRaw || 0)
+    });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      `✏️ <b>تعديل مخزون #${Number(codeIdRaw)}</b>`,
+      '',
+      stockPrompt(product),
+      '',
+      'أرسل قيمة واحدة فقط بديلة عن المحتوى القديم. ما راح يتم حذف القيمة القديمة إلا بعد التحقق من الجديدة.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:invdeleteask:')) {
+    const [, , productIdRaw, codeIdRaw, pageRaw] = data.split(':');
+    const product = await Merchant.findByPk(Number(productIdRaw));
+    if (!product || !productAccessibleInCurrentShop(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    const item = await ownedInventoryItem(product, Number(codeIdRaw));
+    if (!item) return answerCallback(query.id, 'عنصر المخزون غير موجود.', true);
+    if (!item.editable) return answerCallback(query.id, 'لا يمكن حذف عنصر تم استخدامه أو تسليمه سابقاً.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>تأكيد حذف عنصر المخزون</b>',
+      `العنصر: <code>#${Number(codeIdRaw)}</code>`,
+      '',
+      'الحذف مسموح فقط إذا لم يُبع أو يُستخدم. إذا تريد الاحتفاظ به بدون بيعه استخدم «إخفاء من البيع» بدلاً من الحذف.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        { text: '🗑 نعم، حذف', callback_data: `adm:invdelete:${product.id}:${Number(codeIdRaw)}:${Number(pageRaw || 0)}`, style: 'danger' },
+        { text: '❌ إلغاء', callback_data: `adm:invview:${product.id}:${Number(codeIdRaw)}:${Number(pageRaw || 0)}` }
+      ]] }
+    });
+  }
+
+  if (data.startsWith('adm:invdelete:')) {
+    const [, , productIdRaw, codeIdRaw, pageRaw] = data.split(':');
+    const product = await Merchant.findByPk(Number(productIdRaw));
+    if (!product || !productAccessibleInCurrentShop(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    try {
+      await deleteOwnedInventory(product, Number(codeIdRaw));
+      await answerCallback(query.id, 'تم حذف عنصر المخزون.');
+      return showAdminInventory(query.message.chat.id, product.id, Number(pageRaw || 0));
+    } catch (error) {
+      const message = String(error.message || error);
+      return answerCallback(query.id, message === 'INVENTORY_ALREADY_CONSUMED'
+        ? 'لا يمكن حذف عنصر تم استخدامه سابقاً.'
+        : `تعذر حذف المخزون: ${message}`, true);
+    }
   }
 
   if (data.startsWith('adm:stockprod:')) {
@@ -9251,7 +9591,10 @@ async function showAdminUserCard(chatId, targetId) {
     `الحظر: <b>${target.blocked ? 'محظور' : 'غير محظور'}</b>`
   ].join('\n');
   const keyboard = [
-    [{ text: '💰 شحن الرصيد', callback_data: `adm:usercredit:${target.id}` }],
+    [
+      { text: '➕ إضافة رصيد', callback_data: `adm:usercredit:${target.id}`, style: 'success' },
+      { text: '➖ خصم رصيد', callback_data: `adm:userdebit:${target.id}`, style: 'danger' }
+    ],
     [{ text: '🧹 تصفير المحفظة', callback_data: `adm:userzeroask:${target.id}`, style: 'danger' }],
     [{ text: target.blocked ? '✅ فك الحظر' : '⛔ حظر المستخدم', callback_data: `adm:userblock:${target.id}` }],
     [{ text: '🔄 تحديث', callback_data: `adm:usercard:${target.id}` }]
@@ -9293,6 +9636,203 @@ function stockPrompt(product) {
   return `📥 <b>المنتج الحر — كل رسالة = قطعة واحدة</b>\n\nأرسل محتوى القطعة كامل برسالة واحدة، حتى لو كان من عدة أسطر مثل إيميل + باسورد + رمز مصادقة + رابط.\nالبوت يحفظ الرسالة كلها كمنتج واحد ويسلمها للزبون بنفس المحتوى.\n\nإذا تريد تضيف قطعة ثانية، أرسلها برسالة ثانية بعد إكمال إضافة الأولى.`;
 }
 
+function localOwnedInventoryWhere(product, extra = {}) {
+  // Private products live only inside this bot/schema, so all their legacy
+  // inventory rows belong to this bot even if an old version stored a blank
+  // or "master" stockOwnerShopId. Public master products can contain stock
+  // contributed by other shops, so those remain strictly owner-filtered.
+  const where = { merchantId: product.id, ...extra };
+  if (isPublicProduct(product)) where.stockOwnerShopId = currentProductShopId();
+  return where;
+}
+
+function inventoryAdminStatus(item) {
+  const used = Number(item?.usedCount || 0);
+  const max = Math.max(1, Number(item?.maxUses || 1));
+  const remaining = Math.max(0, Number(item?.remaining ?? (max - used)));
+  if (item?.hidden && remaining > 0) return '🙈 مخفي';
+  if (remaining <= 0 || item?.isUsed) return '✅ مستخدم بالكامل';
+  if (used > 0) return `🔄 مستخدم ${used}/${max}`;
+  return '🟢 متاح';
+}
+
+async function ownedInventoryRows(product) {
+  if (!product || String(product.type || '') === 'service') return [];
+  if (network.enabledClient() && product.networkManaged) {
+    const remote = await network.listMyRemoteInventory(product.networkProductId);
+    return (remote?.items || []).map(item => ({
+      id: Number(item.id),
+      payload: item.payload || {},
+      usedCount: Number(item.usedCount || 0),
+      maxUses: Math.max(1, Number(item.maxUses || 1)),
+      isUsed: Boolean(item.isUsed),
+      soldAt: item.soldAt || null,
+      buyers: Array.isArray(item.buyers) ? item.buyers : [],
+      remaining: Math.max(0, Number(item.remaining ?? (Number(item.maxUses || 1) - Number(item.usedCount || 0)))),
+      hidden: Boolean(item.hidden),
+      editable: Boolean(item.editable)
+    }));
+  }
+
+  const rows = await Code.findAll({
+    where: localOwnedInventoryWhere(product),
+    order: [['id', 'DESC']],
+    limit: 500
+  });
+  return rows.map(row => {
+    let payload = {};
+    try { payload = decryptPayload(row.value, row.extra); }
+    catch { payload = { raw: '[تعذر فك تشفير هذا المخزون]' }; }
+    const usedCount = Number(row.usedCount || 0);
+    const maxUses = Math.max(1, Number(row.maxUses || 1));
+    return {
+      id: Number(row.id),
+      payload,
+      usedCount,
+      maxUses,
+      isUsed: Boolean(row.isUsed),
+      soldAt: row.soldAt || null,
+      buyers: Array.isArray(row.buyers) ? row.buyers : [],
+      remaining: Math.max(0, maxUses - usedCount),
+      hidden: Boolean(row.isHidden),
+      editable: !row.isUsed && usedCount === 0
+    };
+  });
+}
+
+async function ownedInventoryItem(product, codeId) {
+  const rows = await ownedInventoryRows(product);
+  return rows.find(item => Number(item.id) === Number(codeId)) || null;
+}
+
+async function updateOwnedInventoryHidden(product, codeId, hidden) {
+  if (network.enabledClient() && product.networkManaged) {
+    const result = await network.updateMyRemoteInventory(product.networkProductId, codeId, { isHidden: Boolean(hidden) });
+    await network.syncCatalogToLocal({ force: true }).catch(() => null);
+    return result;
+  }
+  const row = await Code.findOne({
+    where: localOwnedInventoryWhere(product, { id: Number(codeId) })
+  });
+  if (!row) throw new Error('INVENTORY_NOT_OWNED');
+  row.isHidden = Boolean(hidden);
+  await row.save({ fields: ['isHidden'] });
+  return { item: { id: Number(row.id), hidden: Boolean(row.isHidden) } };
+}
+
+async function deleteOwnedInventory(product, codeId) {
+  if (network.enabledClient() && product.networkManaged) {
+    const result = await network.deleteMyRemoteInventory(product.networkProductId, codeId);
+    await network.syncCatalogToLocal({ force: true }).catch(() => null);
+    return result;
+  }
+  const row = await Code.findOne({
+    where: localOwnedInventoryWhere(product, { id: Number(codeId) })
+  });
+  if (!row) throw new Error('INVENTORY_NOT_OWNED');
+  if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
+  await row.destroy();
+  return { deleted: true };
+}
+
+async function updateOwnedInventoryPayload(product, codeId, payload) {
+  if (network.enabledClient() && product.networkManaged) {
+    return network.updateMyRemoteInventory(product.networkProductId, codeId, { payload });
+  }
+  const transaction = await sequelize.transaction();
+  try {
+    const row = await Code.findOne({
+      where: localOwnedInventoryWhere(product, { id: Number(codeId) }),
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (!row) throw new Error('INVENTORY_NOT_OWNED');
+    if (row.isUsed || Number(row.usedCount || 0) > 0) throw new Error('INVENTORY_ALREADY_CONSUMED');
+    const fingerprint = inventoryFingerprint(product.type, payload);
+    const duplicate = await Code.findOne({
+      where: { merchantId: product.id, fingerprint, id: { [Op.ne]: row.id } },
+      transaction
+    });
+    if (duplicate) throw new Error('DUPLICATE_INVENTORY');
+    row.value = encryptPayload(payload);
+    row.extra = null;
+    row.fingerprint = fingerprint;
+    await row.save({ transaction, fields: ['value', 'extra', 'fingerprint'] });
+    await transaction.commit();
+    return { item: { id: Number(row.id), payload } };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function showAdminInventory(chatId, productId, page = 0) {
+  const product = await Merchant.findByPk(productId);
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, '❌ المنتج غير موجود في هذا البوت.');
+  if (String(product.type || '') === 'service') return bot.sendMessage(chatId, '🛠 الخدمة التنفيذية ما عندها مخزون.');
+  const rows = await ownedInventoryRows(product);
+  const perPage = 8;
+  const pages = Math.max(1, Math.ceil(rows.length / perPage));
+  const safePage = Math.max(0, Math.min(Number(page || 0), pages - 1));
+  const visibleRemaining = rows.reduce((sum, item) => sum + (!item.hidden ? Number(item.remaining || 0) : 0), 0);
+  const hiddenRemaining = rows.reduce((sum, item) => sum + (item.hidden ? Number(item.remaining || 0) : 0), 0);
+  const keyboard = [];
+  for (const item of rows.slice(safePage * perPage, safePage * perPage + perPage)) {
+    keyboard.push([{
+      text: `#${item.id} • ${inventoryAdminStatus(item)} • باقي ${item.remaining}`,
+      callback_data: `adm:invview:${product.id}:${item.id}:${safePage}`,
+      style: item.hidden || item.remaining <= 0 ? 'danger' : 'success'
+    }]);
+  }
+  if (!rows.length) keyboard.push([{ text: 'لا يوجد مخزون مضاف من هذا البوت', callback_data: `adm:edit:${product.id}` }]);
+  const nav = [];
+  if (safePage > 0) nav.push({ text: '⬅️', callback_data: `adm:inventory:${product.id}:${safePage - 1}` });
+  nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
+  if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `adm:inventory:${product.id}:${safePage + 1}` });
+  keyboard.push(nav);
+  if (product.isActive !== false) {
+    keyboard.push([{ text: '➕ إضافة مخزون', callback_data: `adm:stockprod:${product.id}`, style: 'success' }]);
+  } else {
+    keyboard.push([{ text: '♻️ المنتج متوقف — افتح النشر للاستعادة', callback_data: `adm:product_publish:${product.id}`, style: 'primary' }]);
+  }
+  keyboard.push([{ text: '⬅️ رجوع للمنتج', callback_data: `adm:edit:${product.id}` }]);
+  return bot.sendMessage(chatId, [
+    `🔐 <b>إدارة مخزون: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+    '',
+    'هذه القائمة تعرض المخزون الذي أضافه هذا البوت فقط. فتح أي عنصر يكشف محتواه للإدارة ويعطيك تعديل/إخفاء/حذف.',
+    `المتاح للبيع: <b>${visibleRemaining}</b>`,
+    `المخفي والمحـفوظ: <b>${hiddenRemaining}</b>`,
+    `عدد سجلات المخزون: <b>${rows.length}</b>`
+  ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function showAdminInventoryItem(chatId, productId, codeId, page = 0) {
+  const product = await Merchant.findByPk(productId);
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, '❌ المنتج غير موجود.');
+  const item = await ownedInventoryItem(product, codeId);
+  if (!item) return bot.sendMessage(chatId, '❌ عنصر المخزون غير موجود أو ليس مملوكاً لهذا البوت.');
+  const content = renderDelivery(item.payload || {}, 'ar');
+  const text = [
+    `🔐 <b>كشف عنصر المخزون #${item.id}</b>`,
+    `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+    `الحالة: <b>${inventoryAdminStatus(item)}</b>`,
+    `الاستخدام: <b>${item.usedCount}/${item.maxUses}</b> • المتبقي: <b>${item.remaining}</b>`,
+    '',
+    '<b>المحتوى المحفوظ:</b>',
+    content || '—'
+  ].join('\n');
+  const keyboard = [];
+  if (item.editable) keyboard.push([{ text: '✏️ تعديل المحتوى', callback_data: `adm:invedit:${product.id}:${item.id}:${page}`, style: 'primary' }]);
+  if (item.remaining > 0) keyboard.push([{
+    text: item.hidden ? '👁 إظهار للبيع' : '🙈 إخفاء من البيع',
+    callback_data: `adm:invhide:${product.id}:${item.id}:${item.hidden ? 0 : 1}:${page}`,
+    style: item.hidden ? 'success' : 'danger'
+  }]);
+  if (item.editable) keyboard.push([{ text: '🗑 حذف عنصر المخزون', callback_data: `adm:invdeleteask:${product.id}:${item.id}:${page}`, style: 'danger' }]);
+  keyboard.push([{ text: '⬅️ رجوع للمخزون', callback_data: `adm:inventory:${product.id}:${page}` }]);
+  return bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
 async function showAdminProducts(chatId, page = 0) {
   if (network.enabledClient()) await network.syncCatalogToLocal().catch(() => {});
   const allProducts = await Merchant.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
@@ -9326,16 +9866,12 @@ async function showAdminProducts(chatId, page = 0) {
     }]);
   }
 
-  keyboard.push([
-    { text: '➕ إضافة منتج', callback_data: 'adm:add_product', style: 'success' },
-    { text: '🛠 خدمة محلية', callback_data: 'adm:add_service_local', style: 'success' }
-  ]);
   const navigation = [];
   if (safePage > 0) navigation.push({ text: '⬅️', callback_data: `adm:products:${safePage - 1}` });
   navigation.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
   if (safePage < pages - 1) navigation.push({ text: '➡️', callback_data: `adm:products:${safePage + 1}` });
   keyboard.push(navigation);
-  keyboard.push([{ text: '⬅️ رجوع للمنتجات والمخزون', callback_data: 'adm:menu:products' }]);
+  keyboard.push([{ text: '⬅️ رجوع لإدارة المنتجات', callback_data: 'adm:menu:products' }]);
 
   await bot.sendMessage(chatId, '📦 <b>إدارة المنتجات</b>\n🟢 منشور ومتوفر  •  🔴 فارغ/مخفي/مرفوض/محذوف محلياً', {
     parse_mode: 'HTML',
@@ -9343,50 +9879,13 @@ async function showAdminProducts(chatId, page = 0) {
   });
 }
 
-async function showAdminProductEditor(chatId, productId) {
+async function showAdminProductFieldsMenu(chatId, productId) {
   const product = await Merchant.findByPk(productId);
-  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
-  const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
-  const description = productPresentationDescription(product);
-  const stock = await getProductStock(product.id);
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, '❌ المنتج غير موجود في هذا البوت.');
   const manageable = canManageNetworkProduct(product);
-  const foreignPublic = isForeignPublicProduct(product);
   const publicProduct = isPublicProduct(product);
-  const privateProduct = !publicProduct;
-  const displayPrice = effectiveProductPrice(product);
-  const basePrice = networkProductBasePrice(product);
-  const scopeLabel = privateProduct ? 'محلي — هذا البوت فقط' : 'عام — كتالوج الشبكة';
-  const localEmoji = productDisplayEmoji(product, parseDescription(product.description));
-  const displayImage = productDisplayImage(product);
-  const text = [
-    `📝 <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
-    '',
-    `النوع: <b>${productTypeLabel(product.type)}</b>`,
-    `سعر البيع في هذا البوت: <b>${moneyUsd(displayPrice)}</b>`,
-    publicProduct ? `السعر العام لصاحب المنتج: <b>${moneyUsd(basePrice)}</b>` : '',
-    publicProduct && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(displayPrice - basePrice)}</b> لكل وحدة` : '',
-    `المخزون: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
-    product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
-    `حالة هذا البوت: <b>${productLocalStatusLabel(publicationStatus)}</b>`,
-    `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف'}</b>`,
-    `نطاق النشر: <b>${scopeLabel}</b>`,
-    `الترجمة الإنجليزية: <b>تلقائية</b>`,
-    String(product.visibilityScope || 'public').toLowerCase() === 'public' ? `المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>${product.createdByDisplayName ? ` — ${escapeHtml(product.createdByDisplayName)}` : ''}` : '',
-    publicProduct ? '🧩 <b>التخصيص المحلي:</b> الاسم والسعر والوصف والضمان والصورة والإخفاء والحذف تخص هذا البوت فقط ولا تغيّر بقية البوتات.' : '',
-    '',
-    `الوصف: ${escapeHtml(description.ar || '—')}`,
-    `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
-    `الصورة المعروضة بهذا البوت: ${displayImage ? 'موجودة' : 'بدون'}`,
-    product.type === 'service' ? `بيانات الزبون المطلوبة: ${escapeHtml(serviceInputModeLabel(description.serviceInputMode || 'text', 'ar'))}` : '',
-    product.type === 'service' ? `رسالة الطلب: ${escapeHtml(description.servicePromptAr || '—')}` : '',
-    localEmoji?.id ? '✨ Custom Emoji: محفوظة للاسم المعروض' : '✨ Custom Emoji: لا توجد'
-  ].filter(Boolean).join('\n');
-
-  const commonRows = product.type === 'service' ? [] : [
-    [{ text: '📥 إضافة مخزون لهذا المنتج', callback_data: `adm:stockprod:${product.id}`, style: 'success' }],
-    [{ text: '📊 مساهمو المخزون والمبيعات', callback_data: `adm:contributors:${product.id}`, style: 'primary' }]
-  ];
   const keyboard = [];
+
   if (publicProduct) {
     keyboard.push([{
       text: '✏️ اسم هذا البوت فقط',
@@ -9411,44 +9910,164 @@ async function showAdminProductEditor(chatId, productId) {
       callback_data: `adm:field:${product.id}:localImage`,
       style: 'primary'
     }]);
+  }
+
+  if (manageable) {
+    keyboard.push([{
+      text: publicProduct ? '✏️ الاسم العام' : '✏️ الاسم',
+      callback_data: `adm:field:${product.id}:nameAr`
+    }, {
+      text: publicProduct ? '💵 السعر العام' : '💵 السعر',
+      callback_data: `adm:field:${product.id}:price`
+    }]);
+    keyboard.push([{
+      text: publicProduct ? '📝 الوصف العام' : '📝 الوصف',
+      callback_data: `adm:field:${product.id}:descriptionAr`
+    }, {
+      text: publicProduct ? '🛡 الضمان العام' : '🛡 الضمان',
+      callback_data: `adm:field:${product.id}:warrantyAr`
+    }]);
+    keyboard.push([{
+      text: publicProduct ? '🖼 الصورة العامة' : '🖼 الصورة',
+      callback_data: `adm:field:${product.id}:image`
+    }]);
+    if (String(product.type || '') !== 'service') {
+      keyboard.push([{ text: '🔄 تغيير نوع المنتج', callback_data: `adm:change_type:${product.id}`, style: 'primary' }]);
+    }
+  }
+
+  keyboard.push([{ text: '⬅️ رجوع للمنتج', callback_data: `adm:edit:${product.id}` }]);
+  return bot.sendMessage(chatId, [
+    `✏️ <b>تعديل بيانات: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+    '',
+    publicProduct
+      ? 'الحقول المكتوب عليها «هذا البوت فقط» لا تغيّر نسخ البوتات الأخرى. إذا كنت صاحب المنتج تظهر لك أيضاً الحقول العامة.'
+      : 'أي تعديل هنا يخص المنتج المحلي داخل بوتك. استخدم - في الوصف أو الضمان لإزالته.'
+  ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function showAdminProductPublishMenu(chatId, productId) {
+  const product = await Merchant.findByPk(productId);
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, '❌ المنتج غير موجود في هذا البوت.');
+  const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
+  const manageable = canManageNetworkProduct(product);
+  const publicProduct = isPublicProduct(product);
+  const keyboard = [];
+
+  if (publicProduct) {
     if (publicationStatus === 'published') {
       keyboard.push([
-        { text: '🙈 إخفاء محلياً', callback_data: `adm:localstatus:hidden:${product.id}`, style: 'danger' },
-        { text: '🗑 حذف محلياً', callback_data: `adm:localstatus:deleted:${product.id}`, style: 'danger' }
+        { text: '🙈 إخفاء داخل هذا البوت', callback_data: `adm:localstatus:hidden:${product.id}`, style: 'danger' },
+        { text: '🗑 حذف من هذا البوت', callback_data: `adm:localstatus:deleted:${product.id}`, style: 'danger' }
       ]);
     } else {
       keyboard.push([{
-        text: '👁 نشر/استعادة في هذا البوت',
+        text: '👁 نشر/استعادة داخل هذا البوت',
         callback_data: `adm:localstatus:published:${product.id}`,
         style: 'success'
       }]);
     }
-  }
-  if (manageable) {
-    keyboard.push([{ text: publicProduct ? '✏️ الاسم العام لكل البوتات' : '✏️ الاسم', callback_data: `adm:field:${product.id}:nameAr` }, { text: publicProduct ? '💵 السعر العام لكل البوتات' : '💵 السعر', callback_data: `adm:field:${product.id}:price` }]);
-    keyboard.push([{ text: publicProduct ? '📝 الوصف العام' : '📝 الوصف', callback_data: `adm:field:${product.id}:descriptionAr` }, { text: publicProduct ? '🛡 الضمان العام' : '🛡 الضمان', callback_data: `adm:field:${product.id}:warrantyAr` }]);
-    keyboard.push([{ text: publicProduct ? '🖼 الصورة العامة' : '🖼 الصورة', callback_data: `adm:field:${product.id}:image` }]);
-  }
-  keyboard.push(...commonRows);
-  if (manageable && privateProduct && String(product.type || '') !== 'service') {
-    keyboard.push([{ text: '🌐 نشر المنتج في باقي البوتات', callback_data: `adm:publish_network:${product.id}`, style: 'success' }]);
-  }
-  if (manageable) {
+
+    if (manageable) {
+      keyboard.push([{
+        text: productSharedWithOtherBots(product) ? '🙈 إخفاء من البوتات الأخرى' : '🌐 إظهار في البوتات الأخرى',
+        callback_data: `adm:networkshare:${product.id}`,
+        style: productSharedWithOtherBots(product) ? 'danger' : 'success'
+      }]);
+      keyboard.push([{
+        text: product.isActive ? '⛔ إيقاف المنتج العام' : '✅ تشغيل المنتج العام',
+        callback_data: `adm:toggle:${product.id}`,
+        style: product.isActive ? 'danger' : 'success'
+      }]);
+    }
+  } else if (manageable) {
+    if (String(product.type || '') !== 'service') {
+      keyboard.push([{
+        text: '🌐 إظهار المنتج في البوتات الأخرى',
+        callback_data: `adm:publish_network:${product.id}`,
+        style: 'success'
+      }]);
+    }
     keyboard.push([{
-      text: publicProduct
-        ? (product.isActive ? '⛔ إيقاف عام بكل البوتات' : '✅ تشغيل عام بكل البوتات')
-        : (product.isActive ? '🙈 إخفاء المنتج' : '👁 إظهار المنتج'),
+      text: product.isActive ? '🙈 إخفاء المنتج من الزبائن' : '👁 إظهار المنتج للزبائن',
       callback_data: `adm:toggle:${product.id}`,
       style: product.isActive ? 'danger' : 'success'
     }]);
+  }
+
+  keyboard.push([{ text: '⬅️ رجوع للمنتج', callback_data: `adm:edit:${product.id}` }]);
+  return bot.sendMessage(chatId, [
+    `🌐 <b>النشر والظهور: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+    '',
+    `داخل هذا البوت: <b>${productLocalStatusLabel(publicationStatus)}</b>`,
+    `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف'}</b>`,
+    publicProduct && manageable
+      ? `البوتات الأخرى: <b>${productSharedWithOtherBots(product) ? 'مسموح لها باستلام المنتج' : 'مخفي عنها'}</b>`
+      : '',
+    '',
+    publicProduct
+      ? 'إخفاء/حذف «داخل هذا البوت» لا يغيّر بقية البوتات. صاحب المنتج فقط يقدر يوقف التوزيع على الشبكة كلها.'
+      : (String(product.type || '') === 'service'
+          ? 'الخدمة التنفيذية تبقى محلية في هذا البوت.'
+          : 'تقدر تبقي المنتج محلياً أو تحوله إلى منتج عام وترسله لبقية إدارات البوتات للموافقة.')
+  ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function showAdminProductEditor(chatId, productId) {
+  const product = await Merchant.findByPk(productId);
+  if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
+  const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
+  const description = productPresentationDescription(product);
+  const stock = await getProductStock(product.id);
+  const manageable = canManageNetworkProduct(product);
+  const publicProduct = isPublicProduct(product);
+  const privateProduct = !publicProduct;
+  const displayPrice = effectiveProductPrice(product);
+  const basePrice = networkProductBasePrice(product);
+  const scopeLabel = privateProduct ? 'محلي — هذا البوت فقط' : 'عام — كتالوج الشبكة';
+  const localEmoji = productDisplayEmoji(product, parseDescription(product.description));
+  const displayImage = productDisplayImage(product);
+  const text = [
+    `📝 <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+    '',
+    `النوع: <b>${productTypeLabel(product.type)}</b>`,
+    `سعر البيع في هذا البوت: <b>${moneyUsd(displayPrice)}</b>`,
+    publicProduct ? `السعر العام لصاحب المنتج: <b>${moneyUsd(basePrice)}</b>` : '',
+    publicProduct && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(displayPrice - basePrice)}</b> لكل وحدة` : '',
+    `المخزون المتاح: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
+    product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
+    `حالة هذا البوت: <b>${productLocalStatusLabel(publicationStatus)}</b>`,
+    `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف/مؤرشف'}</b>`,
+    `نطاق النشر: <b>${scopeLabel}</b>`,
+    publicProduct && manageable
+      ? `المشاركة مع البوتات الأخرى: <b>${productSharedWithOtherBots(product) ? 'مفعلة' : 'مخفية'}</b>`
+      : '',
+    '',
+    `الوصف: ${escapeHtml(description.ar || '—')}`,
+    `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
+    `الصورة: ${displayImage ? 'موجودة' : 'بدون'}`,
+    product.type === 'service' ? `بيانات الزبون المطلوبة: ${escapeHtml(serviceInputModeLabel(description.serviceInputMode || 'text', 'ar'))}` : '',
+    product.type === 'service' ? `رسالة الطلب: ${escapeHtml(description.servicePromptAr || '—')}` : '',
+    localEmoji?.id ? '✨ Custom Emoji: محفوظة للاسم المعروض' : ''
+  ].filter(Boolean).join('\n');
+
+  const keyboard = [
+    [{ text: '✏️ تعديل بيانات المنتج', callback_data: `adm:product_fields:${product.id}`, style: 'primary' }]
+  ];
+  if (String(product.type || '') !== 'service') {
+    keyboard.push([{ text: '🔐 إدارة وكشف المخزون والكودات', callback_data: `adm:inventory:${product.id}:0`, style: 'primary' }]);
+    keyboard.push([{ text: '📊 المخزون والمبيعات والمساهمون', callback_data: `adm:contributors:${product.id}`, style: 'primary' }]);
+  }
+  keyboard.push([{ text: '🌐 النشر والظهور', callback_data: `adm:product_publish:${product.id}`, style: 'primary' }]);
+  if (manageable) {
     keyboard.push([{
-      text: publicProduct ? '🗑 حذف نهائي من كل البوتات' : '🗑 حذف المنتج',
-      callback_data: `adm:delete:${product.id}`,
-      style: 'danger'
+      text: product.isActive ? '🗑 حذف/أرشفة المنتج' : '♻️ المنتج مؤرشف — افتح النشر للاستعادة',
+      callback_data: product.isActive ? `adm:delete:${product.id}` : `adm:product_publish:${product.id}`,
+      style: product.isActive ? 'danger' : 'primary'
     }]);
   }
-  keyboard.push([{ text: '⬅️ كل المنتجات', callback_data: 'adm:products:0' }]);
-  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+  keyboard.push([{ text: '⬅️ كل المنتجات المضافة', callback_data: 'adm:products:0' }]);
+  return bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function showStockProductList(chatId) {
@@ -9469,7 +10088,7 @@ async function showStockProductList(chatId) {
     }]);
   }
   if (!keyboard.length) keyboard.push([{ text: 'ماكو منتجات متاحة لإضافة مخزون', callback_data: 'adm:products:0' }]);
-  keyboard.push([{ text: '⬅️ رجوع للمنتجات والمخزون', callback_data: 'adm:menu:products' }]);
+  keyboard.push([{ text: '⬅️ رجوع لإدارة المنتجات', callback_data: 'adm:menu:products' }]);
   await bot.sendMessage(chatId, 'اختَر المنتج لإضافة المخزون:', { reply_markup: { inline_keyboard: keyboard } });
 }
 

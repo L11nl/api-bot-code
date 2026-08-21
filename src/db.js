@@ -133,7 +133,10 @@ const Merchant = sequelize.define('Merchant', {
   localPublicationStatus: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'published' },
   createdByAdminId: { type: DataTypes.BIGINT, allowNull: true },
   createdByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
-  localReviewNotifiedAt: { type: DataTypes.DATE, allowNull: true }
+  localReviewNotifiedAt: { type: DataTypes.DATE, allowNull: true },
+  // Owner-controlled switch for network distribution. The owner's own bot can
+  // keep selling the product while it is temporarily hidden from other bots.
+  networkDistributionEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }
 });
 
 const Code = sequelize.define('Code', {
@@ -153,7 +156,10 @@ const Code = sequelize.define('Code', {
   // 'master' means the main shop; clients use their NETWORK_SHOP_ID.
   stockOwnerShopId: { type: DataTypes.STRING(80), allowNull: true, defaultValue: 'master' },
   // Snapshot of the contributor's per-unit entitlement when this stock was added.
-  contributionPriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true }
+  contributionPriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  // Admin-only availability switch. Hidden stock stays stored and recoverable
+  // but is excluded from customer stock counts and fulfilment.
+  isHidden: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }
 });
 
 const PurchaseOrder = sequelize.define('PurchaseOrder', {
@@ -707,6 +713,7 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'createdByAdminId', { type: DataTypes.BIGINT, allowNull: true });
   await addColumnIfMissing('Merchants', 'createdByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
   await addColumnIfMissing('Merchants', 'localReviewNotifiedAt', { type: DataTypes.DATE, allowNull: true });
+  await addColumnIfMissing('Merchants', 'networkDistributionEnabled', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true });
 
   await addColumnIfMissing('PurchaseOrders', 'walletApplied', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
   await addColumnIfMissing('PurchaseOrders', 'externalAmount', { type: DataTypes.DECIMAL(18, 8), defaultValue: 0 });
@@ -789,6 +796,7 @@ async function initializeDatabase() {
   await addColumnIfMissing('Codes', 'fingerprint', { type: DataTypes.STRING(64), allowNull: true });
   await addColumnIfMissing('Codes', 'stockOwnerShopId', { type: DataTypes.STRING(80), allowNull: true, defaultValue: 'master' });
   await addColumnIfMissing('Codes', 'contributionPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Codes', 'isHidden', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
 
   // v12: keep wallet accounting in high-precision USD internally so a local
   // amount such as 1,000 IQD can round-trip correctly when users switch
@@ -846,6 +854,10 @@ async function initializeDatabase() {
   await sequelize.query(`
     CREATE INDEX IF NOT EXISTS "codes_owner_product_available"
     ON ${tableSql('Codes')} ("merchantId", "stockOwnerShopId", "isUsed")
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS "codes_product_hidden_available"
+    ON ${tableSql('Codes')} ("merchantId", "isHidden", "isUsed")
   `);
   // Replace the legacy global activation-id uniqueness rule with a
   // provider-scoped one. Provider activation ids are only unique inside their
