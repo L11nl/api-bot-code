@@ -52,6 +52,8 @@ const {
   completeExternalPayment,
   payFromWallet,
   refundServiceOrderToWallet,
+  ensureServiceNetworkAccounting,
+  repairPendingServiceNetworkAccounting,
   addWaitingCode
 } = require('./services/orders');
 const {
@@ -712,7 +714,7 @@ function currentProductShopId() {
 
 function isForeignPublicProduct(product) {
   if (!product) return false;
-  const scope = String(product.visibilityScope || (product.type === 'service' ? 'private' : 'public')).toLowerCase();
+  const scope = String(product.visibilityScope || 'public').toLowerCase();
   if (scope !== 'public' || !product.networkProductId) return false;
   const ownerShopId = String(product.networkOwnerShopId || '').trim();
   if (!ownerShopId) return Boolean(product.networkManaged);
@@ -720,7 +722,7 @@ function isForeignPublicProduct(product) {
 }
 
 function isPublicProduct(product) {
-  return Boolean(product) && String(product.visibilityScope || (product.type === 'service' ? 'private' : 'public')).toLowerCase() === 'public';
+  return Boolean(product) && String(product.visibilityScope || 'public').toLowerCase() === 'public';
 }
 
 function productSharedWithOtherBots(product) {
@@ -2117,6 +2119,130 @@ async function setHiddenPaymentTypes(set) {
   await setSetting('hidden_payment_types', JSON.stringify([...set].sort()));
 }
 
+const PAYMENT_BUTTON_STYLE_VALUES = new Set(['default', 'primary', 'success', 'danger']);
+
+function normalizePaymentButtonStyle(value, fallback = 'primary') {
+  const style = String(value || '').trim().toLowerCase();
+  return PAYMENT_BUTTON_STYLE_VALUES.has(style) ? style : fallback;
+}
+
+function paymentButtonStyleLabel(style) {
+  const value = normalizePaymentButtonStyle(style, 'primary');
+  if (value === 'success') return 'أخضر';
+  if (value === 'danger') return 'أحمر';
+  if (value === 'default') return 'افتراضي';
+  return 'أزرق';
+}
+
+function paymentButtonStyleExtra(style) {
+  const value = normalizePaymentButtonStyle(style, 'primary');
+  return value === 'default' ? {} : { style: value };
+}
+
+async function getPaymentUiPreferences() {
+  try {
+    const raw = JSON.parse(String(await getSetting('payment_ui_preferences', '{}')));
+    const order = Array.isArray(raw?.order) ? raw.order.map(String).filter(Boolean) : [];
+    const hidden = Array.isArray(raw?.hidden) ? raw.hidden.map(String).filter(Boolean) : [];
+    const styles = raw?.styles && typeof raw.styles === 'object' && !Array.isArray(raw.styles) ? raw.styles : {};
+    return {
+      order: [...new Set(order)],
+      hidden: [...new Set(hidden)],
+      styles: Object.fromEntries(Object.entries(styles).map(([key, value]) => [String(key), normalizePaymentButtonStyle(value, 'primary')]))
+    };
+  } catch {
+    return { order: [], hidden: [], styles: {} };
+  }
+}
+
+async function setPaymentUiPreferences(preferences) {
+  const prefs = preferences || {};
+  const clean = {
+    order: [...new Set((Array.isArray(prefs.order) ? prefs.order : []).map(String).filter(Boolean))],
+    hidden: [...new Set((Array.isArray(prefs.hidden) ? prefs.hidden : []).map(String).filter(Boolean))],
+    styles: {}
+  };
+  for (const [key, value] of Object.entries(prefs.styles || {})) {
+    clean.styles[String(key)] = normalizePaymentButtonStyle(value, 'primary');
+  }
+  await setSetting('payment_ui_preferences', JSON.stringify(clean));
+  return clean;
+}
+
+function paymentTokenLegacyType(token) {
+  const value = String(token || '');
+  if (value === 'binance' || value === 'network:binance') return 'binance';
+  if (value === 'superqi' || value === 'network:superqi') return 'superqi';
+  if (value.startsWith('network:')) return value.slice('network:'.length);
+  return '';
+}
+
+function paymentTokenHidden(token, preferences, legacyHidden = new Set()) {
+  const value = String(token || '');
+  if ((preferences?.hidden || []).includes(value)) return true;
+  const legacyType = paymentTokenLegacyType(value);
+  return Boolean(legacyType && legacyHidden.has(legacyType));
+}
+
+function paymentTokenStyle(token, preferences, fallback = 'primary') {
+  return normalizePaymentButtonStyle(preferences?.styles?.[String(token || '')], fallback);
+}
+
+function sortPaymentEntriesByPreference(entries, preferences) {
+  const order = Array.isArray(preferences?.order) ? preferences.order : [];
+  const positions = new Map(order.map((token, index) => [String(token), index]));
+  return [...entries].sort((a, b) => {
+    const aPos = positions.has(String(a.token)) ? positions.get(String(a.token)) : Number.MAX_SAFE_INTEGER;
+    const bPos = positions.has(String(b.token)) ? positions.get(String(b.token)) : Number.MAX_SAFE_INTEGER;
+    if (aPos !== bPos) return aPos - bPos;
+    const aDefault = Number.isFinite(Number(a.defaultOrder)) ? Number(a.defaultOrder) : Number.MAX_SAFE_INTEGER;
+    const bDefault = Number.isFinite(Number(b.defaultOrder)) ? Number(b.defaultOrder) : Number.MAX_SAFE_INTEGER;
+    if (aDefault !== bDefault) return aDefault - bDefault;
+    return String(a.label || a.token || '').localeCompare(String(b.label || b.token || ''), 'ar');
+  });
+}
+
+async function togglePaymentTokenHidden(token) {
+  const prefs = await getPaymentUiPreferences();
+  const value = String(token || '');
+  const hidden = new Set(prefs.hidden || []);
+  const legacy = await getHiddenPaymentTypes();
+  const legacyType = paymentTokenLegacyType(value);
+  const wasHidden = hidden.has(value) || Boolean(legacyType && legacy.has(legacyType));
+  if (legacyType && legacy.has(legacyType)) {
+    legacy.delete(legacyType);
+    await setHiddenPaymentTypes(legacy);
+  }
+  if (wasHidden) hidden.delete(value);
+  else hidden.add(value);
+  prefs.hidden = [...hidden];
+  await setPaymentUiPreferences(prefs);
+  return hidden.has(value);
+}
+
+async function setPaymentTokenStyle(token, style) {
+  const prefs = await getPaymentUiPreferences();
+  prefs.styles[String(token)] = normalizePaymentButtonStyle(style, 'primary');
+  await setPaymentUiPreferences(prefs);
+  return prefs.styles[String(token)];
+}
+
+async function migratePaymentTokenPreferences(fromToken, toToken) {
+  const from = String(fromToken || '');
+  const to = String(toToken || '');
+  if (!from || !to || from === to) return;
+  const prefs = await getPaymentUiPreferences();
+  prefs.order = prefs.order.map(value => value === from ? to : value);
+  prefs.order = [...new Set(prefs.order)];
+  if (prefs.hidden.includes(from)) {
+    prefs.hidden = prefs.hidden.filter(value => value !== from);
+    if (!prefs.hidden.includes(to)) prefs.hidden.push(to);
+  }
+  if (prefs.styles[from] && !prefs.styles[to]) prefs.styles[to] = prefs.styles[from];
+  delete prefs.styles[from];
+  await setPaymentUiPreferences(prefs);
+}
+
 async function getActivePaymentMethods() {
   if (activePaymentMethodsCache.rows && Date.now() - activePaymentMethodsCache.at < PAYMENT_METHOD_CACHE_TTL_MS) {
     return activePaymentMethodsCache.rows;
@@ -2367,19 +2493,30 @@ async function localSuperQiNumber() {
 
 async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
   const lang = user?.lang === 'en' ? 'en' : 'ar';
-  const hidden = await getHiddenPaymentTypes();
+  const legacyHidden = await getHiddenPaymentTypes();
+  const preferences = await getPaymentUiPreferences();
   const localBinanceReady = await binancePay.configured();
   const localSuperQi = await localSuperQiNumber();
   const entries = [];
   const currentShopId = network.isMaster()
     ? 'master'
     : (network.enabledClient() ? String(config.network.shopId) : 'standalone');
+  let defaultOrder = 0;
 
-  const pushEntry = (currency, button, minimumLocal = null, rate = 1, kind = 'local', special = '') => {
-    const normalizedCurrency = normalizePaymentCurrency(currency);
-    // Always show every configured payment method. Minimums are validated only
-    // after the customer chooses the method, so no wallet disappears from the list.
-    entries.push({ currency: normalizedCurrency, button, kind, special, minimumLocal, rate });
+  const pushEntry = (token, currency, label, emoji, callbackData, minimumLocal = null, rate = 1, kind = 'local') => {
+    const value = String(token || '');
+    if (!value || paymentTokenHidden(value, preferences, legacyHidden)) return;
+    const style = paymentTokenStyle(value, preferences, 'primary');
+    entries.push({
+      token: value,
+      currency: normalizePaymentCurrency(currency),
+      button: emojiButton(label, emoji, { callback_data: callbackData, ...paymentButtonStyleExtra(style) }),
+      kind,
+      minimumLocal,
+      rate,
+      label,
+      defaultOrder: defaultOrder++
+    });
   };
 
   let inheritedMethods = [];
@@ -2392,59 +2529,85 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
     }
   }
 
-  // 1) Binance is always shown first when available, independent of account currency.
-  if (localBinanceReady && !hidden.has('binance')) {
-    pushEntry('USD', emojiButton('Binance', PREMIUM_EMOJI.binance, {
-      callback_data: `${mode}:binance`,
-      style: 'primary'
-    }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance', 'binance');
-  } else if (network.enabledClient() && !hidden.has('binance')) {
+  if (localBinanceReady) {
+    pushEntry(
+      'binance',
+      'USD',
+      'Binance',
+      PREMIUM_EMOJI.binance,
+      `${mode}:binance`,
+      Math.max(0.01, Number(config.binance.minAmount || 0.01)),
+      1,
+      'binance'
+    );
+  } else if (network.enabledClient()) {
     const inheritedBinance = inheritedMethods.find(method => String(method.type || '') === 'binance');
     if (inheritedBinance) {
       const emoji = inheritedBinance.iconCustomEmojiId
         ? { id: String(inheritedBinance.iconCustomEmojiId), alt: inheritedBinance.iconAlt || '💳' }
         : PREMIUM_EMOJI.binance;
-      pushEntry('USD', emojiButton('Binance', emoji, {
-        callback_data: `${mode}:network:binance`,
-        style: 'primary'
-      }), Math.max(0.01, Number(config.binance.minAmount || 0.01)), 1, 'binance', 'binance');
+      pushEntry(
+        'network:binance',
+        'USD',
+        'Binance',
+        emoji,
+        `${mode}:network:binance`,
+        Math.max(0.01, Number(config.binance.minAmount || 0.01)),
+        1,
+        'binance'
+      );
     }
   }
 
-  // 2) SuperQi is always visible when configured. It will be placed beside ZainCash.
-  if (localSuperQi && !hidden.has('superqi')) {
+  if (localSuperQi) {
     const iqdRate = Number(await getIqdRate());
-    pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', PREMIUM_EMOJI.superqi, {
-      callback_data: `${mode}:superqi`,
-      style: 'primary'
-    }), null, iqdRate, 'superqi', 'superqi');
-  } else if (network.enabledClient() && !hidden.has('superqi') && !localSuperQi) {
+    pushEntry(
+      'superqi',
+      'IQD',
+      lang === 'en' ? 'SuperQi' : 'سوبركي',
+      PREMIUM_EMOJI.superqi,
+      `${mode}:superqi`,
+      null,
+      iqdRate,
+      'superqi'
+    );
+  } else if (network.enabledClient()) {
     const inheritedSuperQi = inheritedMethods.find(method => String(method.type || '') === 'superqi');
     if (inheritedSuperQi) {
       const emoji = inheritedSuperQi.iconCustomEmojiId
         ? { id: String(inheritedSuperQi.iconCustomEmojiId), alt: inheritedSuperQi.iconAlt || '💳' }
         : PREMIUM_EMOJI.superqi;
       const local = paymentLocalAmount(1, inheritedSuperQi);
-      pushEntry('IQD', emojiButton(lang === 'en' ? 'SuperQi' : 'سوبركي', emoji, {
-        callback_data: `${mode}:network:superqi`,
-        style: 'primary'
-      }), null, local.rate, 'superqi', 'superqi');
+      pushEntry(
+        'network:superqi',
+        'IQD',
+        lang === 'en' ? 'SuperQi' : 'سوبركي',
+        emoji,
+        `${mode}:network:superqi`,
+        null,
+        local.rate,
+        'superqi'
+      );
     }
   }
 
-  // 3) Show every ordinary wallet from this shop, no matter which currency the customer chose.
   const customMethods = await getActivePaymentMethods();
   for (const method of customMethods) {
     const local = paymentLocalAmount(1, method);
     const displayName = localizedPaymentName(method, lang);
     const label = `${currencyFlag(local.currency)} ${displayName}`.trim();
-    pushEntry(local.currency, emojiButton(label, customPaymentEmoji(method), {
-      callback_data: `${mode}:custom:${method.id}`,
-      style: 'primary'
-    }), minimumTransferForMethod(method), local.rate, 'local', isZainCashName(displayName) ? 'zaincash' : '');
+    pushEntry(
+      `custom:${method.id}`,
+      local.currency,
+      label,
+      customPaymentEmoji(method),
+      `${mode}:custom:${method.id}`,
+      minimumTransferForMethod(method),
+      local.rate,
+      'local'
+    );
   }
 
-  // 4) Show every shared wallet from the other admins/shops, also without currency filtering.
   try {
     const shared = await network.listSharedPaymentMethods();
     const candidates = (shared.methods || []).filter(method =>
@@ -2461,37 +2624,23 @@ async function externalPaymentButtons(user, mode = 'pay', amountUsd = null) {
       const emoji = method.iconCustomEmojiId
         ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
         : null;
-      pushEntry(local.currency, emojiButton(label, emoji, {
-        callback_data: `${mode}:shared:${method.id}`,
-        style: 'primary'
-      }), minimumTransferForMethod(method), local.rate, 'shared', isZainCashName(labelBase) ? 'zaincash' : '');
+      pushEntry(
+        `shared:${method.id}`,
+        local.currency,
+        label,
+        emoji,
+        `${mode}:shared:${method.id}`,
+        minimumTransferForMethod(method),
+        local.rate,
+        'shared'
+      );
     }
   } catch (error) {
     console.error('Shared payment methods:', error.message);
   }
 
-  // Layout requested by the store owner:
-  // Binance on its own row, then ZainCash + SuperQi side by side, then all remaining wallets.
-  const rows = [];
-  const used = new Set();
-  const binanceEntry = entries.find(entry => entry.special === 'binance');
-  if (binanceEntry) {
-    rows.push([binanceEntry.button]);
-    used.add(binanceEntry);
-  }
-
-  const zainEntry = entries.find(entry => entry.special === 'zaincash' && !used.has(entry));
-  const superQiEntry = entries.find(entry => entry.special === 'superqi' && !used.has(entry));
-  const secondRow = [];
-  if (zainEntry) { secondRow.push(zainEntry.button); used.add(zainEntry); }
-  if (superQiEntry) { secondRow.push(superQiEntry.button); used.add(superQiEntry); }
-  if (secondRow.length) rows.push(secondRow);
-
-  for (const entry of entries) {
-    if (used.has(entry)) continue;
-    rows.push([entry.button]);
-  }
-  return rows;
+  const orderedEntries = sortPaymentEntriesByPreference(entries, preferences);
+  return orderedEntries.map(entry => [entry.button]);
 }
 
 async function showWalletMenu(chatId, user) {
@@ -2650,12 +2799,10 @@ async function adminSectionMenu(section, user = null) {
 
   if (section === 'payments') {
     return {
-      title: '💳 <b>الدفع والمحفظة</b>\nطرق الدفع المحلية، الطرق الموروثة وBinance.',
+      title: '💳 <b>الدفع والمحفظة</b>\nكل طرق الدفع صارت بمركز واحد: ترتيب، إخفاء، ألوان، تعديل وحذف.',
       keyboard: [
-        [{ text: '💳 إدارة طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }],
+        [{ text: '💳 مركز طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }],
         [{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }],
-        [emojiButton(network.enabledClient() ? 'تغيير API Binance' : 'إعداد API Binance', PREMIUM_EMOJI.binance, { callback_data: 'adm:binance_setup', style: 'primary' })],
-        [{ text: '🗑 حذف Binance المحلي', callback_data: 'adm:binance_clear', style: 'danger' }],
         back
       ]
     };
@@ -2666,10 +2813,12 @@ async function adminSectionMenu(section, user = null) {
       title: '👥 <b>العملاء والتواصل</b>\nإدارة حسابات الزبائن، الرصيد، الدعم والإعلانات.',
       keyboard: [
         [{ text: '👤 البحث عن مستخدم', callback_data: 'adm:user_lookup', style: 'primary' }],
+        [{ text: '💰 كشف الأرصدة ومصادر الشحن', callback_data: 'adm:balances:0', style: 'primary' }],
         [
           { text: '➕ إضافة رصيد', callback_data: 'adm:user_credit', style: 'success' },
           { text: '➖ خصم رصيد', callback_data: 'adm:user_debit', style: 'danger' }
         ],
+        [{ text: '🧹 مسح/تصفير رصيد', callback_data: 'adm:user_zero', style: 'danger' }],
         [emojiButton('الدعم', PREMIUM_EMOJI.support, { callback_data: 'adm:support', style: 'primary' })],
         [{ text: '📣 إرسال إعلان', callback_data: 'adm:broadcast' }],
         back
@@ -3096,6 +3245,7 @@ async function broadcastNewProductNotification(product, actorName = '') {
 
   const users = await getBroadcastUsers();
   const stock = await getProductStock(product.id);
+  const isServiceProduct = String(product.type || '') === 'service';
   let sent = 0;
   let failed = 0;
 
@@ -3106,11 +3256,11 @@ async function broadcastNewProductNotification(product, actorName = '') {
     const name = productDisplayName(product, lang);
     const moneyContext = await customerMoneyContext(target);
     const message = lang === 'en'
-      ? `🆕 <b>New product</b>
+      ? `🆕 <b>${isServiceProduct ? 'New service' : 'New product'}</b>
 
 <b>${escapeHtml(name)}</b>
 Price: <b>${customerMoney(effectiveProductPrice(product), moneyContext, lang)}</b>`
-      : `🆕 <b>منتج جديد</b>
+      : `🆕 <b>${isServiceProduct ? 'خدمة جديدة' : 'منتج جديد'}</b>
 
 <b>${escapeHtml(name)}</b>
 السعر: <b>${customerMoney(effectiveProductPrice(product), moneyContext, lang)}</b>`;
@@ -3118,9 +3268,9 @@ Price: <b>${customerMoney(effectiveProductPrice(product), moneyContext, lang)}</
       await bot.sendMessage(target.id, message, {
         parse_mode: 'HTML',
         reply_markup: {
-          inline_keyboard: [[emojiButton(lang === 'en' ? 'View product' : 'عرض المنتج', PREMIUM_EMOJI.products, {
+          inline_keyboard: [[emojiButton(lang === 'en' ? (isServiceProduct ? 'View service' : 'View product') : (isServiceProduct ? 'عرض الخدمة' : 'عرض المنتج'), PREMIUM_EMOJI.products, {
             callback_data: `prod:${product.id}`,
-            style: stock > 0 ? 'success' : 'danger'
+            style: isServiceProduct || stock > 0 ? 'success' : 'danger'
           })]]
         }
       });
@@ -3143,17 +3293,18 @@ async function notifyAdminsForNetworkProductReview(product, actorName = '') {
   const description = parseDescription(product.description);
   const creator = String(actorName || product.createdByDisplayName || product.networkOwnerShopId || 'إدارة متجر آخر').trim();
   const basePrice = networkProductBasePrice(product);
+  const isServiceProduct = String(product.type || '') === 'service';
   const message = [
-    '🌐 <b>منتج عام جديد ينتظر قرارك</b>',
+    `🌐 <b>${isServiceProduct ? 'خدمة عامة جديدة' : 'منتج عام جديد'} ينتظر قرارك</b>`,
     '',
-    `أضاف <b>${escapeHtml(creator)}</b> منتجاً جديداً.`,
+    `أضاف <b>${escapeHtml(creator)}</b> ${isServiceProduct ? 'خدمة' : 'منتجاً'} جديداً.`,
     `الاسم: <b>${escapeHtml(productDisplayName(product, 'ar') || '—')}</b>`,
     `النوع: <b>${escapeHtml(productTypeLabel(product.type))}</b>`,
-    `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+    `${isServiceProduct ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`,
     `الوصف: ${escapeHtml(description.ar || '—')}`,
     `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
     '',
-    'اختَر تسعير المنتج ونشره داخل بوتك، أو ارفضه في هذا البوت فقط.'
+    `اختَر تسعير ${isServiceProduct ? 'الخدمة' : 'المنتج'}، وبعد إدخال السعر راح يطلب منك تأكيد النشر. أو ارفضه الآن وتقدر تغيّر رأيك لاحقاً.`
   ].join('\n');
   let sent = 0;
   let failed = 0;
@@ -3162,7 +3313,7 @@ async function notifyAdminsForNetworkProductReview(product, actorName = '') {
       await bot.sendMessage(adminId, message, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          [{ text: '💵 تسعير المنتج ونشره', callback_data: `adm:netprod:price:${product.id}`, style: 'success' }],
+          [{ text: isServiceProduct ? '💵 تسعير الخدمة' : '💵 تسعير المنتج', callback_data: `adm:netprod:price:${product.id}`, style: 'success' }],
           [{ text: '❌ رفض في هذا البوت فقط', callback_data: `adm:netprod:reject:${product.id}`, style: 'danger' }]
         ] }
       });
@@ -4493,11 +4644,11 @@ async function finalizeNewProduct(user, data) {
   };
 
   const isService = productPayload.type === 'service';
-  const isLocalOnly = isService || visibilityScope === 'private';
+  const isLocalOnly = visibilityScope === 'private';
   let product;
   if (isLocalOnly) {
-    // Local products and all service products belong only to the bot/shop that
-    // created them and never enter the shared catalog.
+    // Local products, including a service explicitly chosen as private, stay
+    // inside the bot/shop that created them and never enter the shared catalog.
     product = await Merchant.create({
       ...productPayload,
       image: imageValue === '-' ? null : imageValue,
@@ -4574,8 +4725,16 @@ async function finalizeNewProduct(user, data) {
 
   if (product.type === 'service') {
     await clearState(user.id);
-    await bot.sendMessage(user.id, '✅ تم إنشاء خدمة محلية داخل هذا البوت فقط. لن تُرسل إلى البوت الرئيسي أو بقية بوتات الشبكة. هذا النوع يطلب بيانات من الزبون ويعطيك أزرار: تم التفعيل / تأجيل / استرداد / فتح محادثة.', {
-      reply_markup: { inline_keyboard: [[{ text: 'فتح المنتج', callback_data: `adm:edit:${product.id}` }]] }
+    await broadcastNewProductNotification(product, creatorDisplayName).catch(error => console.error('New service notification:', error.message));
+    const serviceText = isLocalOnly
+      ? '✅ تم إنشاء الخدمة كخدمة خاصة داخل هذا البوت فقط.'
+      : '✅ تم إنشاء الخدمة كخدمة عامة. ستصل لبقية إدارات البوتات، وكل إدارة تختار تسعيرها ثم تؤكد النشر أو ترفضها.';
+    await bot.sendMessage(user.id, [
+      serviceText,
+      'عند بيع الخدمة يرسل الزبون البيانات المطلوبة، وتبقى أزرار التنفيذ: تم التفعيل / تأجيل / استرداد / فتح محادثة.',
+      !isLocalOnly ? `السعر الأساسي المحفوظ لصاحب الخدمة: ${moneyUsd(product.price)}` : ''
+    ].filter(Boolean).join('\n'), {
+      reply_markup: { inline_keyboard: [[{ text: 'فتح الخدمة', callback_data: `adm:edit:${product.id}` }]] }
     });
     return true;
   }
@@ -4600,19 +4759,19 @@ async function finalizeNewProduct(user, data) {
 async function promoteLocalProductToNetwork(product, admin) {
   if (!product || !canManageNetworkProduct(product)) throw new Error('PRODUCT_NOT_OWNED');
   if (String(product.visibilityScope || '').toLowerCase() !== 'private') throw new Error('PRODUCT_ALREADY_PUBLIC');
-  if (String(product.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
   if (network.isClient() && !network.enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
 
+  const isServiceProduct = String(product.type || '') === 'service';
   const partialShared = String(product.type || '') === 'shared'
     ? await Code.count({ where: { merchantId: product.id, isUsed: false, usedCount: { [Op.gt]: 0 } } })
     : 0;
   if (partialShared > 0) throw new Error(`PARTIAL_SHARED_INVENTORY:${partialShared}`);
-  const hiddenInventory = await Code.count({
+  const hiddenInventory = isServiceProduct ? 0 : await Code.count({
     where: { merchantId: product.id, isUsed: false, isHidden: true, usedCount: 0 }
   });
   if (hiddenInventory > 0) throw new Error(`HIDDEN_INVENTORY_EXISTS:${hiddenInventory}`);
 
-  const transferableRows = await Code.findAll({
+  const transferableRows = isServiceProduct ? [] : await Code.findAll({
     where: {
       merchantId: product.id,
       isUsed: false,
@@ -4994,7 +5153,9 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
 
+    const priorServiceDelivery = Array.isArray(order.delivery) ? (order.delivery[0] || {}) : {};
     order.delivery = [{
+      ...priorServiceDelivery,
       serviceRequest: true,
       inputMode: meta.inputMode,
       submitted: true,
@@ -5009,15 +5170,28 @@ async function handleStateMessage(msg, user, state) {
       ? '✅ Your details were received. Please wait while the admin completes the service.'
       : '✅ تم استلام بياناتك. انتظر حتى يقوم الأدمن بتنفيذ الخدمة.');
     const label = user.username ? `@${user.username}` : `<code>${user.id}</code>`;
+    await ensureServiceNetworkAccounting(order.id).catch(error => console.error(`Service accounting before admin notify #${order.id}:`, error.message));
+    const refreshedOrder = await PurchaseOrder.findByPk(order.id);
+    const serviceDelivery = Array.isArray(refreshedOrder?.delivery) ? (refreshedOrder.delivery[0] || {}) : {};
+    const basePrice = networkProductBasePrice(product);
+    const retailPrice = Number(order.unitPrice || effectiveProductPrice(product));
+    const ownerShopId = String(product.networkOwnerShopId || currentProductShopId());
+    const foreignOwner = isPublicProduct(product) && ownerShopId !== currentProductShopId();
+    const sellerMarkup = Math.max(0, retailPrice - basePrice);
     for (const adminId of getAdminIds()) {
       await bot.sendMessage(adminId, [
         '🛠 <b>طلب تنفيذ خدمة جديد</b>',
         `الطلب: <b>#${order.id}</b>`,
-        `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+        `الخدمة: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
         `المستخدم: ${label}`,
+        foreignOwner ? `صاحب الخدمة: <b>${escapeHtml(product.createdByDisplayName || ownerShopId)}</b>` : '',
+        foreignOwner ? `حق صاحب الخدمة: <b>${moneyUsd(basePrice)}</b>` : '',
+        foreignOwner ? `سعر البيع في بوتك: <b>${moneyUsd(retailPrice)}</b>` : '',
+        foreignOwner ? `ربح بوتك: <b>${moneyUsd(sellerMarkup)}</b>` : '',
+        serviceDelivery.networkAccountingPending ? '⚠️ محاسبة الشبكة قيد إعادة المحاولة تلقائياً.' : '',
         `نوع الحقل: <b>${escapeHtml(serviceInputModeLabel(meta.inputMode, 'ar'))}</b>`,
         `البيانات: <code>${escapeHtml(value)}</code>`
-      ].join('\n'), {
+      ].filter(Boolean).join('\n'), {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
           [{ text: '✅ تم التفعيل', callback_data: `service:done:${order.id}`, style: 'success' }],
@@ -5374,6 +5548,7 @@ async function handleStateMessage(msg, user, state) {
       lockedUser.balance = Number(lockedUser.balance || 0) + amount;
       await lockedUser.save({ transaction: tx });
       ledger.status = 'completed';
+      ledger.completedAt = new Date();
       ledger.txid = result.transactionId;
       await ledger.save({ transaction: tx });
       await tx.commit();
@@ -6205,8 +6380,11 @@ async function handleStateMessage(msg, user, state) {
       await setSecureSetting('binance_api_key', data.apiKey);
       await setSecureSetting('binance_api_secret', data.secret);
       await setSetting('binance_pay_id', text);
+      await migratePaymentTokenPreferences('network:binance', 'binance');
       await clearState(user.id);
-      await bot.sendMessage(user.id, '✅ تم حفظ Binance الخاص بهذا البوت بشكل مشفر. إذا التحقق الرسمي متاح من موقع السيرفر راح يصير تلقائي.');
+      await bot.sendMessage(user.id, '✅ تم حفظ Binance الخاص بهذا البوت بشكل مشفر. إذا التحقق الرسمي متاح من موقع السيرفر راح يصير تلقائي.', {
+        reply_markup: { inline_keyboard: [[{ text: '💳 رجوع لمركز طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }]] }
+      });
       return true;
     }
   }
@@ -6411,6 +6589,13 @@ async function handleStateMessage(msg, user, state) {
         return true;
       }
       method.minimumTransferAmount = minimum;
+    } else if (state.field === 'rate') {
+      const rate = Number(text.replace(/,/g, ''));
+      if (!Number.isFinite(rate) || rate <= 0) {
+        await bot.sendMessage(user.id, '❌ سعر الصرف غير صحيح. أرسل رقم أكبر من صفر.');
+        return true;
+      }
+      method.ratePerUsd = normalizePaymentCurrency(method.settlementCurrency) === 'USD' ? 1 : rate;
     }
     await method.save();
     invalidatePaymentMethodsCache();
@@ -6428,64 +6613,40 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, '❌ السعر غير صحيح. أرسل رقماً بالدولار مثل 5 أو 1.50.');
       return true;
     }
-
-    let product = null;
-    let basePrice = 0;
-    let alreadyDecided = false;
-    try {
-      await sequelize.transaction(async transaction => {
-        product = await Merchant.findByPk(state.productId, {
-          transaction,
-          lock: transaction.LOCK.UPDATE
-        });
-        if (!product || !product.isActive || !isForeignPublicProduct(product)) throw new Error('NETWORK_PRODUCT_NOT_AVAILABLE');
-        if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
-          alreadyDecided = true;
-          return;
-        }
-        basePrice = networkProductBasePrice(product);
-        if (value + 1e-9 < basePrice) throw new Error(`PRICE_BELOW_BASE:${basePrice}`);
-        await product.update({
-          localPriceOverrideUsd: value > basePrice + 1e-9 ? value : null,
-          localPublicationStatus: 'published',
-          localReviewNotifiedAt: new Date()
-        }, { transaction });
-      });
-    } catch (error) {
-      if (error.message === 'NETWORK_PRODUCT_NOT_AVAILABLE') {
-        await clearState(user.id);
-        await bot.sendMessage(user.id, '❌ المنتج العام غير موجود أو لم يعد متاحاً.');
-        return true;
-      }
-      if (String(error.message || '').startsWith('PRICE_BELOW_BASE:')) {
-        const floor = Number(String(error.message).split(':')[1] || 0);
-        await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(floor)} لأنه حق صاحب المنتج.`);
-        return true;
-      }
-      throw error;
-    }
-
-    if (alreadyDecided) {
+    const product = await Merchant.findByPk(state.productId);
+    if (!product || !product.isActive || !isForeignPublicProduct(product)) {
       await clearState(user.id);
-      await bot.sendMessage(user.id, 'ℹ️ اتخذ أدمن آخر قراراً بهذا المنتج داخل البوت قبل إكمال التسعير.');
+      await bot.sendMessage(user.id, '❌ المنتج العام غير موجود أو لم يعد متاحاً.');
       return true;
     }
-
-    product = await Merchant.findByPk(state.productId);
-    await clearState(user.id);
+    const reviewStatus = String(product.localPublicationStatus || '').toLowerCase();
+    if (!['pending', 'rejected'].includes(reviewStatus)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, 'ℹ️ تم تغيير حالة المنتج من أدمن آخر قبل إكمال التسعير.');
+      return true;
+    }
+    const basePrice = networkProductBasePrice(product);
+    if (value + 1e-9 < basePrice) {
+      await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأنه حق صاحب المنتج.`);
+      return true;
+    }
     const profit = Math.max(0, value - basePrice);
+    await setState(user.id, { action: 'admin_confirm_network_product_price', productId: product.id, price: value });
     await bot.sendMessage(user.id, [
-      '✅ <b>تم تسعير المنتج ونشره فعلياً داخل هذا البوت</b>',
-      `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+      `🧾 <b>تأكيد نشر ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'}</b>`,
+      `الاسم: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+      `${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`,
       `سعر البيع في بوتك: <b>${moneyUsd(value)}</b>`,
-      `ربح فرق السعر لك: <b>${moneyUsd(profit)}</b> لكل وحدة.`,
+      `ربح بوتك من فرق السعر: <b>${moneyUsd(profit)}</b> لكل عملية بيع.`,
       '',
-      'صار المنتج بحالة «منشور» في قاعدة بيانات هذا البوت، ويظهر للزبائن حسب توفر المخزون. قرار بقية البوتات مستقل.'
-    ].join('\n'), { parse_mode: 'HTML' });
-    await broadcastNewProductNotification(product, product.createdByDisplayName || '').catch(error => {
-      console.error('Publish reviewed product notification:', error.message);
+      'هل أنت موافق وتريد نشره الآن في بوتك؟'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '✅ نعم، نشر في بوتي', callback_data: `adm:netprod:confirm_publish:${product.id}`, style: 'success' }],
+        [{ text: '❌ لا، رفض وإخفاء', callback_data: `adm:netprod:confirm_reject:${product.id}`, style: 'danger' }]
+      ] }
     });
-    await showAdminProductEditor(user.id, product.id);
     return true;
   }
 
@@ -7109,35 +7270,33 @@ async function handleStateMessage(msg, user, state) {
     }
 
     await setSetting(state.key, value);
+    if (state.key === 'superqi_number' && value) await migratePaymentTokenPreferences('network:superqi', 'superqi');
     await clearState(user.id);
-    await bot.sendMessage(user.id, '✅ تم تحديث الإعداد.');
+    await bot.sendMessage(user.id, state.key === 'superqi_number' ? '✅ تم تحديث رقم سوبركي.' : '✅ تم تحديث الإعداد.', state.key === 'superqi_number' ? {
+      reply_markup: { inline_keyboard: [[{ text: '💳 رجوع لمركز طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }]] }
+    } : {});
     return true;
   }
 
   if (state.action === 'admin_user_lookup') {
-    const targetId = Number(String(msg.text || '').trim());
-    if (!Number.isFinite(targetId)) {
-      await bot.sendMessage(user.id, '❌ أرسل آيدي رقمي صحيح.');
+    const target = await resolveUserByTelegramLookup(msg.text);
+    if (!target) {
+      await bot.sendMessage(user.id, '❌ المستخدم غير موجود. أرسل Telegram ID أو @username الصحيح. الاسم العادي غير معتمد.');
       return true;
     }
     await clearState(user.id);
-    await showAdminUserCard(user.id, targetId);
+    await showAdminUserCard(user.id, target.id);
     return true;
   }
 
   if (state.action === 'admin_user_credit_id') {
-    const targetId = Number(String(msg.text || '').trim());
-    if (!Number.isFinite(targetId)) {
-      await bot.sendMessage(user.id, '❌ أرسل آيدي رقمي صحيح.');
-      return true;
-    }
-    const target = await User.findByPk(targetId);
+    const target = await resolveUserByTelegramLookup(msg.text);
     if (!target) {
-      await bot.sendMessage(user.id, '❌ المستخدم ما مستخدم البوت بعد.');
+      await bot.sendMessage(user.id, '❌ المستخدم غير موجود. أرسل Telegram ID أو @username الصحيح. الاسم العادي غير معتمد.');
       return true;
     }
-    await setState(user.id, { action: 'admin_user_credit_amount', targetId });
-    await bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار للمستخدم <code>${targetId}</code>:`, { parse_mode: 'HTML' });
+    await setState(user.id, { action: 'admin_user_credit_amount', targetId: target.id });
+    await bot.sendMessage(user.id, `أرسل مبلغ الشحن بالدولار للمستخدم <b>${target.username ? `@${escapeHtml(target.username)}` : `ID ${target.id}`}</b>:`, { parse_mode: 'HTML' });
     return true;
   }
 
@@ -7147,7 +7306,7 @@ async function handleStateMessage(msg, user, state) {
       await bot.sendMessage(user.id, '❌ مبلغ غير صحيح.');
       return true;
     }
-    const result = await adminCreditUser(state.targetId, amount, user.id);
+    const result = await adminCreditUser(state.targetId, amount, user);
     await clearState(user.id);
     await bot.sendMessage(user.id, `✅ تم شحن ${moneyUsd(amount)} للمستخدم <code>${state.targetId}</code>.\nالرصيد الجديد: <b>${moneyUsd(result.balance)}</b>`, { parse_mode: 'HTML' });
     const creditedUser = await User.findByPk(state.targetId);
@@ -7157,19 +7316,37 @@ async function handleStateMessage(msg, user, state) {
   }
 
   if (state.action === 'admin_user_debit_id') {
-    const targetId = Number(String(msg.text || '').trim());
-    if (!Number.isFinite(targetId)) {
-      await bot.sendMessage(user.id, '❌ أرسل آيدي رقمي صحيح.');
-      return true;
-    }
-    const target = await User.findByPk(targetId);
+    const target = await resolveUserByTelegramLookup(msg.text);
     if (!target) {
-      await bot.sendMessage(user.id, '❌ المستخدم ما مستخدم البوت بعد.');
+      await bot.sendMessage(user.id, '❌ المستخدم غير موجود. أرسل Telegram ID أو @username الصحيح. الاسم العادي غير معتمد.');
       return true;
     }
-    await setState(user.id, { action: 'admin_user_debit_amount', targetId });
-    await bot.sendMessage(user.id, `أرسل مبلغ الخصم بالدولار للمستخدم <code>${targetId}</code>. الرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+    await setState(user.id, { action: 'admin_user_debit_amount', targetId: target.id });
+    await bot.sendMessage(user.id, `أرسل مبلغ الخصم بالدولار للمستخدم <b>${target.username ? `@${escapeHtml(target.username)}` : `ID ${target.id}`}</b>. الرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`, { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
     return true;
+  }
+
+  if (state.action === 'admin_user_zero_id') {
+    const target = await resolveUserByTelegramLookup(msg.text);
+    if (!target) {
+      await bot.sendMessage(user.id, '❌ المستخدم غير موجود. أرسل Telegram ID أو @username الصحيح. الاسم العادي غير معتمد.');
+      return true;
+    }
+    await clearState(user.id);
+    return bot.sendMessage(user.id, [
+      '⚠️ <b>تأكيد مسح/تصفير المحفظة</b>',
+      `المستخدم: <b>${target.username ? `@${escapeHtml(target.username)}` : `ID ${target.id}`}</b>`,
+      `Telegram ID: <code>${target.id}</code>`,
+      `الرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`,
+      '',
+      'سيتم تصفير الرصيد وتسجيل العملية باسم الأدمن المنفذ.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        { text: '✅ نعم، صفّر الرصيد', callback_data: `adm:userzero:${target.id}`, style: 'danger' },
+        { text: '❌ إلغاء', callback_data: 'adm:menu:users' }
+      ]] }
+    });
   }
 
   if (state.action === 'admin_user_debit_amount') {
@@ -7179,7 +7356,7 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
     try {
-      const result = await adminDebitUser(state.targetId, amount, user.id);
+      const result = await adminDebitUser(state.targetId, amount, user);
       await clearState(user.id);
       await bot.sendMessage(user.id, `✅ تم خصم ${moneyUsd(amount)} من المستخدم <code>${state.targetId}</code>.\nالرصيد الجديد: <b>${moneyUsd(result.balance)}</b>`, { parse_mode: 'HTML' });
       const debitedUser = await User.findByPk(state.targetId);
@@ -7199,7 +7376,189 @@ async function handleStateMessage(msg, user, state) {
   return false;
 }
 
-async function adminCreditUser(targetId, amount, adminId) {
+function normalizeTelegramUsername(value) {
+  return String(value || '').trim().replace(/^@+/, '').toLowerCase();
+}
+
+async function resolveUserByTelegramLookup(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^\d{5,20}$/.test(raw)) return User.findByPk(raw);
+  const username = normalizeTelegramUsername(raw);
+  if (!username || !/^[a-z0-9_]{3,64}$/i.test(username)) return null;
+  return User.findOne({ where: { username: { [Op.iLike]: username } } });
+}
+
+function balanceAuditTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'غير معروف';
+  try {
+    return new Intl.DateTimeFormat('ar-IQ', {
+      timeZone: 'Asia/Baghdad', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: true
+    }).format(date);
+  } catch {
+    return date.toISOString().replace('T', ' ').slice(0, 16);
+  }
+}
+
+function balanceTransactionDirectionLabel(row) {
+  const amount = Number(row?.amount || 0);
+  return amount >= 0 ? '➕ إضافة' : '➖ خصم';
+}
+
+function balanceTransactionSourceLabel(row, paymentMethod = null) {
+  const type = String(row?.type || '').toLowerCase();
+  const origin = String(row?.paymentOrigin || '').toLowerCase();
+  const method = String(row?.networkMethod || '').trim();
+  if (type === 'admin_credit') return 'شحن يدوي من الإدارة';
+  if (type === 'admin_debit') return 'خصم يدوي من الإدارة';
+  if (type === 'admin_balance_reset') return 'تصفير المحفظة بواسطة الإدارة';
+  if (type === 'referral_reward') return 'مكافأة إحالة';
+  if (type === 'wallet_purchase') return 'شراء من رصيد المحفظة';
+  if (type === 'wallet_reservation') return 'حجز رصيد لطلب';
+  if (type === 'wallet_purchase_refund') return 'استرجاع تلقائي لعملية شراء';
+  if (type === 'wallet_reservation_refund') return 'إرجاع رصيد محجوز';
+  if (type === 'service_refund') return 'استرجاع قيمة خدمة';
+  if (type === 'virtual_number_purchase') return 'شراء رقم افتراضي';
+  if (type === 'virtual_number_refund' || type === 'expired_refund' || type === 'provider_cancelled') return 'استرجاع رقم افتراضي';
+  if (type === 'deposit') {
+    if (paymentMethod) return `شحن عبر ${paymentMethod.nameAr || paymentMethod.nameEn || 'طريقة دفع محلية'}`;
+    if (method.toLowerCase() === 'binance') return origin === 'network_fallback' ? 'شحن عبر Binance — شبكة الدفع الرئيسية' : 'شحن عبر Binance';
+    const caption = String(row?.caption || '');
+    if (/superqi|سوبركي/i.test(caption)) return 'شحن عبر SuperQi / سوبركي';
+    const sharedMatch = caption.match(/^(.+?)\s+shared wallet topup/i);
+    if (sharedMatch?.[1]) return `شحن عبر ${sharedMatch[1]} — طريقة مشتركة`;
+    const manualMatch = caption.match(/^(.+?)\s+(?:inherited )?manual wallet topup/i);
+    if (manualMatch?.[1]) return `شحن عبر ${manualMatch[1]}${origin === 'network_fallback' ? ' — شبكة الدفع الرئيسية' : ''}`;
+    if (origin === 'network_shared') return `شحن عبر طريقة دفع مشتركة${method ? ` (${method})` : ''}`;
+    if (origin === 'network_fallback') return `شحن عبر شبكة الدفع الرئيسية${method ? ` — ${method}` : ''}`;
+    if (origin === 'local') return 'شحن عبر طريقة دفع محلية';
+    return 'شحن محفظة';
+  }
+  return row?.caption ? String(row.caption).slice(0, 120) : (type || 'حركة رصيد');
+}
+
+function balanceApproverLabel(row) {
+  const username = String(row?.approvedByUsername || '').trim().replace(/^@/, '');
+  if (username) return `@${username}`;
+  if (row?.approvedByTelegramId) return `ID ${row.approvedByTelegramId}`;
+  return '';
+}
+
+async function showBalanceHolders(chatId, page = 0) {
+  const pageSize = 10;
+  const where = { balance: { [Op.gt]: 0 } };
+  const total = await User.count({ where });
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.max(0, Math.min(Number(page) || 0, pages - 1));
+  const rows = await User.findAll({
+    where,
+    order: [['balance', 'DESC'], ['id', 'ASC']],
+    offset: safePage * pageSize,
+    limit: pageSize
+  });
+  const totalBalance = Number(await User.sum('balance', { where }) || 0);
+  const keyboard = rows.map(target => [{
+    text: `${target.username ? `@${target.username}` : `ID ${target.id}`} | ${moneyUsd(target.balance)}`,
+    callback_data: `adm:balanceaudit:${target.id}:0`
+  }]);
+  const nav = [];
+  if (safePage > 0) nav.push({ text: '⬅️', callback_data: `adm:balances:${safePage - 1}` });
+  nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
+  if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `adm:balances:${safePage + 1}` });
+  keyboard.push(nav);
+  keyboard.push([{ text: '⬅️ العملاء والتواصل', callback_data: 'adm:menu:users' }]);
+  return bot.sendMessage(chatId, [
+    '💰 <b>كشف الأشخاص الذين عندهم رصيد</b>',
+    '',
+    `عدد أصحاب الرصيد: <b>${total}</b>`,
+    `إجمالي الأرصدة الحالية: <b>${moneyUsd(totalBalance)}</b>`,
+    '',
+    'الترتيب: من أعلى رصيد إلى الأقل. افتح أي شخص لتشوف مصدر كل إضافة/خصم ووقت العملية.'
+  ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function showUserBalanceAudit(chatId, targetId, page = 0) {
+  const target = await User.findByPk(targetId);
+  if (!target) return bot.sendMessage(chatId, '❌ المستخدم غير موجود.');
+  const pageSize = 8;
+  const where = { userId: target.id, status: 'completed' };
+  const total = await BalanceTransaction.count({ where });
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.max(0, Math.min(Number(page) || 0, pages - 1));
+  const rows = await BalanceTransaction.findAll({
+    where,
+    order: [['createdAt', 'DESC'], ['id', 'DESC']],
+    offset: safePage * pageSize,
+    limit: pageSize
+  });
+  const paymentIds = [...new Set(rows.map(row => Number(row.paymentMethodId || 0)).filter(Boolean))];
+  const paymentRows = paymentIds.length ? await PaymentMethod.findAll({ where: { id: { [Op.in]: paymentIds } } }) : [];
+  const paymentMap = new Map(paymentRows.map(row => [Number(row.id), row]));
+  const allAmounts = await BalanceTransaction.findAll({ where, attributes: ['amount'], raw: true });
+  const credits = allAmounts.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+  const debits = allAmounts.reduce((sum, row) => sum + Math.max(0, -Number(row.amount || 0)), 0);
+  const lines = [
+    '📜 <b>كشف رصيد المستخدم</b>',
+    '',
+    `Telegram ID: <code>${target.id}</code>`,
+    `Username: ${target.username ? `@${escapeHtml(target.username)}` : '—'}`,
+    `الرصيد الحالي: <b>${moneyUsd(target.balance)}</b>`,
+    `إجمالي الإضافات المسجلة: <b>${moneyUsd(credits)}</b>`,
+    `إجمالي الخصومات المسجلة: <b>${moneyUsd(debits)}</b>`,
+    '',
+    `<b>الحركات — صفحة ${safePage + 1}/${pages}</b>`
+  ];
+  if (!rows.length) lines.push('— لا توجد حركات مكتملة مسجلة لهذا المستخدم.');
+  rows.forEach((row, index) => {
+    const amount = Number(row.amount || 0);
+    const source = balanceTransactionSourceLabel(row, paymentMap.get(Number(row.paymentMethodId || 0)));
+    const approver = balanceApproverLabel(row);
+    const at = row.completedAt || row.updatedAt || row.createdAt;
+    lines.push(
+      '',
+      `${safePage * pageSize + index + 1}) ${balanceTransactionDirectionLabel(row)} <b>${moneyUsd(Math.abs(amount))}</b>`,
+      `المصدر: <b>${escapeHtml(source)}</b>`,
+      `الوقت: <b>${escapeHtml(balanceAuditTime(at))}</b>`,
+      approver ? `بواسطة: <b>${escapeHtml(approver)}</b>` : '',
+      row.txid ? `المرجع: <code>${escapeHtml(String(row.txid).slice(0, 96))}</code>` : ''
+    );
+  });
+  const keyboard = [];
+  const nav = [];
+  if (safePage > 0) nav.push({ text: '⬅️', callback_data: `adm:balanceaudit:${target.id}:${safePage - 1}` });
+  nav.push({ text: `${safePage + 1}/${pages}`, callback_data: 'noop' });
+  if (safePage < pages - 1) nav.push({ text: '➡️', callback_data: `adm:balanceaudit:${target.id}:${safePage + 1}` });
+  keyboard.push(nav);
+  keyboard.push([{ text: '👤 إدارة المستخدم', callback_data: `adm:usercard:${target.id}`, style: 'primary' }]);
+  keyboard.push([{ text: '⬅️ كشف الأرصدة', callback_data: 'adm:balances:0' }]);
+  return bot.sendMessage(chatId, lines.filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function hardDeleteOwnedProduct(product) {
+  if (!product) throw new Error('PRODUCT_NOT_FOUND');
+  const transaction = await sequelize.transaction();
+  try {
+    const orders = await PurchaseOrder.findAll({ where: { merchantId: product.id }, attributes: ['id'], transaction });
+    const orderIds = orders.map(row => Number(row.id));
+    if (orderIds.length) {
+      await BinanceTransfer.destroy({ where: { orderId: { [Op.in]: orderIds } }, transaction });
+      await DeliveryRecord.destroy({ where: { orderId: { [Op.in]: orderIds } }, transaction });
+      await PurchaseOrder.destroy({ where: { id: { [Op.in]: orderIds } }, transaction });
+    }
+    await DeliveryRecord.destroy({ where: { merchantId: product.id }, transaction });
+    await Code.destroy({ where: { merchantId: product.id }, transaction });
+    await product.destroy({ transaction });
+    await transaction.commit();
+    return { deleted: true, orderCount: orderIds.length };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function adminCreditUser(targetId, amount, admin) {
   const transaction = await sequelize.transaction();
   try {
     const target = await User.findByPk(targetId, { transaction, lock: transaction.LOCK.UPDATE });
@@ -7210,10 +7569,15 @@ async function adminCreditUser(targetId, amount, adminId) {
       userId: target.id,
       amount,
       type: 'admin_credit',
-      txid: `ADMIN-${adminId}-${Date.now()}`,
-      caption: `Manual credit by admin ${adminId}`,
+      txid: `ADMIN-${admin?.id || admin}-${Date.now()}`,
+      caption: `Manual credit by admin ${admin?.id || admin}`,
       status: 'completed',
-      lastReminderAt: new Date()
+      lastReminderAt: new Date(),
+      completedAt: new Date(),
+      approvedByTelegramId: admin?.id || admin || null,
+      approvedByUsername: admin?.username || null,
+      approvedByDisplayName: admin?.firstName || admin?.username || String(admin?.id || admin || ''),
+      approvalSource: 'admin_credit'
     }, { transaction });
     await transaction.commit();
     return { balance: Number(target.balance) };
@@ -7223,7 +7587,7 @@ async function adminCreditUser(targetId, amount, adminId) {
   }
 }
 
-async function adminDebitUser(targetId, amount, adminId) {
+async function adminDebitUser(targetId, amount, admin) {
   const transaction = await sequelize.transaction();
   try {
     const target = await User.findByPk(targetId, { transaction, lock: transaction.LOCK.UPDATE });
@@ -7238,11 +7602,14 @@ async function adminDebitUser(targetId, amount, adminId) {
       userId: target.id,
       amount: -debit,
       type: 'admin_debit',
-      txid: `ADMIN-DEBIT-${adminId}-${Date.now()}`,
-      caption: `Manual debit by admin ${adminId}`,
+      txid: `ADMIN-DEBIT-${admin?.id || admin}-${Date.now()}`,
+      caption: `Manual debit by admin ${admin?.id || admin}`,
       status: 'completed',
       lastReminderAt: new Date(),
-      approvedByTelegramId: adminId || null,
+      completedAt: new Date(),
+      approvedByTelegramId: admin?.id || admin || null,
+      approvedByUsername: admin?.username || null,
+      approvedByDisplayName: admin?.firstName || admin?.username || String(admin?.id || admin || ''),
       approvalSource: 'admin_debit'
     }, { transaction });
     await transaction.commit();
@@ -7270,6 +7637,7 @@ async function adminZeroUserBalance(targetId, admin) {
       caption: `Wallet reset from ${previousBalance.toFixed(8)} USD by admin ${admin?.id || admin}`,
       status: 'completed',
       lastReminderAt: new Date(),
+      completedAt: new Date(),
       approvedByTelegramId: admin?.id || admin || null,
       approvedByUsername: admin?.username || null,
       approvedByDisplayName: admin?.firstName || admin?.username || String(admin?.id || admin || ''),
@@ -7353,6 +7721,11 @@ async function handleSuperQiTopupAdmin(query, data) {
     targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount);
     await targetUser.save({ transaction: dbTransaction });
     ledger.status = 'completed';
+    ledger.completedAt = new Date();
+    ledger.approvedByTelegramId = query.from.id;
+    ledger.approvedByUsername = query.from.username || null;
+    ledger.approvedByDisplayName = query.from.first_name || query.from.username || String(query.from.id);
+    ledger.approvalSource = 'admin_payment_approval';
     await ledger.save({ transaction: dbTransaction });
     await dbTransaction.commit();
     await answerCallback(query.id, 'تم الشحن.');
@@ -7413,6 +7786,11 @@ async function handleCustomTopupAdmin(query, data) {
     targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount);
     await targetUser.save({ transaction: dbTransaction });
     ledger.status = 'completed';
+    ledger.completedAt = new Date();
+    ledger.approvedByTelegramId = query.from.id;
+    ledger.approvedByUsername = query.from.username || null;
+    ledger.approvedByDisplayName = query.from.first_name || query.from.username || String(query.from.id);
+    ledger.approvalSource = 'admin_payment_approval';
     await ledger.save({ transaction: dbTransaction });
     await dbTransaction.commit();
     await answerCallback(query.id, 'تم الشحن.');
@@ -7521,6 +7899,11 @@ async function handleNetworkTopupAdmin(query, data) {
     targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount || 0);
     await targetUser.save({ transaction: dbTransaction });
     ledger.status = 'completed';
+    ledger.completedAt = new Date();
+    ledger.approvedByTelegramId = query.from.id;
+    ledger.approvedByUsername = query.from.username || null;
+    ledger.approvedByDisplayName = query.from.first_name || query.from.username || String(query.from.id);
+    ledger.approvalSource = 'admin_network_payment_approval';
     await ledger.save({ transaction: dbTransaction });
     await dbTransaction.commit();
   } catch (error) {
@@ -7630,89 +8013,270 @@ async function showOrder(chatId, user, orderId, callbackId = null) {
   await bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
 }
 
-async function movePaymentMethod(methodId, direction) {
-  const rows = await PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-  const index = rows.findIndex(row => Number(row.id) === Number(methodId));
-  if (index < 0) throw new Error('PAYMENT_METHOD_NOT_FOUND');
-  const nextIndex = direction === 'up' ? index - 1 : index + 1;
-  if (nextIndex < 0 || nextIndex >= rows.length) return { moved: false, row: rows[index] };
+async function collectAdminPaymentEntries() {
+  const preferences = await getPaymentUiPreferences();
+  const legacyHidden = await getHiddenPaymentTypes();
+  const entries = [];
+  let defaultOrder = 0;
+  const currentShopId = network.isMaster()
+    ? 'master'
+    : (network.enabledClient() ? String(config.network.shopId || '') : 'standalone');
 
-  await sequelize.transaction(async transaction => {
-    for (let i = 0; i < rows.length; i++) {
-      const desired = (i + 1) * 10;
-      if (Number(rows[i].sortOrder) !== desired) {
-        await rows[i].update({ sortOrder: desired }, { transaction });
-      }
-    }
-    const current = rows[index];
-    const neighbor = rows[nextIndex];
-    const currentOrder = Number(current.sortOrder);
-    const neighborOrder = Number(neighbor.sortOrder);
-    await current.update({ sortOrder: neighborOrder }, { transaction });
-    await neighbor.update({ sortOrder: currentOrder }, { transaction });
-  });
-  invalidatePaymentMethodsCache();
-  return { moved: true, row: await PaymentMethod.findByPk(methodId) };
-}
-
-async function showAdminPaymentMethods(chatId) {
-  const methods = await PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
-  const rows = methods.map(method => [emojiButton(
-    `${method.isActive ? '✅' : '⛔'} ${method.nameAr}`,
-    customPaymentEmoji(method),
-    { callback_data: `adm:pm:${method.id}`, style: method.isActive ? 'success' : 'danger' }
-  )]);
-
-  rows.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
-
-  let inheritedLines = [];
+  let inheritedMethods = [];
   if (network.enabledClient()) {
-    const hidden = await getHiddenPaymentTypes();
-    let inheritedMethods = [];
     try {
       const inherited = await network.fallbackPayments();
       inheritedMethods = Array.isArray(inherited?.methods) ? inherited.methods : [];
     } catch (error) {
-      inheritedLines.push(`⚠️ تعذر قراءة طرق المالك: ${escapeHtml(error.message)}`);
+      console.error('Admin inherited payment methods:', error.message);
     }
-
-    const byType = new Map(inheritedMethods.map(method => [String(method.type || ''), method]));
-    const [localBinanceReady, localSuperQi] = await Promise.all([binancePay.configured(), localSuperQiNumber()]);
-    if (localBinanceReady && !byType.has('binance')) byType.set('binance', { type: 'binance', nameAr: 'Binance ID', nameEn: 'Binance ID' });
-    if (localSuperQi && !byType.has('superqi')) byType.set('superqi', { type: 'superqi', nameAr: 'سوبركي', nameEn: 'SuperQi' });
-
-    for (const [type, method] of byType) {
-      if (!type) continue;
-      const isHidden = hidden.has(type);
-      const name = method.nameAr || method.nameEn || type;
-      const emoji = method.iconCustomEmojiId
-        ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
-        : (type === 'binance' ? PREMIUM_EMOJI.binance : type === 'superqi' ? PREMIUM_EMOJI.superqi : null);
-      rows.push([emojiButton(`${isHidden ? '🚫 مخفية' : '👁 ظاهرة'} — ${name}`, emoji, {
-        callback_data: `adm:pmvis:${type}`,
-        style: isHidden ? 'danger' : 'success'
-      })]);
-    }
-    rows.push([{ text: '👁 إظهار كل طرق الدفع الرئيسية', callback_data: 'adm:payment_methods_inherit', style: 'primary' }]);
-    inheritedLines.push('', 'تگدر تخفي Binance أو سوبركي أو أي طريقة دفع رئيسية في هذا البوت وحده. هذا ما يغيّر شي بباقي البوتات.');
   }
 
+  const [localBinanceReady, localSuperQi, customMethods] = await Promise.all([
+    binancePay.configured(),
+    localSuperQiNumber(),
+    PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] })
+  ]);
+
+  if (localBinanceReady) {
+    const runtime = await binancePay.getRuntimeConfig().catch(() => ({ payId: '' }));
+    entries.push({
+      token: 'binance',
+      label: 'Binance',
+      source: 'builtin-local',
+      sourceLabel: 'محلي',
+      icon: PREMIUM_EMOJI.binance,
+      active: true,
+      localConfigured: true,
+      paymentNumber: runtime?.payId || '',
+      defaultOrder: defaultOrder++
+    });
+  } else {
+    const inherited = inheritedMethods.find(method => String(method.type || '') === 'binance');
+    if (inherited) {
+      entries.push({
+        token: 'network:binance',
+        label: inherited.nameAr || inherited.nameEn || 'Binance',
+        source: 'builtin-inherited',
+        sourceLabel: 'موروثة',
+        icon: inherited.iconCustomEmojiId
+          ? { id: String(inherited.iconCustomEmojiId), alt: inherited.iconAlt || '💳' }
+          : PREMIUM_EMOJI.binance,
+        active: inherited.isActive !== false,
+        localConfigured: false,
+        paymentNumber: inherited.paymentNumber || '',
+        defaultOrder: defaultOrder++
+      });
+    } else {
+      entries.push({
+        token: 'binance',
+        label: 'Binance',
+        source: 'builtin-empty',
+        sourceLabel: 'غير مضاف',
+        icon: PREMIUM_EMOJI.binance,
+        active: false,
+        localConfigured: false,
+        paymentNumber: '',
+        defaultOrder: defaultOrder++
+      });
+    }
+  }
+
+  if (localSuperQi) {
+    entries.push({
+      token: 'superqi',
+      label: 'سوبركي',
+      source: 'builtin-local',
+      sourceLabel: 'محلي',
+      icon: PREMIUM_EMOJI.superqi,
+      active: true,
+      localConfigured: true,
+      paymentNumber: localSuperQi,
+      defaultOrder: defaultOrder++
+    });
+  } else {
+    const inherited = inheritedMethods.find(method => String(method.type || '') === 'superqi');
+    if (inherited) {
+      entries.push({
+        token: 'network:superqi',
+        label: inherited.nameAr || inherited.nameEn || 'سوبركي',
+        source: 'builtin-inherited',
+        sourceLabel: 'موروثة',
+        icon: inherited.iconCustomEmojiId
+          ? { id: String(inherited.iconCustomEmojiId), alt: inherited.iconAlt || '💳' }
+          : PREMIUM_EMOJI.superqi,
+        active: inherited.isActive !== false,
+        localConfigured: false,
+        paymentNumber: inherited.paymentNumber || '',
+        defaultOrder: defaultOrder++
+      });
+    } else {
+      entries.push({
+        token: 'superqi',
+        label: 'سوبركي',
+        source: 'builtin-empty',
+        sourceLabel: 'غير مضاف',
+        icon: PREMIUM_EMOJI.superqi,
+        active: false,
+        localConfigured: false,
+        paymentNumber: '',
+        defaultOrder: defaultOrder++
+      });
+    }
+  }
+
+  for (const method of customMethods) {
+    entries.push({
+      token: `custom:${method.id}`,
+      label: method.nameAr || method.nameEn || `طريقة #${method.id}`,
+      source: 'custom-local',
+      sourceLabel: 'مضافة من هذا البوت',
+      icon: customPaymentEmoji(method),
+      active: method.isActive !== false,
+      method,
+      paymentNumber: method.paymentNumber,
+      defaultOrder: defaultOrder++
+    });
+  }
+
+  try {
+    const shared = await network.listSharedPaymentMethods();
+    for (const method of (shared.methods || [])) {
+      if (String(method.ownerShopId || '') === currentShopId) continue;
+      entries.push({
+        token: `shared:${method.id}`,
+        label: method.nameAr || method.nameEn || 'طريقة مشتركة',
+        source: 'shared',
+        sourceLabel: method.ownerShopName ? `من ${method.ownerShopName}` : 'من بوت آخر',
+        icon: method.iconCustomEmojiId
+          ? { id: String(method.iconCustomEmojiId), alt: method.iconAlt || '💳' }
+          : null,
+        active: method.isActive !== false,
+        sharedMethod: method,
+        paymentNumber: method.paymentNumber || '',
+        defaultOrder: defaultOrder++
+      });
+    }
+  } catch (error) {
+    console.error('Admin shared payment methods:', error.message);
+  }
+
+  for (const entry of entries) {
+    entry.hidden = paymentTokenHidden(entry.token, preferences, legacyHidden);
+    entry.buttonStyle = paymentTokenStyle(entry.token, preferences, 'primary');
+  }
+  return sortPaymentEntriesByPreference(entries, preferences);
+}
+
+async function movePaymentToken(token, direction) {
+  if (!['up', 'down'].includes(direction)) throw new Error('INVALID_PAYMENT_DIRECTION');
+  const entries = await collectAdminPaymentEntries();
+  const index = entries.findIndex(entry => String(entry.token) === String(token));
+  if (index < 0) throw new Error('PAYMENT_METHOD_NOT_FOUND');
+  const nextIndex = direction === 'up' ? index - 1 : index + 1;
+  if (nextIndex < 0 || nextIndex >= entries.length) return { moved: false };
+
+  const tokens = entries.map(entry => String(entry.token));
+  [tokens[index], tokens[nextIndex]] = [tokens[nextIndex], tokens[index]];
+  const prefs = await getPaymentUiPreferences();
+  prefs.order = tokens;
+  await setPaymentUiPreferences(prefs);
+
+  // Keep the legacy local sortOrder coherent for older deployments and network sync.
+  const customIds = tokens
+    .filter(value => value.startsWith('custom:'))
+    .map(value => Number(value.slice('custom:'.length)))
+    .filter(Number.isInteger);
+  if (customIds.length) {
+    await sequelize.transaction(async transaction => {
+      for (let i = 0; i < customIds.length; i++) {
+        await PaymentMethod.update({ sortOrder: (i + 1) * 10 }, { where: { id: customIds[i] }, transaction });
+      }
+    });
+    invalidatePaymentMethodsCache();
+  }
+  return { moved: true };
+}
+
+async function resetPaymentUiOrder() {
+  const prefs = await getPaymentUiPreferences();
+  prefs.order = [];
+  await setPaymentUiPreferences(prefs);
+}
+
+async function showAdminPaymentMethods(chatId) {
+  const entries = await collectAdminPaymentEntries();
+  const rows = [];
+
+  for (const entry of entries) {
+    const status = !entry.active ? '⛔' : entry.hidden ? '🙈' : '👁';
+    const styleLabel = paymentButtonStyleLabel(entry.buttonStyle);
+    rows.push([emojiButton(
+      `${status} ${entry.label} · ${entry.sourceLabel} · ${styleLabel}`,
+      entry.icon,
+      {
+        callback_data: `adm:pmdetail:${entry.token}`,
+        ...paymentButtonStyleExtra(entry.hidden || !entry.active ? 'danger' : entry.buttonStyle)
+      }
+    )]);
+  }
+
+  if (!entries.length) {
+    rows.push([{ text: 'ماكو طرق دفع مضافة حالياً', callback_data: 'noop' }]);
+  }
+  rows.push([{ text: '➕ إضافة طريقة دفع', callback_data: 'adm:add_payment_method', style: 'success' }]);
+  rows.push([
+    { text: '👁 إظهار الكل في هذا البوت', callback_data: 'adm:payment_show_all', style: 'success' },
+    { text: '↕️ ترتيب افتراضي', callback_data: 'adm:payment_reset_order', style: 'primary' }
+  ]);
   rows.push([{ text: '⬅️ رجوع لقسم الدفع', callback_data: 'adm:menu:payments' }]);
 
   return bot.sendMessage(chatId, [
-    '💳 <b>طرق الدفع</b>',
+    '💳 <b>مركز طرق الدفع</b>',
     '',
-    'طرق الدفع التي تضيفها هنا تقدر تعدلها أو توقفها أو تحذفها، ومن داخل كل طريقة تگدر ترفعها أو تنزلها حتى ترتب ظهور طرق الدفع المحلية للزبون. Binance/SuperQi الأساسيين يبقون خاصين بكل بوت.',
-    ...inheritedLines
+    'هنا كل طرق الدفع بمكان واحد: Binance، سوبركي، الطرق المضافة محلياً والطرق المشتركة من البوتات الأخرى.',
+    '',
+    'من داخل أي طريقة تگدر:',
+    '• 👁 تظهرها أو 🙈 تخفيها من هذا البوت.',
+    '• ⬆️ ترفعها أو ⬇️ تنزلها بالترتيب.',
+    '• 🎨 تغيّر لون زرها للزبون: افتراضي / أزرق / أخضر / أحمر.',
+    '• ✏️ تعدل بيانات الطرق اللي أنت مالكها.',
+    '• 🗑 تحذف الطريقة المحلية إذا ما تريدها.',
+    '',
+    'ملاحظة: الطريقة التابعة لبوت آخر ما تنحذف من صاحبها؛ تگدر تخفيها من بوتك فقط.'
   ].join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: rows }
   });
 }
 
+async function showAdminPaymentEditMenu(chatId, method) {
+  if (!method) return bot.sendMessage(chatId, '❌ طريقة الدفع غير موجودة.');
+  return bot.sendMessage(chatId, `✏️ <b>تعديل ${escapeHtml(method.nameAr)}</b>\nاختَر الشي اللي تريد تغيّره:`, {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [
+        { text: '📝 الاسم والإيموجي', callback_data: `adm:pmfield:${method.id}:name` },
+        { text: '🔢 رقم/معرّف الدفع', callback_data: `adm:pmfield:${method.id}:number` }
+      ],
+      [
+        { text: '💱 العملة', callback_data: `adm:pmfield:${method.id}:currency` },
+        { text: '📈 سعر 1$', callback_data: `adm:pmfield:${method.id}:rate` }
+      ],
+      [{ text: '💰 الحد الأدنى', callback_data: `adm:pmfield:${method.id}:minimum` }],
+      [{ text: '⬅️ رجوع لطريقة الدفع', callback_data: `adm:pmdetail:custom:${method.id}` }]
+    ] }
+  });
+}
+
 async function showAdminPaymentMethod(chatId, id) {
   const method = await PaymentMethod.findByPk(id);
   if (!method) return bot.sendMessage(chatId, '❌ طريقة الدفع غير موجودة.');
+  const token = `custom:${method.id}`;
+  const prefs = await getPaymentUiPreferences();
+  const legacyHidden = await getHiddenPaymentTypes();
+  const hidden = paymentTokenHidden(token, prefs, legacyHidden);
+  const style = paymentTokenStyle(token, prefs, 'primary');
   const icon = customPaymentEmoji(method);
   return bot.sendMessage(chatId, [
     `${icon ? premiumEmojiHtml(icon) : '💳'} <b>${escapeHtml(method.nameAr)}</b>`,
@@ -7721,24 +8285,119 @@ async function showAdminPaymentMethod(chatId, id) {
     `العملة: <b>${method.settlementCurrency || 'USD'}</b>`,
     `سعر 1$: <b>${Number(method.ratePerUsd || 1)}</b> ${method.settlementCurrency || 'USD'}`,
     `الحد الأدنى: <b>${formatPaymentCurrencyAmount(method.minimumTransferAmount || minimumTransferForMethod(method), method.settlementCurrency || 'USD', 'ar')}</b>`,
-    `الحالة: <b>${method.isActive ? 'مفعلة' : 'متوقفة'}</b>`,
-    `الترتيب: <b>${Number(method.sortOrder || 0)}</b>`,
-    `Custom Emoji ID: <code>${escapeHtml(method.iconCustomEmojiId || 'بدون')}</code>`
+    `التشغيل العام: <b>${method.isActive ? 'مفعلة' : 'متوقفة'}</b>`,
+    `الظهور بهذا البوت: <b>${hidden ? 'مخفية' : 'ظاهرة'}</b>`,
+    `لون الزر: <b>${paymentButtonStyleLabel(style)}</b>`
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [{ text: '✏️ تعديل البيانات', callback_data: `adm:pmeditmenu:${method.id}`, style: 'primary' }],
+      [
+        { text: hidden ? '👁 إظهار بهذا البوت' : '🙈 إخفاء بهذا البوت', callback_data: `adm:pmhide:${token}`, style: hidden ? 'success' : 'danger' },
+        { text: '🎨 لون الزر', callback_data: `adm:pmcolor:${token}`, style: 'primary' }
+      ],
+      [
+        { text: '⬆️ رفع للأعلى', callback_data: `adm:pmmovetoken:up:${token}`, style: 'primary' },
+        { text: '⬇️ تنزيل للأسفل', callback_data: `adm:pmmovetoken:down:${token}`, style: 'primary' }
+      ],
+      [{ text: method.isActive ? '⛔ إيقاف الطريقة بكل البوتات' : '✅ تشغيل الطريقة بكل البوتات', callback_data: `adm:pmtoggle:${method.id}`, style: method.isActive ? 'danger' : 'success' }],
+      [{ text: '🗑 حذف طريقة الدفع', callback_data: `adm:pmdelete:${method.id}`, style: 'danger' }],
+      [{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]
+    ] }
+  });
+}
+
+async function showAdminBuiltinPayment(chatId, token) {
+  const entries = await collectAdminPaymentEntries();
+  const entry = entries.find(row => row.token === token);
+  if (!entry) return bot.sendMessage(chatId, '❌ طريقة الدفع غير متاحة حالياً.');
+  const localType = token.endsWith('binance') ? 'binance' : token.endsWith('superqi') ? 'superqi' : '';
+  const rows = [];
+  if (localType === 'binance') {
+    rows.push([emojiButton(entry.localConfigured ? '⚙️ تغيير إعداد Binance' : '➕ إضافة Binance محلي', PREMIUM_EMOJI.binance, { callback_data: 'adm:binance_setup', style: 'primary' })]);
+    if (entry.localConfigured) rows.push([{ text: '🗑 حذف Binance المحلي', callback_data: 'adm:binance_clear', style: 'danger' }]);
+  } else if (localType === 'superqi') {
+    rows.push([emojiButton(entry.localConfigured ? '🔢 تغيير رقم سوبركي' : '➕ إضافة سوبركي محلي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:set:superqi_number', style: 'primary' })]);
+    if (entry.localConfigured) rows.push([{ text: '🗑 حذف سوبركي المحلي', callback_data: 'adm:superqi_clear', style: 'danger' }]);
+  }
+  rows.push([
+    { text: entry.hidden ? '👁 إظهار بهذا البوت' : '🙈 إخفاء بهذا البوت', callback_data: `adm:pmhide:${token}`, style: entry.hidden ? 'success' : 'danger' },
+    { text: '🎨 لون الزر', callback_data: `adm:pmcolor:${token}`, style: 'primary' }
+  ]);
+  rows.push([
+    { text: '⬆️ رفع للأعلى', callback_data: `adm:pmmovetoken:up:${token}`, style: 'primary' },
+    { text: '⬇️ تنزيل للأسفل', callback_data: `adm:pmmovetoken:down:${token}`, style: 'primary' }
+  ]);
+  rows.push([{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]);
+
+  return bot.sendMessage(chatId, [
+    `${entry.icon ? premiumEmojiHtml(entry.icon) : '💳'} <b>${escapeHtml(entry.label)}</b>`,
+    `المصدر: <b>${escapeHtml(entry.sourceLabel)}</b>`,
+    entry.paymentNumber ? `رقم/معرّف الدفع: <code>${escapeHtml(entry.paymentNumber)}</code>` : '',
+    `الظهور بهذا البوت: <b>${entry.hidden ? 'مخفية' : 'ظاهرة'}</b>`,
+    `لون الزر: <b>${paymentButtonStyleLabel(entry.buttonStyle)}</b>`,
+    '',
+    entry.localConfigured
+      ? 'هذه إعدادات محلية لهذا البوت وتگدر تغيّرها أو تحذفها.'
+      : 'هذه طريقة موروثة من الشبكة. تگدر تتحكم بظهورها ولونها وترتيبها داخل بوتك بدون ما تغيّر صاحبها.'
+  ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+}
+
+async function showAdminSharedPayment(chatId, token) {
+  const entries = await collectAdminPaymentEntries();
+  const entry = entries.find(row => row.token === token);
+  if (!entry) return bot.sendMessage(chatId, '❌ طريقة الدفع المشتركة غير متاحة حالياً.');
+  const method = entry.sharedMethod || {};
+  return bot.sendMessage(chatId, [
+    `${entry.icon ? premiumEmojiHtml(entry.icon) : '💳'} <b>${escapeHtml(entry.label)}</b>`,
+    `المصدر: <b>${escapeHtml(entry.sourceLabel)}</b>`,
+    `رقم/معرّف الدفع: <code>${escapeHtml(method.paymentNumber || '')}</code>`,
+    `العملة: <b>${escapeHtml(String(method.settlementCurrency || 'USD'))}</b>`,
+    `الحد الأدنى: <b>${formatPaymentCurrencyAmount(method.minimumTransferAmount || 0.01, method.settlementCurrency || 'USD', 'ar')}</b>`,
+    `الظهور بهذا البوت: <b>${entry.hidden ? 'مخفية' : 'ظاهرة'}</b>`,
+    `لون الزر: <b>${paymentButtonStyleLabel(entry.buttonStyle)}</b>`,
+    '',
+    'هذه الطريقة مملوكة لبوت آخر؛ ما نعدّل بياناتها أو نحذفها من صاحبها. التحكم هنا محلي لبوتك فقط.'
   ].join('\n'), {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
       [
-        { text: '✏️ تغيير الاسم', callback_data: `adm:pmfield:${method.id}:name` },
-        { text: '🔢 تغيير الرقم', callback_data: `adm:pmfield:${method.id}:number` }
+        { text: entry.hidden ? '👁 إظهار بهذا البوت' : '🙈 إخفاء بهذا البوت', callback_data: `adm:pmhide:${token}`, style: entry.hidden ? 'success' : 'danger' },
+        { text: '🎨 لون الزر', callback_data: `adm:pmcolor:${token}`, style: 'primary' }
       ],
-      [{ text: '💰 تغيير الحد الأدنى', callback_data: `adm:pmfield:${method.id}:minimum` }],
       [
-        { text: '⬆️ رفع للأعلى', callback_data: `adm:pmmove:${method.id}:up`, style: 'primary' },
-        { text: '⬇️ تنزيل للأسفل', callback_data: `adm:pmmove:${method.id}:down`, style: 'primary' }
+        { text: '⬆️ رفع للأعلى', callback_data: `adm:pmmovetoken:up:${token}`, style: 'primary' },
+        { text: '⬇️ تنزيل للأسفل', callback_data: `adm:pmmovetoken:down:${token}`, style: 'primary' }
       ],
-      [{ text: method.isActive ? '⛔ إيقاف الطريقة' : '✅ تشغيل الطريقة', callback_data: `adm:pmtoggle:${method.id}`, style: method.isActive ? 'danger' : 'success' }],
-      [{ text: '🗑 حذف طريقة الدفع', callback_data: `adm:pmdelete:${method.id}`, style: 'danger' }],
       [{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]
+    ] }
+  });
+}
+
+async function showAdminPaymentTokenDetail(chatId, token) {
+  const value = String(token || '');
+  if (value.startsWith('custom:')) return showAdminPaymentMethod(chatId, Number(value.slice('custom:'.length)));
+  if (value.startsWith('shared:')) return showAdminSharedPayment(chatId, value);
+  return showAdminBuiltinPayment(chatId, value);
+}
+
+async function showPaymentColorPicker(chatId, userId, token) {
+  const entries = await collectAdminPaymentEntries();
+  const entry = entries.find(row => row.token === token);
+  if (!entry) return bot.sendMessage(chatId, '❌ طريقة الدفع غير موجودة.');
+  await setState(userId, { action: 'admin_payment_color', token });
+  return bot.sendMessage(chatId, [
+    `🎨 <b>لون زر ${escapeHtml(entry.label)}</b>`,
+    '',
+    'اختَر اللون اللي تريد يظهر للزبون. التغيير خاص بهذا البوت.'
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [{ text: '⚪ افتراضي', callback_data: 'adm:pmstyle:default' }],
+      [{ text: '🔵 أزرق', callback_data: 'adm:pmstyle:primary', style: 'primary' }],
+      [{ text: '🟢 أخضر', callback_data: 'adm:pmstyle:success', style: 'success' }],
+      [{ text: '🔴 أحمر', callback_data: 'adm:pmstyle:danger', style: 'danger' }],
+      [{ text: '⬅️ رجوع', callback_data: `adm:pmdetail:${token}` }]
     ] }
   });
 }
@@ -8227,6 +8886,8 @@ async function handleAdminCallback(query, user, data) {
       reply_markup: { inline_keyboard: [[
         { text: client.isActive ? '⛔ إيقاف API لهذا البوت' : '✅ إعادة تفعيل API', callback_data: `adm:network_toggle:${client.id}`, style: client.isActive ? 'danger' : 'success' }
       ], [
+        { text: '🗑 حذف الشريك نهائياً', callback_data: `adm:network_deleteask:${client.id}`, style: 'danger' }
+      ], [
         { text: '🤝 الحسابات والديون', callback_data: 'adm:network_accounts', style: 'primary' }
       ], [{ text: '⬅️ الشركاء', callback_data: 'adm:network' }]] }
     });
@@ -8237,13 +8898,44 @@ async function handleAdminCallback(query, user, data) {
     return;
   }
 
+  if (data.startsWith('adm:network_deleteask:')) {
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
+    const client = await NetworkClient.findByPk(Number(data.split(':')[2]));
+    if (!client) return answerCallback(query.id, 'الشريك غير موجود.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>حذف شريك API نهائياً</b>',
+      `الشريك: <b>${escapeHtml(client.name)}</b>`,
+      `Shop ID: <code>${escapeHtml(client.shopId)}</code>`,
+      '',
+      'سيتم حذف تسجيل الشريك ومفتاح وصوله نهائياً من البوت الرئيسي. قاعدة بيانات بوت الشريك المنفصلة لا يتم إسقاطها تلقائياً حتى لا تُمسح بيانات زبائنه بالغلط.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[
+      { text: '🗑 نعم، حذف نهائي', callback_data: `adm:network_deleteconfirm:${client.id}`, style: 'danger' },
+      { text: '❌ إلغاء', callback_data: `adm:network_client:${client.id}` }
+    ]] } });
+  }
+
+  if (data.startsWith('adm:network_deleteconfirm:')) {
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
+    const client = await NetworkClient.findByPk(Number(data.split(':')[2]));
+    if (!client) return answerCallback(query.id, 'الشريك محذوف مسبقاً.', true);
+    const clientName = client.name;
+    const shopId = client.shopId;
+    await client.destroy();
+    if (typeof network.invalidateClientAuthCache === 'function') network.invalidateClientAuthCache();
+    await answerCallback(query.id, 'تم حذف شريك API نهائياً.');
+    await bot.sendMessage(query.message.chat.id, `🗑 تم حذف <b>${escapeHtml(clientName)}</b> (<code>${escapeHtml(shopId)}</code>) من شركاء API نهائياً.`, { parse_mode: 'HTML' });
+    return bot.sendMessage(query.message.chat.id, 'ارجع إلى قائمة الشركاء لتشوف القائمة بعد التحديث.', { reply_markup: { inline_keyboard: [[{ text: '🔗 قائمة الشركاء', callback_data: 'adm:network', style: 'primary' }]] } });
+  }
+
   if (data.startsWith('adm:network_toggle:')) {
     if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     const client = await NetworkClient.findByPk(Number(data.split(':')[2]));
     if (!client) return answerCallback(query.id, 'الشريك غير موجود.', true);
     client.isActive = !client.isActive;
     await client.save({ fields: ['isActive'] });
-    await answerCallback(query.id, client.isActive ? 'تم تفعيل API.' : 'تم إيقاف API لهذا البوت.');
+    if (typeof network.invalidateClientAuthCache === 'function') network.invalidateClientAuthCache();
+    await answerCallback(query.id, client.isActive ? 'تم تفعيل API فوراً.' : 'تم إيقاف API لهذا البوت فوراً.');
     return;
   }
 
@@ -8509,11 +9201,19 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:binance_clear') {
+    await migratePaymentTokenPreferences('binance', 'network:binance');
     await setSecureSetting('binance_api_key', '');
     await setSecureSetting('binance_api_secret', '');
     await setSetting('binance_pay_id', '');
-    await answerCallback(query.id, network.enabledClient() ? 'تم حذف Binance المحلي. إذا عند المالك الرئيسي Binance راح يظهر تلقائياً كطريقة احتياطية.' : 'تم حذف إعداد Binance.');
-    return;
+    await answerCallback(query.id, network.enabledClient() ? 'تم حذف Binance المحلي. إذا عند المالك الرئيسي Binance راح يظهر تلقائياً كطريقة موروثة.' : 'تم حذف إعداد Binance.');
+    return showAdminPaymentMethods(query.message.chat.id);
+  }
+
+  if (data === 'adm:superqi_clear') {
+    await migratePaymentTokenPreferences('superqi', 'network:superqi');
+    await setSetting('superqi_number', '');
+    await answerCallback(query.id, network.enabledClient() ? 'تم حذف سوبركي المحلي. إذا متوفر سوبركي رئيسي راح يظهر تلقائياً كطريقة موروثة.' : 'تم حذف رقم سوبركي المحلي.');
+    return showAdminPaymentMethods(query.message.chat.id);
   }
 
   if (data.startsWith('adm:pmcurrency:')) {
@@ -8547,36 +9247,97 @@ async function handleAdminCallback(query, user, data) {
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
 
-  if (data === 'adm:payment_methods_inherit') {
-    if (!network.enabledClient()) return answerCallback(query.id, 'هذا الخيار للبوتات المرتبطة فقط.', true);
+  if (data === 'adm:payment_methods_inherit' || data === 'adm:payment_show_all') {
     await setHiddenPaymentTypes(new Set());
-    await answerCallback(query.id, 'تم إظهار كل طرق الدفع الرئيسية في هذا البوت.');
+    const prefs = await getPaymentUiPreferences();
+    prefs.hidden = [];
+    await setPaymentUiPreferences(prefs);
+    await answerCallback(query.id, 'تم إظهار كل طرق الدفع المتاحة في هذا البوت.');
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
+  // Backward compatibility for buttons sent by older deployments.
   if (data.startsWith('adm:pmvis:')) {
-    if (!network.enabledClient()) return answerCallback(query.id, 'هذا الخيار للبوتات المرتبطة فقط.', true);
     const type = data.slice('adm:pmvis:'.length);
     if (!type) return answerCallback(query.id, 'طريقة دفع غير صحيحة.', true);
-    const hidden = await getHiddenPaymentTypes();
-    if (hidden.has(type)) hidden.delete(type);
-    else hidden.add(type);
-    await setHiddenPaymentTypes(hidden);
-    await answerCallback(query.id, hidden.has(type) ? 'تم إخفاء الطريقة في هذا البوت فقط.' : 'تم إظهار الطريقة في هذا البوت.');
+    const token = type === 'binance' || type === 'superqi' ? type : `network:${type}`;
+    const hidden = await togglePaymentTokenHidden(token);
+    await answerCallback(query.id, hidden ? 'تم إخفاء الطريقة في هذا البوت.' : 'تم إظهار الطريقة في هذا البوت.');
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
   if (data === 'adm:payment_methods') {
+    const fresh = await User.findByPk(user.id);
+    const currentState = parseState(fresh);
+    if (currentState?.action === 'admin_payment_color') await clearState(user.id);
     await answerCallback(query.id);
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
+  if (data === 'adm:payment_reset_order') {
+    await resetPaymentUiOrder();
+    await answerCallback(query.id, 'تم إرجاع ترتيب طرق الدفع للوضع الافتراضي.');
+    return showAdminPaymentMethods(query.message.chat.id);
+  }
+
+  if (data.startsWith('adm:pmdetail:')) {
+    const token = data.slice('adm:pmdetail:'.length);
+    const fresh = await User.findByPk(user.id);
+    const currentState = parseState(fresh);
+    if (currentState?.action === 'admin_payment_color') await clearState(user.id);
+    await answerCallback(query.id);
+    return showAdminPaymentTokenDetail(query.message.chat.id, token);
+  }
+
+  if (data.startsWith('adm:pmhide:')) {
+    const token = data.slice('adm:pmhide:'.length);
+    const entries = await collectAdminPaymentEntries();
+    if (!entries.some(entry => entry.token === token)) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    const hidden = await togglePaymentTokenHidden(token);
+    await answerCallback(query.id, hidden ? 'تم إخفاء طريقة الدفع من هذا البوت.' : 'تم إظهار طريقة الدفع في هذا البوت.');
+    return showAdminPaymentTokenDetail(query.message.chat.id, token);
+  }
+
+  if (data.startsWith('adm:pmcolor:')) {
+    const token = data.slice('adm:pmcolor:'.length);
+    await answerCallback(query.id);
+    return showPaymentColorPicker(query.message.chat.id, user.id, token);
+  }
+
+  if (data.startsWith('adm:pmstyle:')) {
+    const style = data.slice('adm:pmstyle:'.length);
+    if (!PAYMENT_BUTTON_STYLE_VALUES.has(style)) return answerCallback(query.id, 'لون غير صحيح.', true);
+    const fresh = await User.findByPk(user.id);
+    const state = parseState(fresh);
+    if (!state || state.action !== 'admin_payment_color' || !state.token) return answerCallback(query.id, 'انتهت عملية تغيير اللون. افتح الطريقة من جديد.', true);
+    const token = String(state.token);
+    await setPaymentTokenStyle(token, style);
+    await clearState(user.id);
+    await answerCallback(query.id, `تم تغيير لون الزر إلى ${paymentButtonStyleLabel(style)}.`);
+    return showAdminPaymentTokenDetail(query.message.chat.id, token);
+  }
+
+  if (data.startsWith('adm:pmmovetoken:')) {
+    const rest = data.slice('adm:pmmovetoken:'.length);
+    const separator = rest.indexOf(':');
+    if (separator < 0) return answerCallback(query.id, 'ترتيب غير صحيح.', true);
+    const direction = rest.slice(0, separator);
+    const token = rest.slice(separator + 1);
+    try {
+      const result = await movePaymentToken(token, direction);
+      await answerCallback(query.id, result.moved ? 'تم تغيير ترتيب طريقة الدفع.' : (direction === 'up' ? 'هذه الطريقة بالأعلى أصلاً.' : 'هذه الطريقة بالأسفل أصلاً.'));
+      return showAdminPaymentTokenDetail(query.message.chat.id, token);
+    } catch (error) {
+      return answerCallback(query.id, error.message === 'PAYMENT_METHOD_NOT_FOUND' ? 'طريقة الدفع غير موجودة.' : `تعذر الترتيب: ${error.message}`, true);
+    }
+  }
+
+  // Backward compatibility for old local-payment move buttons.
   if (data.startsWith('adm:pmmove:')) {
     const [, , idRaw, direction] = data.split(':');
     const id = Number(idRaw);
-    if (!['up', 'down'].includes(direction)) return answerCallback(query.id, 'اتجاه الترتيب غير صحيح.', true);
     try {
-      const result = await movePaymentMethod(id, direction);
+      const result = await movePaymentToken(`custom:${id}`, direction);
       await answerCallback(query.id, result.moved ? 'تم تغيير ترتيب طريقة الدفع.' : (direction === 'up' ? 'هذه الطريقة بالأعلى أصلاً.' : 'هذه الطريقة بالأسفل أصلاً.'));
       return showAdminPaymentMethod(query.message.chat.id, id);
     } catch (error) {
@@ -8584,20 +9345,61 @@ async function handleAdminCallback(query, user, data) {
     }
   }
 
+  if (data.startsWith('adm:pmeditmenu:')) {
+    const id = Number(data.split(':')[2]);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    await answerCallback(query.id);
+    return showAdminPaymentEditMenu(query.message.chat.id, method);
+  }
+
+  if (data.startsWith('adm:pmeditcurrency:')) {
+    const [, , idRaw, currency] = data.split(':');
+    const id = Number(idRaw);
+    if (!['USD', 'IQD', 'EGP'].includes(currency)) return answerCallback(query.id, 'عملة غير صحيحة.', true);
+    const method = await PaymentMethod.findByPk(id);
+    if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
+    method.settlementCurrency = currency;
+    if (currency === 'USD') method.ratePerUsd = 1;
+    await method.save();
+    invalidatePaymentMethodsCache();
+    try { await syncPaymentMethodToNetwork(method); } catch (error) { console.error('Payment currency sync:', error.message); }
+    await answerCallback(query.id, `تم تغيير العملة إلى ${currency}.`);
+    if (currency !== 'USD') {
+      await setState(user.id, { action: 'admin_edit_payment_method', paymentMethodId: id, field: 'rate' });
+      return bot.sendMessage(user.id, currency === 'IQD'
+        ? 'أرسل سعر 1$ بالدينار العراقي، مثال 1500.'
+        : 'أرسل سعر 1$ بالجنيه المصري، مثال 50.', { reply_markup: cancelInlineKeyboard() });
+    }
+    return showAdminPaymentMethod(query.message.chat.id, id);
+  }
+
   if (data.startsWith('adm:pmfield:')) {
     const [, , idRaw, field] = data.split(':');
     const id = Number(idRaw);
-    if (!['name', 'number', 'minimum'].includes(field)) return answerCallback(query.id, 'حقل غير صحيح.', true);
+    if (!['name', 'number', 'minimum', 'currency', 'rate'].includes(field)) return answerCallback(query.id, 'حقل غير صحيح.', true);
     const method = await PaymentMethod.findByPk(id);
     if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
     if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
-    await setState(user.id, { action: 'admin_edit_payment_method', paymentMethodId: id, field });
     await answerCallback(query.id);
+    if (field === 'currency') {
+      return bot.sendMessage(user.id, '💱 اختَر عملة الاستلام الجديدة:', {
+        reply_markup: { inline_keyboard: [
+          [{ text: '💵 دولار (USD)', callback_data: `adm:pmeditcurrency:${id}:USD` }],
+          [{ text: '🇮🇶 دينار عراقي (IQD)', callback_data: `adm:pmeditcurrency:${id}:IQD` }],
+          [{ text: '🇪🇬 جنيه مصري (EGP)', callback_data: `adm:pmeditcurrency:${id}:EGP` }],
+          [{ text: '⬅️ إلغاء', callback_data: `adm:pmeditmenu:${id}` }]
+        ] }
+      });
+    }
+    await setState(user.id, { action: 'admin_edit_payment_method', paymentMethodId: id, field });
     return bot.sendMessage(user.id, field === 'name'
       ? 'أرسل الاسم الجديد بالعربي. تقدر تستخدم Premium Emoji أو [ID] قبل الاسم.'
       : field === 'number'
         ? 'أرسل رقم/معرّف الدفع الجديد.'
-        : `أرسل الحد الأدنى الجديد بعملة ${paymentCurrencyLabel(method.settlementCurrency, 'ar')}.`, { reply_markup: cancelInlineKeyboard() });
+        : field === 'rate'
+          ? `أرسل سعر 1$ الجديد بعملة ${paymentCurrencyLabel(method.settlementCurrency, 'ar')}.`
+          : `أرسل الحد الأدنى الجديد بعملة ${paymentCurrencyLabel(method.settlementCurrency, 'ar')}.`, { reply_markup: cancelInlineKeyboard() });
   }
 
   if (data.startsWith('adm:pmtoggle:')) {
@@ -8625,10 +9427,16 @@ async function handleAdminCallback(query, user, data) {
       console.error('Deactivate shared method before delete:', error.message);
     }
     const name = method.nameAr;
+    const token = `custom:${method.id}`;
     await method.destroy();
+    const prefs = await getPaymentUiPreferences();
+    prefs.order = prefs.order.filter(value => value !== token);
+    prefs.hidden = prefs.hidden.filter(value => value !== token);
+    delete prefs.styles[token];
+    await setPaymentUiPreferences(prefs);
     invalidatePaymentMethodsCache();
     await answerCallback(query.id, 'تم حذف طريقة الدفع.');
-    await bot.sendMessage(query.message.chat.id, `🗑 تم حذف <b>${escapeHtml(name)}</b> من هذا البوت ومن طرق الدفع المشتركة. السجلات القديمة تبقى محفوظة بالحسابات.`, { parse_mode: 'HTML' });
+    await bot.sendMessage(query.message.chat.id, `🗑 تم حذف <b>${escapeHtml(name)}</b> من هذا البوت ومن طرق الدفع المشتركة. سجلات العمليات القديمة تبقى محفوظة بالحسابات.`, { parse_mode: 'HTML' });
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
@@ -8637,12 +9445,11 @@ async function handleAdminCallback(query, user, data) {
     const method = await PaymentMethod.findByPk(id);
     if (!method) return answerCallback(query.id, 'طريقة الدفع غير موجودة.', true);
     await answerCallback(query.id);
-    return bot.sendMessage(query.message.chat.id, `⚠️ حذف <b>${escapeHtml(method.nameAr)}</b>؟
-راح تختفي من كل البوتات، لكن سجلات العمليات القديمة تبقى محفوظة.`, {
+    return bot.sendMessage(query.message.chat.id, `⚠️ حذف <b>${escapeHtml(method.nameAr)}</b>؟\nراح تختفي من كل البوتات، لكن سجلات العمليات القديمة تبقى محفوظة.`, {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[
         { text: '🗑 نعم، حذف', callback_data: `adm:pmdeleteconfirm:${id}`, style: 'danger' },
-        { text: 'إلغاء', callback_data: `adm:pm:${id}` }
+        { text: 'إلغاء', callback_data: `adm:pmdetail:custom:${id}` }
       ]] }
     });
   }
@@ -8768,10 +9575,21 @@ async function handleAdminCallback(query, user, data) {
     return showReferralAdmin(query.message.chat.id);
   }
 
+  if (data.startsWith('adm:balances:')) {
+    await answerCallback(query.id);
+    return showBalanceHolders(query.message.chat.id, Number(data.split(':')[2] || 0));
+  }
+
+  if (data.startsWith('adm:balanceaudit:')) {
+    const [, , targetIdRaw, pageRaw] = data.split(':');
+    await answerCallback(query.id);
+    return showUserBalanceAudit(query.message.chat.id, Number(targetIdRaw), Number(pageRaw || 0));
+  }
+
   if (data === 'adm:user_lookup') {
     await setState(user.id, { action: 'admin_user_lookup' });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي لعرض حسابه، أو اكتب إغلاق:', {
+    return bot.sendMessage(user.id, 'أرسل Telegram ID أو @username لعرض حسابه. الاسم العادي غير معتمد. أو اكتب إغلاق:', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -8779,7 +9597,15 @@ async function handleAdminCallback(query, user, data) {
   if (data === 'adm:user_credit') {
     await setState(user.id, { action: 'admin_user_credit_id' });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي الذي تريد إضافة رصيد له، أو اكتب إغلاق:', {
+    return bot.sendMessage(user.id, 'أرسل Telegram ID أو @username للشخص الذي تريد إضافة رصيد له. الاسم العادي غير معتمد. أو اكتب إغلاق:', {
+      reply_markup: cancelInlineKeyboard()
+    });
+  }
+
+  if (data === 'adm:user_zero') {
+    await setState(user.id, { action: 'admin_user_zero_id' });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, 'أرسل Telegram ID أو @username للشخص الذي تريد مسح/تصفير رصيده. الاسم العادي غير معتمد. أو اكتب إغلاق:', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -8787,7 +9613,7 @@ async function handleAdminCallback(query, user, data) {
   if (data === 'adm:user_debit') {
     await setState(user.id, { action: 'admin_user_debit_id' });
     await answerCallback(query.id);
-    return bot.sendMessage(user.id, 'أرسل آيدي المستخدم الرقمي الذي تريد خصم رصيد منه، أو اكتب إغلاق:', {
+    return bot.sendMessage(user.id, 'أرسل Telegram ID أو @username للشخص الذي تريد خصم رصيد منه. الاسم العادي غير معتمد. أو اكتب إغلاق:', {
       reply_markup: cancelInlineKeyboard()
     });
   }
@@ -8933,14 +9759,11 @@ async function handleAdminCallback(query, user, data) {
 
   if (data === 'adm:settings') {
     await answerCallback(query.id);
-    const [rate, egpRate, number, channel, open, binanceReady, binanceRuntime] = await Promise.all([
+    const [rate, egpRate, channel, open] = await Promise.all([
       getIqdRate(),
       getSetting('egp_rate_per_usd', String(config.network.egpRate || 50)),
-      localSuperQiNumber(),
       getRequiredChannel(),
-      isStoreOpen(),
-      binancePay.configured(),
-      binancePay.getRuntimeConfig()
+      isStoreOpen()
     ]);
     const localCurrency = shopDisplayCurrency();
     const currencyLine = [
@@ -8950,27 +9773,22 @@ async function handleAdminCallback(query, user, data) {
     ].join('\n');
     const currencyButtons = [
       { text: '🇮🇶 سعر الدولار IQD', callback_data: 'adm:set:iqd_rate' },
-      { text: '🇪🇬 سعر الدولار EGP', callback_data: 'adm:set:egp_rate_per_usd' },
-      emojiButton('رقم سوبركي', PREMIUM_EMOJI.superqi, { callback_data: 'adm:set:superqi_number' })
+      { text: '🇪🇬 سعر الدولار EGP', callback_data: 'adm:set:egp_rate_per_usd' }
     ];
     return bot.sendMessage(query.message.chat.id, [
       '⚙️ <b>الإعدادات</b>',
       '',
       `المتجر: <b>${open ? 'مفتوح' : 'مغلق'}</b>`,
       currencyLine,
-      `رقم SuperQi المحلي: <code>${escapeHtml(number || (network.enabledClient() ? 'غير مضاف — يستخدم الرئيسي تلقائياً' : 'غير مضاف'))}</code>`,
       `القناة الإجبارية: <code>${escapeHtml(channel || 'متوقفة')}</code>`,
-      `Binance ID المحلي: <code>${escapeHtml(binanceRuntime.payId || 'غير مضاف')}</code>`,
-      `Binance API المحلي: <b>${binanceReady ? 'جاهز' : (network.enabledClient() ? 'غير مضاف — يستخدم الرئيسي إذا متوفر' : 'ناقص')}</b>`,
-      network.enabledClient() ? `API الشبكة: <b>متصل — ${escapeHtml(config.network.shopName)}</b>` : ''
+      network.enabledClient() ? `API الشبكة: <b>متصل — ${escapeHtml(config.network.shopName)}</b>` : '',
+      '',
+      '💳 إعداد Binance وسوبركي وكل طرق الدفع انتقل إلى «مركز طرق الدفع» حتى تبقى الإدارة مرتبة بمكان واحد.'
     ].filter(Boolean).join('\n'), {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [
         currencyButtons,
-        [
-          emojiButton(network.enabledClient() ? 'تغيير API Binance' : 'إعداد API Binance', PREMIUM_EMOJI.binance, { callback_data: 'adm:binance_setup', style: 'primary' }),
-          { text: '🗑 حذف Binance المحلي', callback_data: 'adm:binance_clear', style: 'danger' }
-        ],
+        [{ text: '💳 مركز طرق الدفع', callback_data: 'adm:payment_methods', style: 'primary' }],
         [
           { text: '📢 القناة الإجبارية', callback_data: 'adm:set:required_channel' },
           { text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }
@@ -9060,15 +9878,11 @@ async function handleAdminCallback(query, user, data) {
       return answerCallback(query.id, 'عملية إضافة المنتج غير فعالة.', true);
     }
     state.data.type = type;
-    if (type === 'service') {
-      // Manual services are fulfilled by the admins of this bot, so they stay
-      // local even if the admin initially picked the public scope.
-      state.data.scope = 'local';
-      state.data.localOnly = true;
-    }
     await setState(user.id, { action: 'admin_new_product', step: 'nameAr', data: state.data });
     await answerCallback(query.id, type === 'service'
-      ? 'تم اختيار تنفيذ خدمة. هذا النوع يبقى داخل بوتك لأن التنفيذ يدوي من إدارتك.'
+      ? (state.data.scope === 'public'
+          ? 'تم اختيار تنفيذ خدمة عامة. ستصل لبقية الإدارات للموافقة والتسعير.'
+          : 'تم اختيار تنفيذ خدمة خاصة داخل هذا البوت فقط.')
       : `تم اختيار: ${productTypeLabel(type)}`);
     return bot.sendMessage(user.id, '1/5 أرسل اسم المنتج بالعربي.\nتقدر تستخدم Custom Emoji Premium مباشرة، أو تكتب ID الإيموجي بين أقواس مربعة مثل: [5221980268230882832] اسم المنتج.', {
       reply_markup: cancelInlineKeyboard()
@@ -9094,19 +9908,84 @@ async function handleAdminCallback(query, user, data) {
     if (network.enabledClient()) await network.syncCatalogToLocal({ force: true }).catch(() => null);
     const product = await Merchant.findByPk(productId);
     if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
-    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
-      return answerCallback(query.id, 'تم اتخاذ قرار بهذا المنتج مسبقاً داخل هذا البوت.', true);
+    const reviewStatus = String(product.localPublicationStatus || '').toLowerCase();
+    if (!['pending', 'rejected'].includes(reviewStatus)) {
+      return answerCallback(query.id, 'المنتج ليس بانتظار تسعير حالياً. افتح قسم النشر والظهور لتغيير حالته.', true);
     }
     const basePrice = networkProductBasePrice(product);
     await setState(user.id, { action: 'admin_publish_network_product', productId: product.id });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, [
-      `💵 <b>تسعير ونشر: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+      `💵 <b>تسعير ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'}: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
       `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
       '',
       `أرسل سعر البيع داخل بوتك. يجب أن يكون ${moneyUsd(basePrice)} أو أكثر.`,
-      'فرق السعر فوق السعر الأساسي يكون ربحاً لهذا البوت.'
+      'فرق السعر فوق السعر الأساسي يكون ربحاً لهذا البوت. بعد إدخال السعر راح أطلب منك تأكيد النشر قبل ما يظهر للزبائن.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:netprod:confirm_publish:')) {
+    const productId = Number(data.split(':')[3]);
+    const freshUser = await User.findByPk(user.id);
+    const state = parseState(freshUser);
+    if (!state || state.action !== 'admin_confirm_network_product_price' || Number(state.productId) !== productId) {
+      return answerCallback(query.id, 'جلسة التسعير انتهت. اضغط تسعير من جديد.', true);
+    }
+    const value = Number(state.price);
+    let product = null;
+    try {
+      await sequelize.transaction(async transaction => {
+        product = await Merchant.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
+        if (!product || !product.isActive || !isForeignPublicProduct(product)) throw new Error('NETWORK_PRODUCT_NOT_AVAILABLE');
+        const currentStatus = String(product.localPublicationStatus || '').toLowerCase();
+        if (!['pending', 'rejected'].includes(currentStatus)) throw new Error('PRODUCT_ALREADY_DECIDED');
+        const basePrice = networkProductBasePrice(product);
+        if (value + 1e-9 < basePrice) throw new Error(`PRICE_BELOW_BASE:${basePrice}`);
+        await product.update({
+          localPriceOverrideUsd: value > basePrice + 1e-9 ? value : null,
+          localPublicationStatus: 'published',
+          localReviewNotifiedAt: new Date()
+        }, { transaction });
+      });
+    } catch (error) {
+      await clearState(user.id);
+      return answerCallback(query.id, error.message === 'PRODUCT_ALREADY_DECIDED' ? 'تم تغيير حالة المنتج من أدمن آخر.' : 'تعذر نشر المنتج.', true);
+    }
+    await clearState(user.id);
+    product = await Merchant.findByPk(productId);
+    const basePrice = networkProductBasePrice(product);
+    const profit = Math.max(0, value - basePrice);
+    await answerCallback(query.id, 'تم النشر في هذا البوت.');
+    await bot.sendMessage(user.id, [
+      `✅ <b>تم نشر ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'} في بوتك</b>`,
+      `${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`,
+      `سعر البيع: <b>${moneyUsd(value)}</b>`,
+      `ربح بوتك: <b>${moneyUsd(profit)}</b> لكل عملية بيع.`,
+      '',
+      'تم إرسال إشعار للمستخدمين في هذا البوت.'
+    ].join('\n'), { parse_mode: 'HTML' });
+    await broadcastNewProductNotification(product, product.createdByDisplayName || '').catch(error => console.error('Publish reviewed product notification:', error.message));
+    return showAdminProductEditor(user.id, product.id);
+  }
+
+  if (data.startsWith('adm:netprod:confirm_reject:')) {
+    const productId = Number(data.split(':')[3]);
+    const freshUser = await User.findByPk(user.id);
+    const state = parseState(freshUser);
+    if (!state || state.action !== 'admin_confirm_network_product_price' || Number(state.productId) !== productId) {
+      return answerCallback(query.id, 'جلسة التسعير انتهت.', true);
+    }
+    const product = await Merchant.findByPk(productId);
+    if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
+    product.localPublicationStatus = 'rejected';
+    product.localReviewNotifiedAt = new Date();
+    await product.save({ fields: ['localPublicationStatus', 'localReviewNotifiedAt'] });
+    await clearState(user.id);
+    await answerCallback(query.id, 'تم الرفض والإخفاء في هذا البوت.');
+    return bot.sendMessage(user.id, [
+      `❌ تم رفض <b>${escapeHtml(productDisplayName(product, 'ar'))}</b> وإخفاؤه من هذا البوت.`,
+      'تقدر تغير رأيك بأي وقت من «إدارة المنتجات المضافة > النشر والظهور > تسعير ونشر من جديد».'
+    ].join('\n'), { parse_mode: 'HTML' });
   }
 
   if (data.startsWith('adm:netprod:reject:')) {
@@ -9153,19 +10032,32 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:localstatus:')) {
     const [, , status, idRaw] = data.split(':');
-    if (!['published', 'hidden', 'deleted'].includes(status)) return answerCallback(query.id, 'حالة غير صحيحة.', true);
+    if (!['published', 'hidden'].includes(status)) return answerCallback(query.id, 'حالة غير صحيحة.', true);
     const product = await Merchant.findByPk(Number(idRaw));
     if (!product || !productAccessibleInCurrentShop(product) || !isPublicProduct(product)) {
       return answerCallback(query.id, 'المنتج العام غير موجود في هذا البوت.', true);
     }
+    const previousStatus = String(product.localPublicationStatus || 'published').toLowerCase();
+    if (status === 'published' && isForeignPublicProduct(product) && ['pending', 'rejected'].includes(previousStatus)) {
+      const basePrice = networkProductBasePrice(product);
+      await setState(user.id, { action: 'admin_publish_network_product', productId: product.id });
+      await answerCallback(query.id);
+      return bot.sendMessage(user.id, [
+        `💵 <b>تسعير ونشر من جديد: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+        `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+        '',
+        `أرسل سعر البيع داخل بوتك. يجب أن يكون ${moneyUsd(basePrice)} أو أكثر.`
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+    }
     product.localPublicationStatus = status;
     product.localReviewNotifiedAt = new Date();
     await product.save({ fields: ['localPublicationStatus', 'localReviewNotifiedAt'] });
+    if (status === 'published' && previousStatus !== 'published') {
+      await broadcastNewProductNotification(product, product.createdByDisplayName || '').catch(error => console.error('Restore product notification:', error.message));
+    }
     const resultText = status === 'published'
       ? 'تم إظهار المنتج في هذا البوت فقط.'
-      : status === 'hidden'
-        ? 'تم إخفاء المنتج من هذا البوت فقط.'
-        : 'تم حذف المنتج من واجهة هذا البوت فقط.';
+      : 'تم إخفاء المنتج من هذا البوت فقط.';
     await answerCallback(query.id, resultText);
     return showAdminProductEditor(query.message.chat.id, product.id);
   }
@@ -9189,14 +10081,15 @@ async function handleAdminCallback(query, user, data) {
     const product = await Merchant.findByPk(Number(data.split(':')[2]));
     if (!product || !canManageNetworkProduct(product)) return answerCallback(query.id, 'المنتج غير موجود أو لا تملكه.', true);
     try {
-      await answerCallback(query.id, 'جاري نشر المنتج ونقل مخزونه...');
+      const serviceProduct = String(product.type || '') === 'service';
+      await answerCallback(query.id, serviceProduct ? 'جاري جعل الخدمة عامة...' : 'جاري نشر المنتج ونقل مخزونه...');
       const result = await promoteLocalProductToNetwork(product, user);
       await bot.sendMessage(query.message.chat.id, [
-        '✅ <b>تم نشر المنتج في شبكة البوتات</b>',
-        `المنتج: <b>${escapeHtml(productDisplayName(result.product, 'ar'))}</b>`,
-        `المخزون الذي نُقل بأمان: <b>${Number(result.transferred || 0)}</b>`,
+        `✅ <b>تم نشر ${serviceProduct ? 'الخدمة' : 'المنتج'} في شبكة البوتات</b>`,
+        `${serviceProduct ? 'الخدمة' : 'المنتج'}: <b>${escapeHtml(productDisplayName(result.product, 'ar'))}</b>`,
+        serviceProduct ? 'المخزون: <b>لا يحتاج مخزون</b>' : `المخزون الذي نُقل بأمان: <b>${Number(result.transferred || 0)}</b>`,
         '',
-        'سيصل المنتج لبقية الإدارات، وكل إدارة تختار اسمها المحلي وسعرها أو تخفيه من بوتها.'
+        `سيصل ${serviceProduct ? 'إشعار الخدمة' : 'المنتج'} لبقية الإدارات، وكل إدارة تسعّره ثم تؤكد النشر أو ترفضه.`
       ].join('\n'), { parse_mode: 'HTML' });
       return showAdminProductEditor(query.message.chat.id, result.product.id);
     } catch (error) {
@@ -9205,9 +10098,7 @@ async function handleAdminCallback(query, user, data) {
         ? `❌ يوجد ${Number(message.split(':')[1] || 0)} حساب مشترك بيع منه بعض الاستخدامات. انتظر نفاد هذه الحسابات أو عالجها قبل النشر حتى لا تتكرر الاستخدامات.`
         : message.startsWith('HIDDEN_INVENTORY_EXISTS:')
           ? `❌ يوجد ${Number(message.split(':')[1] || 0)} عنصر مخزون مخفي. افتح «إدارة وكشف المخزون» وأظهره أو احذفه قبل تحويل المنتج إلى عام حتى لا يضيع أي محتوى.`
-          : message === 'SERVICE_PRODUCTS_MUST_BE_LOCAL'
-            ? '❌ الخدمات التنفيذية تبقى محلية لأنها تعتمد على إدارة البوت المنفذ.'
-            : `❌ تعذر نشر المنتج: ${escapeHtml(message)}`;
+          : `❌ تعذر نشر المنتج: ${escapeHtml(message)}`;
       return bot.sendMessage(query.message.chat.id, friendly, { parse_mode: 'HTML' });
     }
   }
@@ -9216,20 +10107,22 @@ async function handleAdminCallback(query, user, data) {
     const product = await Merchant.findByPk(Number(data.split(':')[2]));
     if (!product || !canManageNetworkProduct(product)) return answerCallback(query.id, 'المنتج غير موجود أو لا تملكه.', true);
     if (String(product.visibilityScope || '').toLowerCase() !== 'private') return answerCallback(query.id, 'المنتج منشور في الشبكة مسبقاً.', true);
-    if (String(product.type || '') === 'service') return answerCallback(query.id, 'الخدمات التنفيذية تبقى محلية.', true);
     const stock = await getProductStock(product.id);
+    const serviceProduct = String(product.type || '') === 'service';
     await answerCallback(query.id);
     return bot.sendMessage(query.message.chat.id, [
-      '🌐 <b>تأكيد النشر في باقي البوتات</b>',
-      `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
+      `🌐 <b>تأكيد جعل ${serviceProduct ? 'الخدمة عامة' : 'المنتج عاماً'}</b>`,
+      `${serviceProduct ? 'الخدمة' : 'المنتج'}: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
       `السعر الأساسي: <b>${moneyUsd(product.price)}</b>`,
-      `المخزون الحالي: <b>${stock}</b>`,
+      serviceProduct ? 'المخزون: <b>لا يحتاج مخزون</b>' : `المخزون الحالي: <b>${stock}</b>`,
       '',
-      'سيُنقل المخزون غير المباع إلى الكتالوج المشترك، ثم تقرر كل إدارة نشر المنتج وتسعيره داخل بوتها.'
+      serviceProduct
+        ? 'ستصل الخدمة إلى إدارات البوتات الأخرى للمراجعة. كل أدمن يسعّرها ثم يؤكد النشر أو يرفضها.'
+        : 'سيُنقل المخزون غير المباع إلى الكتالوج المشترك، ثم تقرر كل إدارة تسعير المنتج وتأكيد نشره أو رفضه.'
     ].join('\n'), {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[
-        { text: '✅ نشر في باقي البوتات', callback_data: `adm:publish_network_confirm:${product.id}`, style: 'success' },
+        { text: serviceProduct ? '✅ نعم، جعلها عامة' : '✅ نشر في باقي البوتات', callback_data: `adm:publish_network_confirm:${product.id}`, style: 'success' },
         { text: '❌ إلغاء', callback_data: `adm:edit:${product.id}` }
       ]] }
     });
@@ -9240,7 +10133,6 @@ async function handleAdminCallback(query, user, data) {
     if (!product || !canManageNetworkProduct(product) || !isPublicProduct(product)) {
       return answerCallback(query.id, 'المنتج غير موجود أو لا تملك صلاحية توزيعه.', true);
     }
-    if (String(product.type || '') === 'service') return answerCallback(query.id, 'الخدمات التنفيذية تبقى محلية.', true);
     const nextEnabled = !productSharedWithOtherBots(product);
     try {
       if (product.networkManaged && network.enabledClient()) {
@@ -9386,19 +10278,22 @@ async function handleAdminCallback(query, user, data) {
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
     if (!network.enabledClient()) {
       const protection = await network.productStockProtection(product.id, product.networkOwnerShopId || 'master');
-      if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تحذف/توقف المنتج؛ بيه ${protection.externalAvailable} وحدات مخزون لأشخاص آخرين.`, true);
+      if (protection.externalAvailable > 0) return answerCallback(query.id, `ما تگدر تحذف المنتج؛ بيه ${protection.externalAvailable} وحدات مخزون مملوكة لشركاء آخرين. احذف/سوِّ تسوية لهذا المخزون أولاً.`, true);
     }
     if (product.networkManaged && network.enabledClient()) {
       try { await network.deleteRemoteProduct(product.networkProductId); }
-      catch (error) { return answerCallback(query.id, error.message.startsWith('EXTERNAL_STOCK_EXISTS:') ? 'ما تگدر تحذف/توقف المنتج لأن بيه مخزون لأشخاص آخرين.' : error.message, true); }
+      catch (error) { return answerCallback(query.id, error.message.startsWith('EXTERNAL_STOCK_EXISTS:') ? 'ما تگدر تحذف المنتج لأن بيه مخزون لأشخاص آخرين.' : error.message, true); }
     }
-    // Safe deletion: archive instead of destroying the product or inventory.
-    // This keeps orders, delivery history and stock recoverable.
-    product.isActive = false;
-    await product.save({ fields: ['isActive'] });
-    await answerCallback(query.id, 'تم حذف/أرشفة المنتج من واجهة البيع بدون مسح بياناته.');
-    await bot.sendMessage(query.message.chat.id, '🗑 تم إخفاء المنتج عن الزبائن وأرشفته بأمان. المخزون والطلبات لم تُحذف، وتقدر تستعيده من إدارة المنتجات.');
-    return showAdminProductEditor(query.message.chat.id, product.id);
+    const result = await hardDeleteOwnedProduct(product);
+    await answerCallback(query.id, 'تم الحذف النهائي.');
+    await bot.sendMessage(query.message.chat.id, [
+      '🗑 <b>تم حذف المنتج نهائياً</b>',
+      '',
+      'تمت إزالة سجل المنتج ومخزونه وطلبات التشغيل المرتبطة به من قاعدة التشغيل.',
+      result.orderCount ? `الطلبات المرتبطة التي حُذفت: <b>${result.orderCount}</b>` : 'لم تكن هناك طلبات مرتبطة.',
+      'السجلات المالية العامة غير المرتبطة مباشرة بسجل المنتج تبقى كأثر محاسبي ولا يمكن استعادة المنتج من الأرشيف لأنه لم يعد مؤرشفاً.'
+    ].join('\n'), { parse_mode: 'HTML' });
+    return showAdminProducts(query.message.chat.id, 0);
   }
 
   if (data.startsWith('adm:delete:')) {
@@ -9407,14 +10302,15 @@ async function handleAdminCallback(query, user, data) {
     if (!canManageNetworkProduct(product)) return answerCallback(query.id, 'هذا المنتج تابع لمتجر آخر بالشبكة.', true);
     await answerCallback(query.id);
     return bot.sendMessage(query.message.chat.id, [
-      '⚠️ <b>تأكيد حذف/أرشفة المنتج</b>',
+      '⚠️ <b>تأكيد الحذف النهائي</b>',
       `المنتج: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
       '',
-      'للحفاظ على قاعدة البيانات، الحذف هنا آمن: المنتج يختفي من البيع لكن المخزون والطلبات وسجل التسليم يبقون محفوظين ويمكن استعادة المنتج لاحقاً.'
+      'هذا ليس إخفاء ولا أرشفة. الحذف نهائي ويزيل المنتج ومخزونه وطلبات التشغيل المرتبطة به، ولا يوجد زر استعادة بعد الحذف.',
+      'إذا تريد فقط إخفاء المنتج استخدم قسم «النشر والظهور» بدل الحذف.'
     ].join('\n'), {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[
-        { text: '🗑 نعم، احذف/أرشف', callback_data: `adm:delete_confirm:${product.id}`, style: 'danger' },
+        { text: '🗑 نعم، حذف نهائي', callback_data: `adm:delete_confirm:${product.id}`, style: 'danger' },
         { text: '❌ إلغاء', callback_data: `adm:edit:${product.id}` }
       ]] }
     });
@@ -9595,6 +10491,7 @@ async function showAdminUserCard(chatId, targetId) {
       { text: '➕ إضافة رصيد', callback_data: `adm:usercredit:${target.id}`, style: 'success' },
       { text: '➖ خصم رصيد', callback_data: `adm:userdebit:${target.id}`, style: 'danger' }
     ],
+    [{ text: '📜 كشف حركة الرصيد ومصدره', callback_data: `adm:balanceaudit:${target.id}:0`, style: 'primary' }],
     [{ text: '🧹 تصفير المحفظة', callback_data: `adm:userzeroask:${target.id}`, style: 'danger' }],
     [{ text: target.blocked ? '✅ فك الحظر' : '⛔ حظر المستخدم', callback_data: `adm:userblock:${target.id}` }],
     [{ text: '🔄 تحديث', callback_data: `adm:usercard:${target.id}` }]
@@ -9957,9 +10854,19 @@ async function showAdminProductPublishMenu(chatId, productId) {
   if (publicProduct) {
     if (publicationStatus === 'published') {
       keyboard.push([
-        { text: '🙈 إخفاء داخل هذا البوت', callback_data: `adm:localstatus:hidden:${product.id}`, style: 'danger' },
-        { text: '🗑 حذف من هذا البوت', callback_data: `adm:localstatus:deleted:${product.id}`, style: 'danger' }
+        { text: '🙈 إخفاء داخل هذا البوت', callback_data: `adm:localstatus:hidden:${product.id}`, style: 'danger' }
       ]);
+    } else if (isForeignPublicProduct(product) && ['pending', 'rejected'].includes(publicationStatus)) {
+      keyboard.push([{
+        text: publicationStatus === 'rejected' ? '💵 تسعير ونشر من جديد' : '💵 تسعير ثم تأكيد النشر',
+        callback_data: `adm:netprod:price:${product.id}`,
+        style: 'success'
+      }]);
+      if (publicationStatus === 'pending') keyboard.push([{
+        text: '❌ رفض وإخفاء في هذا البوت',
+        callback_data: `adm:netprod:reject:${product.id}`,
+        style: 'danger'
+      }]);
     } else {
       keyboard.push([{
         text: '👁 نشر/استعادة داخل هذا البوت',
@@ -9981,13 +10888,11 @@ async function showAdminProductPublishMenu(chatId, productId) {
       }]);
     }
   } else if (manageable) {
-    if (String(product.type || '') !== 'service') {
-      keyboard.push([{
-        text: '🌐 إظهار المنتج في البوتات الأخرى',
-        callback_data: `adm:publish_network:${product.id}`,
-        style: 'success'
-      }]);
-    }
+    keyboard.push([{
+      text: String(product.type || '') === 'service' ? '🌐 جعل الخدمة عامة' : '🌐 إظهار المنتج في البوتات الأخرى',
+      callback_data: `adm:publish_network:${product.id}`,
+      style: 'success'
+    }]);
     keyboard.push([{
       text: product.isActive ? '🙈 إخفاء المنتج من الزبائن' : '👁 إظهار المنتج للزبائن',
       callback_data: `adm:toggle:${product.id}`,
@@ -10007,9 +10912,7 @@ async function showAdminProductPublishMenu(chatId, productId) {
     '',
     publicProduct
       ? 'إخفاء/حذف «داخل هذا البوت» لا يغيّر بقية البوتات. صاحب المنتج فقط يقدر يوقف التوزيع على الشبكة كلها.'
-      : (String(product.type || '') === 'service'
-          ? 'الخدمة التنفيذية تبقى محلية في هذا البوت.'
-          : 'تقدر تبقي المنتج محلياً أو تحوله إلى منتج عام وترسله لبقية إدارات البوتات للموافقة.')
+      : 'تقدر تبقي المنتج أو الخدمة محلياً، أو تحوله إلى عام وترسله لبقية إدارات البوتات للموافقة والتسعير.'
   ].filter(Boolean).join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
@@ -10037,7 +10940,7 @@ async function showAdminProductEditor(chatId, productId) {
     `المخزون المتاح: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
     product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
     `حالة هذا البوت: <b>${productLocalStatusLabel(publicationStatus)}</b>`,
-    `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف/مؤرشف'}</b>`,
+    `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف'}</b>`,
     `نطاق النشر: <b>${scopeLabel}</b>`,
     publicProduct && manageable
       ? `المشاركة مع البوتات الأخرى: <b>${productSharedWithOtherBots(product) ? 'مفعلة' : 'مخفية'}</b>`
@@ -10061,9 +10964,9 @@ async function showAdminProductEditor(chatId, productId) {
   keyboard.push([{ text: '🌐 النشر والظهور', callback_data: `adm:product_publish:${product.id}`, style: 'primary' }]);
   if (manageable) {
     keyboard.push([{
-      text: product.isActive ? '🗑 حذف/أرشفة المنتج' : '♻️ المنتج مؤرشف — افتح النشر للاستعادة',
-      callback_data: product.isActive ? `adm:delete:${product.id}` : `adm:product_publish:${product.id}`,
-      style: product.isActive ? 'danger' : 'primary'
+      text: '🗑 حذف المنتج نهائياً',
+      callback_data: `adm:delete:${product.id}`,
+      style: 'danger'
     }]);
   }
   keyboard.push([{ text: '⬅️ كل المنتجات المضافة', callback_data: 'adm:products:0' }]);
@@ -10262,6 +11165,11 @@ async function processSharedPaymentResults() {
               targetUser.balance = Number(targetUser.balance || 0) + Number(ledger.amount || 0);
               await targetUser.save({ transaction: dbTx });
               ledger.status = 'completed';
+              ledger.completedAt = new Date();
+              ledger.approvedByTelegramId = request.approvedByTelegramId || null;
+              ledger.approvedByUsername = request.approvedByUsername || null;
+              ledger.approvedByDisplayName = request.approvedByDisplayName || null;
+              ledger.approvalSource = 'shared_payment_owner';
             } else {
               ledger.status = 'rejected';
             }
@@ -10614,6 +11522,7 @@ function startNetworkAccountWatcher() {
       await processOwnedDebtBinanceVerifications();
       await processDebtPaymentResults();
       await processNetworkNotificationEvents();
+      await repairPendingServiceNetworkAccounting().catch(error => console.error('Service accounting watcher:', error.message));
       const data = await fetchLocalNetworkAccountData();
       await processIncomingDebtConfirmations(data);
       await processDebtRemindersAndStatus(data);

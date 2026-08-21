@@ -203,7 +203,8 @@ const BalanceTransaction = sequelize.define('BalanceTransaction', {
   approvedByTelegramId: { type: DataTypes.BIGINT, allowNull: true },
   approvedByUsername: { type: DataTypes.STRING(64), allowNull: true },
   approvedByDisplayName: { type: DataTypes.STRING(160), allowNull: true },
-  approvalSource: { type: DataTypes.STRING(48), allowNull: true }
+  approvalSource: { type: DataTypes.STRING(48), allowNull: true },
+  completedAt: { type: DataTypes.DATE, allowNull: true }
 });
 
 const BinanceTransfer = sequelize.define('BinanceTransfer', {
@@ -725,6 +726,7 @@ async function initializeDatabase() {
   await addColumnIfMissing('BalanceTransactions', 'approvedByUsername', { type: DataTypes.STRING(64), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'approvedByDisplayName', { type: DataTypes.STRING(160), allowNull: true });
   await addColumnIfMissing('BalanceTransactions', 'approvalSource', { type: DataTypes.STRING(48), allowNull: true });
+  await addColumnIfMissing('BalanceTransactions', 'completedAt', { type: DataTypes.DATE, allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'inventoryOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'unitPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
   await addColumnIfMissing('DeliveryRecords', 'supplierValueUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });

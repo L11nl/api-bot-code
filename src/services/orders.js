@@ -1,4 +1,4 @@
-const { QueryTypes } = require('sequelize');
+const { QueryTypes, Op } = require('sequelize');
 const crypto = require('crypto');
 const { sequelize, User, Merchant, Code, PurchaseOrder, DeliveryRecord, BalanceTransaction } = require('../db');
 const { parseDescription } = require('../utils');
@@ -224,6 +224,94 @@ async function createGiftOrder({ userId, merchantId }) {
   });
 }
 
+function serviceNeedsNetworkAccounting(product) {
+  if (!product || String(product.type || '') !== 'service') return false;
+  if (String(product.visibilityScope || 'private').toLowerCase() !== 'public') return false;
+  if (!String(product.networkProductId || '').trim()) return false;
+  const owner = String(product.networkOwnerShopId || '').trim() || currentShopId();
+  return owner !== currentShopId();
+}
+
+async function ensureServiceNetworkAccounting(orderId) {
+  const order = await PurchaseOrder.findByPk(orderId);
+  if (!order) throw new Error('ORDER_NOT_FOUND');
+  const product = await Merchant.findByPk(order.merchantId);
+  if (!serviceNeedsNetworkAccounting(product)) return { needed: false, order, product };
+  const deliveries = Array.isArray(order.delivery) ? [...order.delivery] : [];
+  const payload = { ...(deliveries[0] || {}) };
+  if (payload.networkAccountingComplete === true) return { needed: true, complete: true, order, product, split: payload.networkSplit || null };
+  const network = require('../network');
+  const result = await network.recordServiceSale({
+    networkProductId: product.networkProductId,
+    localOrderId: order.id,
+    quantity: Number(order.quantity || 1),
+    retailUnitPriceUsd: Number(order.unitPrice || effectiveProductPrice(product))
+  });
+  const split = result?.split || result || {};
+  payload.networkAccountingPending = false;
+  payload.networkAccountingComplete = true;
+  payload.networkSplit = split;
+  payload.networkOwnerShopId = split.ownerShopId || product.networkOwnerShopId || null;
+  payload.supplierValueUsd = Number(split.supplierValueUsd || 0);
+  payload.sellerMarkupUsd = Number(split.sellerMarkupUsd || 0);
+  deliveries[0] = payload;
+  order.delivery = deliveries;
+  await order.save({ fields: ['delivery'] });
+  return { needed: true, complete: true, order, product, split };
+}
+
+async function reverseServiceNetworkAccounting(orderId) {
+  const order = await PurchaseOrder.findByPk(orderId);
+  if (!order) throw new Error('ORDER_NOT_FOUND');
+  const product = await Merchant.findByPk(order.merchantId);
+  if (!serviceNeedsNetworkAccounting(product)) return { needed: false, order, product };
+  const deliveries = Array.isArray(order.delivery) ? [...order.delivery] : [];
+  const payload = { ...(deliveries[0] || {}) };
+  if (payload.networkAccountingReversed === true) return { needed: true, reversed: true, order, product };
+  const network = require('../network');
+  const result = await network.reverseServiceSale({
+    networkProductId: product.networkProductId,
+    localOrderId: order.id,
+    quantity: Number(order.quantity || 1)
+  });
+  payload.networkRefundAccountingPending = false;
+  payload.networkAccountingReversed = true;
+  payload.networkRefundSplit = result?.split || result || {};
+  deliveries[0] = payload;
+  order.delivery = deliveries;
+  await order.save({ fields: ['delivery'] });
+  return { needed: true, reversed: true, order, product, split: payload.networkRefundSplit };
+}
+
+async function repairPendingServiceNetworkAccounting(limit = 100) {
+  const rows = await PurchaseOrder.findAll({
+    where: { status: { [Op.in]: ['service_pending_input', 'service_pending_admin', 'completed', 'refunded_service'] } },
+    order: [['id', 'DESC']],
+    limit: Math.max(1, Math.min(300, Number(limit || 100)))
+  });
+  let repaired = 0;
+  let failed = 0;
+  for (const order of rows) {
+    try {
+      const deliveries = Array.isArray(order.delivery) ? order.delivery : [];
+      const payload = deliveries[0] || {};
+      if (String(order.status) === 'refunded_service') {
+        if (payload.networkAccountingComplete === true && payload.networkAccountingReversed !== true) {
+          await reverseServiceNetworkAccounting(order.id);
+          repaired += 1;
+        }
+      } else if (payload.networkAccountingPending === true && payload.networkAccountingComplete !== true) {
+        await ensureServiceNetworkAccounting(order.id);
+        repaired += 1;
+      }
+    } catch (error) {
+      failed += 1;
+      console.error(`Service network accounting repair #${order.id}:`, error.message);
+    }
+  }
+  return { repaired, failed };
+}
+
 async function fulfillOrder(orderId, options = {}) {
   const transaction = await sequelize.transaction();
   try {
@@ -240,6 +328,7 @@ async function fulfillOrder(orderId, options = {}) {
     if (product?.type === 'service') {
       const description = parseDescription(product.description);
       const inputMode = String(description.serviceInputMode || 'text');
+      const accountingNeeded = serviceNeedsNetworkAccounting(product);
       const servicePayload = {
         serviceRequest: true,
         inputMode,
@@ -248,7 +337,10 @@ async function fulfillOrder(orderId, options = {}) {
         promptAr: String(description.servicePromptAr || 'أرسل البيانات المطلوبة حتى نباشر تنفيذ الخدمة.'),
         promptEn: String(description.servicePromptEn || 'Send the required details so we can start the service.'),
         submitted: false,
-        needsAdminAction: true
+        needsAdminAction: true,
+        networkAccountingPending: accountingNeeded,
+        networkAccountingComplete: !accountingNeeded,
+        networkOwnerShopId: product.networkOwnerShopId || currentShopId()
       };
       order.status = 'service_pending_input';
       order.delivery = [servicePayload];
@@ -259,7 +351,12 @@ async function fulfillOrder(orderId, options = {}) {
       product.description = description;
       await product.save({ transaction });
       await transaction.commit();
-      return { order, deliveries: [servicePayload], product, servicePendingInput: true };
+      if (accountingNeeded) {
+        try { await ensureServiceNetworkAccounting(order.id); }
+        catch (error) { console.error(`Service network accounting #${order.id}:`, error.message); }
+      }
+      const fresh = await PurchaseOrder.findByPk(order.id);
+      return { order: fresh || order, deliveries: fresh?.delivery || [servicePayload], product, servicePendingInput: true };
     }
 
     if (product?.networkManaged) {
@@ -706,7 +803,25 @@ async function refundServiceOrderToWallet(orderId, reason = 'service_refund_wall
     await order.save({ transaction, fields: ['status', 'paymentRef', 'completedAt'] });
 
     await transaction.commit();
-    return { order, refunded: amount, newBalance: Number(user.balance), alreadyRefunded: false };
+    let networkRefundPending = false;
+    try { await reverseServiceNetworkAccounting(order.id); }
+    catch (error) {
+      networkRefundPending = true;
+      console.error(`Service network refund accounting #${order.id}:`, error.message);
+      try {
+        const fresh = await PurchaseOrder.findByPk(order.id);
+        if (fresh) {
+          const deliveries = Array.isArray(fresh.delivery) ? [...fresh.delivery] : [];
+          const payload = { ...(deliveries[0] || {}), networkRefundAccountingPending: true };
+          deliveries[0] = payload;
+          fresh.delivery = deliveries;
+          await fresh.save({ fields: ['delivery'] });
+        }
+      } catch (markError) {
+        console.error(`Service network refund pending marker #${order.id}:`, markError.message);
+      }
+    }
+    return { order, refunded: amount, newBalance: Number(user.balance), alreadyRefunded: false, networkRefundPending };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -757,5 +872,7 @@ module.exports = {
   completeExternalPayment,
   payFromWallet,
   refundServiceOrderToWallet,
+  ensureServiceNetworkAccounting,
+  repairPendingServiceNetworkAccounting,
   addWaitingCode
 };

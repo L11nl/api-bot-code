@@ -409,6 +409,7 @@ async function approveManualReview(transferId, adminId) {
     user.balance = Number(user.balance || 0) + Number(lockedTransfer.expectedAmount);
     await user.save({ transaction });
     ledger.status = 'completed';
+    ledger.completedAt = new Date();
     ledger.txid = submitted;
     ledger.caption = `Binance ID manual verification by admin ${adminId} | ${submitted}`;
     ledger.approvedByTelegramId = adminId;
@@ -579,6 +580,7 @@ async function verify(transferId, submittedOrderId) {
     user.balance = Number(user.balance || 0) + Number(lockedTransfer.expectedAmount);
     await user.save({ transaction });
     ledger.status = 'completed';
+    ledger.completedAt = new Date();
     ledger.txid = transactionId;
     ledger.caption = `Binance ID verified | ${submitted}`;
     ledger.approvalSource = 'binance_auto';

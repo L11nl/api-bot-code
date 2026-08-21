@@ -3,10 +3,13 @@ const axios = require('axios');
 const config = require('./config');
 const {
   sequelize,
+  Op,
   User,
   Merchant,
   Code,
   PurchaseOrder,
+  BinanceTransfer,
+  DeliveryRecord,
   PaymentMethod,
   NetworkClient,
   NetworkSettlement,
@@ -42,6 +45,8 @@ let publicPaymentProfileSyncedAt = 0;
 let masterCatalogSnapshotCache = { at: 0, products: null, viewerShopId: '' };
 const authClientCache = new Map();
 const AUTH_CLIENT_CACHE_TTL_MS = Math.max(5000, Number(process.env.NETWORK_AUTH_CACHE_TTL_MS || 15000));
+
+function invalidateClientAuthCache() { authClientCache.clear(); }
 const PREMIUM_EMOJI_STORAGE_KEY = 'premium_emoji_keyword_map_v1';
 const CATALOG_BOOTSTRAP_STORAGE_KEY = 'network_catalog_bootstrap_v2';
 
@@ -165,7 +170,6 @@ async function catalogSnapshot(viewerShopId = '') {
     order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
   const sharedProducts = products.filter(product => {
-    if (String(product.type || '') === 'service') return false;
     if (product.networkDistributionEnabled !== false) return true;
     return viewer && String(product.networkOwnerShopId || 'master') === viewer;
   });
@@ -333,9 +337,19 @@ async function syncCatalogToLocalNow(options = {}) {
   const { Op } = require('sequelize');
   const staleWhere = { networkManaged: true };
   if (seen.length) staleWhere.networkProductId = { [Op.notIn]: seen };
-  // Source withdrawal hides the row but never destroys the local publication
-  // decision or audit metadata.
-  await Merchant.update({ isActive: false }, { where: staleWhere });
+  // A source product that was permanently deleted must not reappear as a
+  // restorable archive. Keep a minimal inactive row only when local orders need
+  // the old merchant id for historical integrity; otherwise remove the mirror.
+  const staleRows = await Merchant.findAll({ where: staleWhere });
+  for (const stale of staleRows) {
+    const localOrders = await PurchaseOrder.count({ where: { merchantId: stale.id } });
+    if (localOrders > 0) {
+      await stale.update({ isActive: false, localPublicationStatus: 'hidden' });
+    } else {
+      await Code.destroy({ where: { merchantId: stale.id } });
+      await stale.destroy();
+    }
+  }
   return remoteProducts;
 }
 
@@ -387,9 +401,6 @@ async function bootstrapCatalogToLocal(options = {}) {
 }
 
 async function createRemoteProduct(payload, options = {}) {
-  if (String(payload?.type || '') === 'service') {
-    throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
-  }
   const result = await clientRequest('post', '/api/v1/products', {
     ...payload,
     suppressNotification: Boolean(options?.suppressNotification)
@@ -1186,6 +1197,115 @@ async function auditUserAcrossNetwork(identifierRaw) {
   return { identifier, results };
 }
 
+async function recordServiceSaleForSeller({ sellerShopId, networkProductId, localOrderId, quantity = 1, retailUnitPriceUsd }) {
+  if (!isMaster()) throw new Error('MASTER_ONLY');
+  const seller = String(sellerShopId || 'master').trim() || 'master';
+  const product = await Merchant.findOne({ where: { networkProductId: String(networkProductId || ''), isActive: true, visibilityScope: 'public' } });
+  if (!product || String(product.type || '') !== 'service') throw new Error('SERVICE_PRODUCT_NOT_FOUND');
+  const owner = String(product.networkOwnerShopId || 'master').trim() || 'master';
+  const qty = Math.max(1, Math.min(100, Number(quantity || 1)));
+  if (!Number.isInteger(qty)) throw new Error('INVALID_QUANTITY');
+  const baseUnit = Math.max(0, Number(product.networkBasePriceUsd ?? product.price ?? 0));
+  const retailUnit = Number(retailUnitPriceUsd);
+  if (!Number.isFinite(retailUnit) || retailUnit + 1e-9 < baseUnit || retailUnit > 1000000) {
+    throw new Error(`LOCAL_PRICE_BELOW_BASE:${baseUnit.toFixed(2)}`);
+  }
+  const supplierUsd = Number((baseUnit * qty).toFixed(2));
+  const markupUsd = Number((Math.max(0, retailUnit - baseUnit) * qty).toFixed(2));
+  const source = `service:${seller}:${String(localOrderId || '')}`;
+  if (!String(localOrderId || '').trim()) throw new Error('LOCAL_ORDER_ID_REQUIRED');
+
+  if (seller !== owner && supplierUsd > 0) {
+    await ledger.recordObligation({
+      debtorShopId: seller,
+      creditorShopId: owner,
+      amountUsd: supplierUsd,
+      kind: 'service_sale',
+      sourceRef: source,
+      networkProductId: product.networkProductId,
+      sellerShopId: seller,
+      stockOwnerShopId: owner,
+      metadata: {
+        localOrderId: String(localOrderId),
+        quantity: qty,
+        retailUnitPriceUsd: retailUnit,
+        supplierUnitPriceUsd: baseUnit,
+        supplierValueUsd: supplierUsd,
+        sellerMarkupUsd: markupUsd,
+        service: true
+      }
+    });
+  }
+  if (seller !== owner && markupUsd > 0) {
+    await ledger.recordObligation({
+      debtorShopId: seller,
+      creditorShopId: seller,
+      amountUsd: markupUsd,
+      kind: 'sales_markup',
+      sourceRef: `service-markup:${seller}:${String(localOrderId)}`,
+      networkProductId: product.networkProductId,
+      sellerShopId: seller,
+      stockOwnerShopId: owner,
+      metadata: {
+        localOrderId: String(localOrderId),
+        quantity: qty,
+        retailUnitPriceUsd: retailUnit,
+        supplierUnitPriceUsd: baseUnit,
+        markupUsd,
+        service: true
+      }
+    });
+  }
+  return {
+    sellerShopId: seller,
+    ownerShopId: owner,
+    quantity: qty,
+    retailUnitPriceUsd: retailUnit,
+    supplierUnitPriceUsd: baseUnit,
+    supplierValueUsd: supplierUsd,
+    sellerMarkupUsd: markupUsd
+  };
+}
+
+async function reverseServiceSaleForSeller({ sellerShopId, networkProductId, localOrderId, quantity = 1 }) {
+  if (!isMaster()) throw new Error('MASTER_ONLY');
+  const seller = String(sellerShopId || 'master').trim() || 'master';
+  const product = await Merchant.findOne({ where: { networkProductId: String(networkProductId || ''), visibilityScope: 'public' } });
+  if (!product || String(product.type || '') !== 'service') throw new Error('SERVICE_PRODUCT_NOT_FOUND');
+  const owner = String(product.networkOwnerShopId || 'master').trim() || 'master';
+  const qty = Math.max(1, Math.min(100, Number(quantity || 1)));
+  if (!Number.isInteger(qty)) throw new Error('INVALID_QUANTITY');
+  const baseUnit = Math.max(0, Number(product.networkBasePriceUsd ?? product.price ?? 0));
+  const supplierUsd = Number((baseUnit * qty).toFixed(2));
+  if (!String(localOrderId || '').trim()) throw new Error('LOCAL_ORDER_ID_REQUIRED');
+  if (seller !== owner && supplierUsd > 0) {
+    await ledger.recordObligation({
+      debtorShopId: owner,
+      creditorShopId: seller,
+      amountUsd: supplierUsd,
+      kind: 'service_refund',
+      sourceRef: `service-refund:${seller}:${String(localOrderId)}`,
+      networkProductId: product.networkProductId,
+      sellerShopId: seller,
+      stockOwnerShopId: owner,
+      metadata: { localOrderId: String(localOrderId), quantity: qty, supplierUnitPriceUsd: baseUnit, service: true }
+    });
+  }
+  return { sellerShopId: seller, ownerShopId: owner, quantity: qty, supplierUnitPriceUsd: baseUnit, supplierValueUsd: supplierUsd };
+}
+
+async function recordServiceSale(payload) {
+  if (isMaster()) return recordServiceSaleForSeller({ ...payload, sellerShopId: 'master' });
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/service-sales', payload || {});
+}
+
+async function reverseServiceSale(payload) {
+  if (isMaster()) return reverseServiceSaleForSeller({ ...payload, sellerShopId: 'master' });
+  if (!enabledClient()) throw new Error('NETWORK_API_NOT_CONFIGURED');
+  return clientRequest('post', '/api/v1/service-sales/reverse', payload || {});
+}
+
 function installMasterRoutes(app, getBot) {
   const route = async (req, res, handler) => {
     try {
@@ -1226,8 +1346,7 @@ function installMasterRoutes(app, getBot) {
     const type = String(body.type || 'free');
     if (!nameAr || nameAr.length > 160) throw new Error('INVALID_PRODUCT_NAME');
     if (!Number.isFinite(price) || price < 0 || price > 1000000) throw new Error('INVALID_PRODUCT_PRICE');
-    if (type === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
-    if (!['code', 'account', 'free', 'private', 'shared'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
+    if (!['code', 'account', 'free', 'private', 'shared', 'service'].includes(type)) throw new Error('INVALID_PRODUCT_TYPE');
     if (String(body.visibilityScope || 'public').toLowerCase() !== 'public') throw new Error('NETWORK_PRODUCT_MUST_BE_PUBLIC');
     const networkProductId = newProductId();
     const [product] = await Merchant.findOrCreate({
@@ -1303,7 +1422,6 @@ function installMasterRoutes(app, getBot) {
     const allowed = ['nameAr','nameEn','price','category','type','description','image','isActive','sharedLimit','deliveryMode','sortOrder','networkDistributionEnabled'];
     const changes = {};
     for (const key of allowed) if (body[key] !== undefined) changes[key] = body[key];
-    if (String(changes.type || '') === 'service') throw new Error('SERVICE_PRODUCTS_MUST_BE_LOCAL');
     const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
     if (changes.price !== undefined && Number(changes.price) + 1e-9 < protection.maxContributionPriceUsd) {
       throw new Error(`PRICE_BELOW_STOCK_VALUE:${protection.maxContributionPriceUsd.toFixed(2)}`);
@@ -1333,9 +1451,29 @@ function installMasterRoutes(app, getBot) {
     if (String(product.networkOwnerShopId || 'master') !== String(client.shopId)) throw new Error('PRODUCT_NOT_OWNED');
     const protection = await productStockProtection(product.id, product.networkOwnerShopId || 'master');
     if (protection.externalAvailable > 0) throw new Error(`EXTERNAL_STOCK_EXISTS:${protection.externalAvailable}`);
-    await product.update({ isActive: false });
+
+    // Permanent delete requested by the owner. Financial network-ledger rows are
+    // immutable audit records and remain, but the product, stock, storefront
+    // orders and delivery rows are physically removed from the operational DB.
+    const tx = await sequelize.transaction();
+    try {
+      const orders = await PurchaseOrder.findAll({ where: { merchantId: product.id }, attributes: ['id'], transaction: tx });
+      const orderIds = orders.map(row => Number(row.id));
+      if (orderIds.length) {
+        await BinanceTransfer.destroy({ where: { orderId: { [Op.in]: orderIds } }, transaction });
+        await DeliveryRecord.destroy({ where: { orderId: { [Op.in]: orderIds } }, transaction });
+        await PurchaseOrder.destroy({ where: { id: { [Op.in]: orderIds } }, transaction });
+      }
+      await DeliveryRecord.destroy({ where: { merchantId: product.id }, transaction });
+      await Code.destroy({ where: { merchantId: product.id }, transaction });
+      await product.destroy({ transaction });
+      await tx.commit();
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    }
     invalidateCatalogCache();
-    return { deleted: true };
+    return { deleted: true, permanent: true };
   }));
 
   app.post('/api/v1/products/:networkProductId/inventory', (req, res) => route(req, res, async client => {
@@ -1465,6 +1603,27 @@ function installMasterRoutes(app, getBot) {
     const product = await Merchant.findOne({ where: { networkProductId: req.params.networkProductId } });
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     return { contributors: await ledger.salesStatsForProduct(product) };
+  }));
+
+  app.post('/api/v1/service-sales', (req, res) => route(req, res, async client => {
+    const split = await recordServiceSaleForSeller({
+      sellerShopId: client.shopId,
+      networkProductId: req.body?.networkProductId,
+      localOrderId: req.body?.localOrderId,
+      quantity: req.body?.quantity,
+      retailUnitPriceUsd: req.body?.retailUnitPriceUsd
+    });
+    return { split };
+  }));
+
+  app.post('/api/v1/service-sales/reverse', (req, res) => route(req, res, async client => {
+    const split = await reverseServiceSaleForSeller({
+      sellerShopId: client.shopId,
+      networkProductId: req.body?.networkProductId,
+      localOrderId: req.body?.localOrderId,
+      quantity: req.body?.quantity
+    });
+    return { split };
   }));
 
   app.post('/api/v1/fulfill', (req, res) => route(req, res, async client => {
@@ -1884,12 +2043,15 @@ module.exports = {
   publishRemoteProduct,
   updateRemoteProduct,
   deleteRemoteProduct,
+  invalidateClientAuthCache,
   addRemoteInventory,
   listMyRemoteInventory,
   updateMyRemoteInventory,
   deleteMyRemoteInventory,
   auditNetworkUser,
   fulfillRemote,
+  recordServiceSale,
+  reverseServiceSale,
   lookupRemoteDelivery,
   fallbackPayments,
   syncPublicPaymentProfile,

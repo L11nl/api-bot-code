@@ -1,8 +1,8 @@
 {
   "name": "my-bot-store-clean",
-  "version": "10.0.0",
+  "version": "13.0.0",
   "private": true,
-  "description": "Telegram digital store v10 with unified admin UI, full add/remove controls, safe product distribution, reveal/edit/hide inventory management, persistent multi-admin access, payment ordering, and preserved PostgreSQL data",
+  "description": "Telegram digital store v13 with ordered wallet audit/source tracking, ID-or-username balance controls, permanent delete semantics, API partner delete/disable/enable, public services, smart payment center, and network profit split",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

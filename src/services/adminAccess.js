@@ -44,6 +44,10 @@ async function loadAdmins() {
     }
   }
 
+  // v13 cleanup: older releases soft-deleted removable admins. A delete action
+  // now means a real delete, so purge those legacy inactive rows once.
+  await BotAdmin.destroy({ where: { isActive: false, isProtected: false } });
+
   runtimeAdminIds.clear();
   const rows = await BotAdmin.findAll({ where: { isActive: true }, order: [['createdAt', 'ASC']] });
   for (const row of rows) {
@@ -96,9 +100,14 @@ async function removeAdmin(telegramId, actor = null) {
   if (row.isProtected || id === primaryAdminId()) throw new Error('PROTECTED_ADMIN');
   if (getAdminIds().length <= 1) throw new Error('LAST_ADMIN');
   const actorId = normalizeTelegramId(actor?.id ?? actor);
-  await row.update({ isActive: false, removedByTelegramId: actorId, removedAt: new Date() });
+  // A delete action must be a real delete. Protected environment admins are
+  // intentionally blocked above; removable admins are physically removed.
+  const snapshot = row.toJSON();
+  snapshot.removedByTelegramId = actorId;
+  snapshot.removedAt = new Date();
+  await row.destroy();
   runtimeAdminIds.delete(id);
-  return row;
+  return snapshot;
 }
 
 module.exports = {
