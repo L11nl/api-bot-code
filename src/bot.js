@@ -69,6 +69,7 @@ const networkLedger = require('./services/networkLedger');
 const virtualNumbers = require('./services/virtualNumbers');
 const premiumEmojis = require('./services/premiumEmojis');
 const uiTextOverrides = require('./services/uiTextOverrides');
+const adminAccess = require('./services/adminAccess');
 
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
@@ -77,6 +78,7 @@ let cachedBotUsername = '';
 let commerceStatusCache = { at: 0, value: null };
 const channelMembershipCache = new Map();
 let activePaymentMethodsCache = { at: 0, rows: null };
+function invalidatePaymentMethodsCache() { activePaymentMethodsCache = { at: 0, rows: null }; }
 const CHANNEL_MEMBER_OK_TTL_MS = Math.max(30000, Number(process.env.CHANNEL_MEMBER_OK_TTL_MS || 300000));
 const CHANNEL_MEMBER_FAIL_TTL_MS = Math.max(5000, Number(process.env.CHANNEL_MEMBER_FAIL_TTL_MS || 20000));
 const PAYMENT_METHOD_CACHE_TTL_MS = Math.max(1000, Number(process.env.PAYMENT_METHOD_CACHE_TTL_MS || 5000));
@@ -233,6 +235,7 @@ async function syncNetworkPremiumEmojiMappings({ repairProducts = false } = {}) 
 }
 
 async function loadPersistentRuntimeConfig() {
+  await adminAccess.loadAdmins();
   // One-time repair for IDs that an older release persisted before the owner
   // supplied the final dictionary. This changes only emoji settings and does
   // not touch users, balances, products, stock, orders, or deliveries.
@@ -351,6 +354,33 @@ function productDisplayName(product, lang = 'ar') {
     return String(product.localNameEnOverride || product.localNameArOverride || product.nameEn || product.nameAr || '').trim();
   }
   return String(product.localNameArOverride || product.nameAr || product.localNameEnOverride || product.nameEn || '').trim();
+}
+
+function parseLocalContentOverride(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return { ...value };
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
+  } catch {
+    return {};
+  }
+}
+
+function productPresentationDescription(product) {
+  const description = { ...parseDescription(product?.description) };
+  const local = parseLocalContentOverride(product?.localContentOverride);
+  const keys = ['ar', 'en', 'descriptionArHtml', 'warrantyAr', 'warrantyEn', 'warrantyArHtml'];
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(local, key)) description[key] = local[key] ?? '';
+  }
+  return description;
+}
+
+function productDisplayImage(product) {
+  const local = parseLocalContentOverride(product?.localContentOverride);
+  if (Object.prototype.hasOwnProperty.call(local, 'image')) return local.image || null;
+  return product?.image || null;
 }
 
 function productDisplayEmoji(product, descriptionData = null) {
@@ -616,7 +646,7 @@ function installPremiumEmojiButtonDecorator() {
       const destinationChatId = method.startsWith('edit')
         ? args[optionsIndex]?.chat_id
         : args[0];
-      const recordMessageText = config.admins.has(Number(destinationChatId));
+      const recordMessageText = isAdmin(destinationChatId);
       if (textIndex !== null && typeof args[textIndex] === 'string') {
         const applied = applyMessageTextOverride(args[textIndex], args[optionsIndex] || {}, 'entities', recordMessageText);
         args[textIndex] = applied.value;
@@ -669,7 +699,11 @@ function customPaymentEmoji(method) {
 }
 
 function isAdmin(id) {
-  return config.admins.has(Number(id));
+  return adminAccess.isAdmin(id);
+}
+
+function getAdminIds() {
+  return adminAccess.getAdminIds();
 }
 
 function currentProductShopId() {
@@ -708,7 +742,9 @@ function hasLocalNetworkPriceOverride(product) {
 }
 
 function canEditProductField(product, field) {
-  if (['localNameAr', 'localPrice'].includes(field)) return isPublicProduct(product) && productAccessibleInCurrentShop(product);
+  if (['localNameAr', 'localPrice', 'localDescriptionAr', 'localWarrantyAr', 'localImage'].includes(field)) {
+    return isPublicProduct(product) && productAccessibleInCurrentShop(product);
+  }
   if (canManageNetworkProduct(product)) return true;
   return ['nameAr', 'price'].includes(field) && isForeignPublicProduct(product) && String(product?.type || '') !== 'service';
 }
@@ -965,16 +1001,13 @@ function virtualNumberStatusLabel(status, lang = 'ar') {
 }
 
 function canSeeVirtualProviderCost(user) {
-  return Boolean(
-    network.isMaster() &&
-    user?.id &&
-    config.virtualNumbers?.costViewerIds?.has?.(Number(user.id))
-  );
+  return Boolean(user?.id && isAdmin(user.id));
 }
 
 function canManageVirtualProviders(user) {
-  // Provider API keys and provider balances are owner-only secrets.
-  return canSeeVirtualProviderCost(user);
+  // Every admin added to this bot has full local administration rights,
+  // including encrypted virtual-number provider API configuration.
+  return Boolean(user?.id && isAdmin(user.id));
 }
 
 function canManagePremiumEmojis(user) {
@@ -1006,7 +1039,7 @@ function virtualProviderName(providerId) {
 
 async function showVirtualProviderAdmin(chatId, user) {
   if (!canManageVirtualProviders(user)) {
-    return bot.sendMessage(chatId, '⛔ إعدادات مزودي الأرقام ومفاتيح API متاحة للمالك الرئيسي فقط.');
+    return bot.sendMessage(chatId, '⛔ إعدادات مزودي الأرقام متاحة لأدمنات هذا البوت فقط.');
   }
 
   let statuses = [];
@@ -1083,7 +1116,7 @@ function customEmojiFromMessage(msg) {
 
 async function showPremiumEmojiAdmin(chatId, user, page = 0) {
   if (!canManagePremiumEmojis(user)) {
-    return bot.sendMessage(chatId, '⛔ إعدادات الإيموجيات المميزة متاحة للمالك الرئيسي فقط.');
+    return bot.sendMessage(chatId, '⛔ إعدادات الإيموجيات المميزة متاحة لأدمنات هذا البوت فقط.');
   }
   const custom = premiumEmojis.listCustom();
   const textOverrides = uiTextOverrides.list();
@@ -1225,7 +1258,7 @@ async function nextUiTextCandidate(user, state) {
 
 async function showUiTextOverridesAdmin(chatId, user, page = 0) {
   if (!canManagePremiumEmojis(user)) {
-    return bot.sendMessage(chatId, 'إعدادات النصوص والأزرار متاحة للمالك الرئيسي فقط.');
+    return bot.sendMessage(chatId, 'إعدادات النصوص والأزرار متاحة لأدمنات هذا البوت فقط.');
   }
   const rows = uiTextOverrides.list();
   const pageSize = 7;
@@ -2304,6 +2337,7 @@ async function syncPaymentMethodToNetwork(method) {
 }
 
 async function createConfiguredPaymentMethod(data) {
+  const maxSort = Number(await PaymentMethod.max('sortOrder').catch(() => 0));
   const row = await PaymentMethod.create({
     nameAr: data.nameAr,
     nameEn: data.nameEn || data.nameAr,
@@ -2311,11 +2345,12 @@ async function createConfiguredPaymentMethod(data) {
     iconCustomEmojiId: data.iconCustomEmojiId || null,
     iconAlt: data.iconAlt || '💳',
     isActive: true,
-    sortOrder: 0,
+    sortOrder: Number.isFinite(maxSort) ? maxSort + 10 : 10,
     settlementCurrency: data.settlementCurrency || 'USD',
     ratePerUsd: Number(data.ratePerUsd || 1),
     minimumTransferAmount: Math.max(0.0001, Number(data.minimumTransferAmount || ((data.settlementCurrency || 'USD') === 'IQD' ? 1 : 0.01)))
   });
+  invalidatePaymentMethodsCache();
   if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
   try { await syncPaymentMethodToNetwork(row); } catch (error) { console.error('Shared payment sync:', error.message); }
   return row;
@@ -2487,6 +2522,54 @@ async function showWalletMenu(chatId, user) {
   });
 }
 
+async function showAdminAccessManager(chatId) {
+  const admins = await adminAccess.listAdmins();
+  const active = admins.filter(row => row.isActive);
+  const lines = [
+    '👑 <b>إدارة الأدمنات</b>',
+    '',
+    'كل أدمن مفعّل هنا يمتلك صلاحيات كاملة داخل هذا البوت: تعديل وحذف المنتجات، إدارة المخزون والعملاء، طرق الدفع، إعدادات المتجر وربط API مزودي الأرقام الافتراضية.',
+    '',
+    `عدد الأدمنات المفعّلين: <b>${active.length}</b>`,
+    'الأدمن الأساسي محمي حتى لا ينغلق البوت بدون أي إدارة.'
+  ];
+  const keyboard = [];
+  for (const row of active) {
+    const id = Number(row.telegramId);
+    const label = String(row.displayName || '').trim();
+    lines.push(`• <code>${id}</code>${label ? ` — ${escapeHtml(label)}` : ''}${row.isProtected ? ' — محمي' : ''}`);
+    if (!row.isProtected) {
+      keyboard.push([{ text: `🗑 إزالة الأدمن ${id}`, callback_data: `adm:admin_remove_confirm:${id}`, style: 'danger' }]);
+    }
+  }
+  keyboard.unshift([{ text: '➕ إضافة أدمن بالـ Telegram ID', callback_data: 'adm:admin_add', style: 'success' }]);
+  keyboard.push([{ text: '🔄 تحديث القائمة', callback_data: 'adm:admins' }]);
+  keyboard.push([{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]);
+  return bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function grantAdminByTelegramId(user, rawId) {
+  const id = adminAccess.normalizeTelegramId(rawId);
+  if (id === null) throw new Error('INVALID_TELEGRAM_ID');
+  let displayName = '';
+  try {
+    const chat = await bot.getChat(id);
+    displayName = [chat.first_name, chat.last_name].filter(Boolean).join(' ').trim() || chat.username || '';
+  } catch {}
+  const row = await adminAccess.addAdmin(id, user, displayName);
+  try {
+    await bot.setMyCommands([
+      { command: 'start', description: 'فتح المتجر' },
+      { command: 'admin', description: 'لوحة الإدارة' },
+      { command: 'cancel', description: 'إلغاء العملية الحالية' }
+    ], { scope: { type: 'chat', chat_id: id } });
+  } catch {}
+  return row;
+}
+
 async function adminDashboardText() {
   const [open, notificationsEnabled] = await Promise.all([
     isStoreOpen(),
@@ -2617,9 +2700,10 @@ async function adminSectionMenu(section, user = null) {
   if (section === 'settings') {
     const open = await isStoreOpen();
     const keyboard = [
-      [{ text: '⚙️ الإعدادات العامة', callback_data: 'adm:settings', style: 'primary' }]
+      [{ text: '⚙️ الإعدادات العامة', callback_data: 'adm:settings', style: 'primary' }],
+      [{ text: '👑 إدارة الأدمنات', callback_data: 'adm:admins', style: 'primary' }]
     ];
-    if (network.isMaster()) {
+    if (canManageVirtualProviders(user)) {
       keyboard.push([{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]);
     }
     if (canManagePremiumEmojis(user)) {
@@ -2722,7 +2806,7 @@ function stripTelegramCustomEmojiHtml(value) {
 }
 
 function productCaption(product, stock, lang, moneyContext) {
-  const descriptionData = parseDescription(product.description);
+  const descriptionData = productPresentationDescription(product);
   const name = productDisplayName(product, lang);
   const automaticNameEmoji = resolvedProductNameEmoji(product);
   const storedNameEmoji = productDisplayEmoji(product, descriptionData);
@@ -2844,15 +2928,16 @@ async function showProduct(chatId, user, merchantId) {
   const caption = productCaption(product, stock, user.lang, moneyContext);
   const canBuy = product.type === 'service' ? true : stock > 0;
   const markup = { inline_keyboard: [[{ text: t(user.lang, 'buy'), callback_data: `buy:${product.id}`, style: canBuy ? 'success' : 'danger' }]] };
-  if (product.image) {
+  const displayImage = productDisplayImage(product);
+  if (displayImage) {
     try {
-      await bot.sendPhoto(chatId, product.image, { caption, parse_mode: 'HTML', reply_markup: markup });
+      await bot.sendPhoto(chatId, displayImage, { caption, parse_mode: 'HTML', reply_markup: markup });
       return;
     } catch (error) {
       console.error('Product image failed:', error.message);
       if (/custom emoji|tg-emoji/i.test(String(error.message || ''))) {
         const safeCaption = stripTelegramCustomEmojiHtml(caption);
-        await bot.sendPhoto(chatId, product.image, { caption: safeCaption, parse_mode: 'HTML', reply_markup: markup });
+        await bot.sendPhoto(chatId, displayImage, { caption: safeCaption, parse_mode: 'HTML', reply_markup: markup });
         return;
       }
     }
@@ -2868,7 +2953,7 @@ async function showProduct(chatId, user, merchantId) {
 }
 
 async function notifyAdmins(text, options = {}) {
-  for (const adminId of config.admins) {
+  for (const adminId of getAdminIds()) {
     try {
       await bot.sendMessage(adminId, text, { parse_mode: 'HTML', ...options });
     } catch (error) {
@@ -3066,7 +3151,7 @@ async function notifyAdminsForNetworkProductReview(product, actorName = '') {
   ].join('\n');
   let sent = 0;
   let failed = 0;
-  for (const adminId of config.admins) {
+  for (const adminId of getAdminIds()) {
     try {
       await bot.sendMessage(adminId, message, {
         parse_mode: 'HTML',
@@ -3288,7 +3373,7 @@ async function sendSupportMessageToAdmins(msg, user, ticket) {
   ticket.lastMessageAt = new Date();
   await ticket.save({ fields: ['lastMessageAt'] });
 
-  for (const adminId of config.admins) {
+  for (const adminId of getAdminIds()) {
     try {
       const header = await bot.sendMessage(adminId, [
         `${premiumEmojiHtml(PREMIUM_EMOJI.support)} <b>رسالة دعم جديدة</b>`,
@@ -4909,7 +4994,7 @@ async function handleStateMessage(msg, user, state) {
       ? '✅ Your details were received. Please wait while the admin completes the service.'
       : '✅ تم استلام بياناتك. انتظر حتى يقوم الأدمن بتنفيذ الخدمة.');
     const label = user.username ? `@${user.username}` : `<code>${user.id}</code>`;
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       await bot.sendMessage(adminId, [
         '🛠 <b>طلب تنفيذ خدمة جديد</b>',
         `الطلب: <b>#${order.id}</b>`,
@@ -5319,7 +5404,7 @@ async function handleStateMessage(msg, user, state) {
       `المستخدم: <code>${user.id}</code>`,
       `المبلغ المطلوب: <b>${moneyUsd(order.externalAmount || order.totalAmount)}</b>`
     ].join('\n');
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       const options = {
         caption,
         parse_mode: 'HTML',
@@ -5356,7 +5441,7 @@ async function handleStateMessage(msg, user, state) {
       `المستخدم: <code>${user.id}</code>`,
       `المبلغ: <b>${moneyUsd(ledger.amount)}</b>`
     ].join('\n');
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       const options = {
         caption,
         parse_mode: 'HTML',
@@ -5424,7 +5509,7 @@ async function handleStateMessage(msg, user, state) {
     await transaction.update({ imageFileId: fileId, status: 'proof_pending' });
     await clearState(user.id);
     const rate = await getIqdRate();
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       try {
         await bot.sendPhoto(adminId, fileId, {
           caption: [
@@ -5462,7 +5547,7 @@ async function handleStateMessage(msg, user, state) {
     await clearState(user.id);
     const product = await Merchant.findByPk(order.merchantId);
     const rate = await getIqdRate();
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       try {
         const sent = await bot.sendPhoto(adminId, fileId, {
           caption: [
@@ -5585,7 +5670,7 @@ async function handleStateMessage(msg, user, state) {
     await clearState(user.id);
     const localAmount = paymentLocalAmount(Number(transaction.amount), paymentMethod);
     const icon = customPaymentEmoji(paymentMethod);
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       try {
         await bot.sendPhoto(adminId, fileId, {
           caption: [
@@ -5626,7 +5711,7 @@ async function handleStateMessage(msg, user, state) {
     const product = await Merchant.findByPk(order.merchantId);
     const localAmount = paymentLocalAmount(Number(order.externalAmount || order.totalAmount), paymentMethod);
     const icon = customPaymentEmoji(paymentMethod);
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       try {
         const sent = await bot.sendPhoto(adminId, fileId, {
           caption: [
@@ -5654,6 +5739,30 @@ async function handleStateMessage(msg, user, state) {
   }
 
   if (!isAdmin(user.id)) return false;
+
+  if (state.action === 'admin_add_admin_id') {
+    const raw = String(msg.text || '').trim();
+    const id = adminAccess.normalizeTelegramId(raw);
+    if (id === null) {
+      await bot.sendMessage(user.id, '❌ الـTelegram ID غير صحيح. أرسل أرقام فقط، مثال: <code>123456789</code>.', { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+    try {
+      const row = await grantAdminByTelegramId(user, id);
+      await clearState(user.id);
+      await bot.sendMessage(user.id, [
+        '✅ <b>تمت إضافة الأدمن بصلاحيات كاملة</b>',
+        `Telegram ID: <code>${row.telegramId}</code>`,
+        '',
+        'يقدر الآن يفتح /admin ويتحكم بهذا البوت. إذا ما سبق وفتح البوت، يكفي يرسل /start ثم /admin.'
+      ].join('\n'), { parse_mode: 'HTML' });
+      await bot.sendMessage(Number(row.telegramId), '👑 تمت إضافتك كأدمن بصلاحيات كاملة في هذا البوت. أرسل /admin لفتح لوحة الإدارة.').catch(() => {});
+      await showAdminAccessManager(user.id);
+    } catch (error) {
+      await bot.sendMessage(user.id, error.message === 'INVALID_TELEGRAM_ID' ? '❌ Telegram ID غير صحيح.' : `❌ تعذر إضافة الأدمن: ${escapeHtml(error.message)}`, { parse_mode: 'HTML' });
+    }
+    return true;
+  }
 
   if (state.action === 'admin_debt_manual_proof') {
     const photoFileId = msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : '';
@@ -5797,7 +5906,7 @@ async function handleStateMessage(msg, user, state) {
   if (state.action === 'admin_ui_text_edit' && isAdmin(user.id)) {
     if (!canManagePremiumEmojis(user)) {
       await clearState(user.id);
-      await bot.sendMessage(user.id, 'هذا الإعداد للمالك الرئيسي فقط.');
+      await bot.sendMessage(user.id, 'هذا الإعداد لأدمنات هذا البوت فقط.');
       return true;
     }
     const submittedText = String(msg.text || '').trim();
@@ -5912,7 +6021,7 @@ async function handleStateMessage(msg, user, state) {
   if (state.action === 'admin_premium_emoji_add' && isAdmin(user.id)) {
     if (!canManagePremiumEmojis(user)) {
       await clearState(user.id);
-      await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
+      await bot.sendMessage(user.id, '⛔ هذا الإعداد لأدمنات هذا البوت فقط.');
       return true;
     }
     const text = String(msg.text || '').trim();
@@ -5989,7 +6098,7 @@ async function handleStateMessage(msg, user, state) {
   if (state.action === 'admin_virtual_provider_api_key' && isAdmin(user.id)) {
     if (!canManageVirtualProviders(user)) {
       await clearState(user.id);
-      await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
+      await bot.sendMessage(user.id, '⛔ هذا الإعداد لأدمنات هذا البوت فقط.');
       return true;
     }
     const requestedProviderId = String(state.providerId || '').trim().toLowerCase();
@@ -6031,7 +6140,7 @@ async function handleStateMessage(msg, user, state) {
   if (state.action === 'admin_virtual_provider_profit' && isAdmin(user.id)) {
     if (!canManageVirtualProviders(user)) {
       await clearState(user.id);
-      await bot.sendMessage(user.id, '⛔ هذا الإعداد للمالك الرئيسي فقط.');
+      await bot.sendMessage(user.id, '⛔ هذا الإعداد لأدمنات هذا البوت فقط.');
       return true;
     }
     const providerId = String(state.providerId || '').trim().toLowerCase();
@@ -6289,6 +6398,7 @@ async function handleStateMessage(msg, user, state) {
       method.minimumTransferAmount = minimum;
     }
     await method.save();
+    invalidatePaymentMethodsCache();
     try { await syncPaymentMethodToNetwork(method); } catch (error) { console.error('Payment method edit sync:', error.message); }
     await clearState(user.id);
     await bot.sendMessage(user.id, '✅ تم تحديث طريقة الدفع.', {
@@ -6298,41 +6408,64 @@ async function handleStateMessage(msg, user, state) {
   }
 
   if (state.action === 'admin_publish_network_product') {
-    const product = await Merchant.findByPk(state.productId);
-    if (!product || !product.isActive || !isForeignPublicProduct(product)) {
-      await clearState(user.id);
-      await bot.sendMessage(user.id, '❌ المنتج العام غير موجود أو لم يعد متاحاً.');
-      return true;
-    }
-    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
-      await clearState(user.id);
-      await bot.sendMessage(user.id, 'ℹ️ اتخذ أدمن آخر قراراً بهذا المنتج داخل البوت قبل إكمال التسعير.');
-      return true;
-    }
     const value = Number(String(msg.text || '').trim().replace(/,/g, ''));
-    const basePrice = networkProductBasePrice(product);
     if (!Number.isFinite(value) || value < 0 || value > 1000000) {
       await bot.sendMessage(user.id, '❌ السعر غير صحيح. أرسل رقماً بالدولار مثل 5 أو 1.50.');
       return true;
     }
-    if (value + 1e-9 < basePrice) {
-      await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأنه حق صاحب المنتج.`);
+
+    let product = null;
+    let basePrice = 0;
+    let alreadyDecided = false;
+    try {
+      await sequelize.transaction(async transaction => {
+        product = await Merchant.findByPk(state.productId, {
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        });
+        if (!product || !product.isActive || !isForeignPublicProduct(product)) throw new Error('NETWORK_PRODUCT_NOT_AVAILABLE');
+        if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
+          alreadyDecided = true;
+          return;
+        }
+        basePrice = networkProductBasePrice(product);
+        if (value + 1e-9 < basePrice) throw new Error(`PRICE_BELOW_BASE:${basePrice}`);
+        await product.update({
+          localPriceOverrideUsd: value > basePrice + 1e-9 ? value : null,
+          localPublicationStatus: 'published',
+          localReviewNotifiedAt: new Date()
+        }, { transaction });
+      });
+    } catch (error) {
+      if (error.message === 'NETWORK_PRODUCT_NOT_AVAILABLE') {
+        await clearState(user.id);
+        await bot.sendMessage(user.id, '❌ المنتج العام غير موجود أو لم يعد متاحاً.');
+        return true;
+      }
+      if (String(error.message || '').startsWith('PRICE_BELOW_BASE:')) {
+        const floor = Number(String(error.message).split(':')[1] || 0);
+        await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(floor)} لأنه حق صاحب المنتج.`);
+        return true;
+      }
+      throw error;
+    }
+
+    if (alreadyDecided) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, 'ℹ️ اتخذ أدمن آخر قراراً بهذا المنتج داخل البوت قبل إكمال التسعير.');
       return true;
     }
 
-    product.localPriceOverrideUsd = value > basePrice + 1e-9 ? value : null;
-    product.localPublicationStatus = 'published';
-    product.localReviewNotifiedAt = new Date();
-    await product.save({ fields: ['localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt'] });
+    product = await Merchant.findByPk(state.productId);
     await clearState(user.id);
     const profit = Math.max(0, value - basePrice);
     await bot.sendMessage(user.id, [
-      '✅ <b>تم تسعير المنتج ونشره داخل هذا البوت</b>',
+      '✅ <b>تم تسعير المنتج ونشره فعلياً داخل هذا البوت</b>',
       `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
       `سعر البيع في بوتك: <b>${moneyUsd(value)}</b>`,
       `ربح فرق السعر لك: <b>${moneyUsd(profit)}</b> لكل وحدة.`,
       '',
-      'هذا القرار والسعر خاصان بهذا البوت ولا يغيّران بقية البوتات.'
+      'صار المنتج بحالة «منشور» في قاعدة بيانات هذا البوت، ويظهر للزبائن حسب توفر المخزون. قرار بقية البوتات مستقل.'
     ].join('\n'), { parse_mode: 'HTML' });
     await broadcastNewProductNotification(product, product.createdByDisplayName || '').catch(error => {
       console.error('Publish reviewed product notification:', error.message);
@@ -6479,7 +6612,7 @@ async function handleStateMessage(msg, user, state) {
     }
     const field = state.field;
     let value = msg.text?.trim();
-    if (field === 'image' && msg.photo?.length) value = msg.photo[msg.photo.length - 1].file_id;
+    if (['image', 'localImage'].includes(field) && msg.photo?.length) value = msg.photo[msg.photo.length - 1].file_id;
     if (!value) return true;
 
     if (!canEditProductField(product, field)) {
@@ -6489,6 +6622,7 @@ async function handleStateMessage(msg, user, state) {
     }
 
     const description = parseDescription(product.description);
+    const localContent = parseLocalContentOverride(product.localContentOverride);
     if (field === 'localNameAr' || (field === 'nameAr' && isForeignPublicProduct(product))) {
       if (value === '-') {
         product.localNameArOverride = null;
@@ -6547,6 +6681,59 @@ async function handleStateMessage(msg, user, state) {
 سعر هذا البوت: ${moneyUsd(effectivePrice)}
 فرق السعر: ${moneyUsd(profit)} لكل وحدة.`
         : `✅ رجّعت سعر هذا البوت إلى السعر الأساسي ${moneyUsd(basePrice)}.`);
+      await showAdminProductEditor(user.id, product.id);
+      return true;
+    } else if (field === 'localDescriptionAr') {
+      if (value === '-') {
+        delete localContent.ar;
+        delete localContent.en;
+        delete localContent.descriptionArHtml;
+      } else {
+        const rich = extractTelegramRichText(value, msg.entities);
+        localContent.ar = rich.plain;
+        localContent.en = await translateArToEn(rich.plain);
+        localContent.descriptionArHtml = rich.html;
+      }
+      product.localContentOverride = { ...localContent };
+      product.changed('localContentOverride', true);
+      await product.save({ fields: ['localContentOverride'] });
+      await clearState(user.id);
+      await bot.sendMessage(user.id, value === '-'
+        ? '✅ رجع وصف هذا البوت إلى الوصف العام.'
+        : '✅ تم حفظ الوصف داخل هذا البوت فقط. بقية البوتات لم تتغير.');
+      await showAdminProductEditor(user.id, product.id);
+      return true;
+    } else if (field === 'localWarrantyAr') {
+      if (value === '-') {
+        delete localContent.warrantyAr;
+        delete localContent.warrantyEn;
+        delete localContent.warrantyArHtml;
+      } else {
+        const rich = extractTelegramRichText(value, msg.entities);
+        localContent.warrantyAr = rich.plain;
+        localContent.warrantyEn = await translateArToEn(rich.plain);
+        localContent.warrantyArHtml = rich.html;
+      }
+      product.localContentOverride = { ...localContent };
+      product.changed('localContentOverride', true);
+      await product.save({ fields: ['localContentOverride'] });
+      await clearState(user.id);
+      await bot.sendMessage(user.id, value === '-'
+        ? '✅ رجع ضمان هذا البوت إلى الضمان العام.'
+        : '✅ تم حفظ الضمان داخل هذا البوت فقط. بقية البوتات لم تتغير.');
+      await showAdminProductEditor(user.id, product.id);
+      return true;
+    } else if (field === 'localImage') {
+      if (value === '-') delete localContent.image;
+      else if (['حذف', 'بدون', 'remove', 'none'].includes(String(value).trim().toLowerCase())) localContent.image = null;
+      else localContent.image = value;
+      product.localContentOverride = { ...localContent };
+      product.changed('localContentOverride', true);
+      await product.save({ fields: ['localContentOverride'] });
+      await clearState(user.id);
+      await bot.sendMessage(user.id, value === '-'
+        ? '✅ رجعت صورة هذا البوت إلى الصورة العامة.'
+        : (localContent.image ? '✅ تم حفظ الصورة داخل هذا البوت فقط.' : '✅ تم إخفاء الصورة داخل هذا البوت فقط.'));
       await showAdminProductEditor(user.id, product.id);
       return true;
     } else if (field === 'price') {
@@ -7317,6 +7504,31 @@ async function showOrder(chatId, user, orderId, callbackId = null) {
   await bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
 }
 
+async function movePaymentMethod(methodId, direction) {
+  const rows = await PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
+  const index = rows.findIndex(row => Number(row.id) === Number(methodId));
+  if (index < 0) throw new Error('PAYMENT_METHOD_NOT_FOUND');
+  const nextIndex = direction === 'up' ? index - 1 : index + 1;
+  if (nextIndex < 0 || nextIndex >= rows.length) return { moved: false, row: rows[index] };
+
+  await sequelize.transaction(async transaction => {
+    for (let i = 0; i < rows.length; i++) {
+      const desired = (i + 1) * 10;
+      if (Number(rows[i].sortOrder) !== desired) {
+        await rows[i].update({ sortOrder: desired }, { transaction });
+      }
+    }
+    const current = rows[index];
+    const neighbor = rows[nextIndex];
+    const currentOrder = Number(current.sortOrder);
+    const neighborOrder = Number(neighbor.sortOrder);
+    await current.update({ sortOrder: neighborOrder }, { transaction });
+    await neighbor.update({ sortOrder: currentOrder }, { transaction });
+  });
+  invalidatePaymentMethodsCache();
+  return { moved: true, row: await PaymentMethod.findByPk(methodId) };
+}
+
 async function showAdminPaymentMethods(chatId) {
   const methods = await PaymentMethod.findAll({ order: [['sortOrder', 'ASC'], ['id', 'ASC']] });
   const rows = methods.map(method => [emojiButton(
@@ -7364,7 +7576,7 @@ async function showAdminPaymentMethods(chatId) {
   return bot.sendMessage(chatId, [
     '💳 <b>طرق الدفع</b>',
     '',
-    'طرق الدفع التي تضيفها هنا تكون مشتركة تلقائياً مع كل البوتات، وتقدر تعدلها أو توقفها أو تحذفها. Binance/SuperQi الأساسيين يبقون خاصين بكل بوت.',
+    'طرق الدفع التي تضيفها هنا تقدر تعدلها أو توقفها أو تحذفها، ومن داخل كل طريقة تگدر ترفعها أو تنزلها حتى ترتب ظهور طرق الدفع المحلية للزبون. Binance/SuperQi الأساسيين يبقون خاصين بكل بوت.',
     ...inheritedLines
   ].join('\n'), {
     parse_mode: 'HTML',
@@ -7384,6 +7596,7 @@ async function showAdminPaymentMethod(chatId, id) {
     `سعر 1$: <b>${Number(method.ratePerUsd || 1)}</b> ${method.settlementCurrency || 'USD'}`,
     `الحد الأدنى: <b>${formatPaymentCurrencyAmount(method.minimumTransferAmount || minimumTransferForMethod(method), method.settlementCurrency || 'USD', 'ar')}</b>`,
     `الحالة: <b>${method.isActive ? 'مفعلة' : 'متوقفة'}</b>`,
+    `الترتيب: <b>${Number(method.sortOrder || 0)}</b>`,
     `Custom Emoji ID: <code>${escapeHtml(method.iconCustomEmojiId || 'بدون')}</code>`
   ].join('\n'), {
     parse_mode: 'HTML',
@@ -7393,6 +7606,10 @@ async function showAdminPaymentMethod(chatId, id) {
         { text: '🔢 تغيير الرقم', callback_data: `adm:pmfield:${method.id}:number` }
       ],
       [{ text: '💰 تغيير الحد الأدنى', callback_data: `adm:pmfield:${method.id}:minimum` }],
+      [
+        { text: '⬆️ رفع للأعلى', callback_data: `adm:pmmove:${method.id}:up`, style: 'primary' },
+        { text: '⬇️ تنزيل للأسفل', callback_data: `adm:pmmove:${method.id}:down`, style: 'primary' }
+      ],
       [{ text: method.isActive ? '⛔ إيقاف الطريقة' : '✅ تشغيل الطريقة', callback_data: `adm:pmtoggle:${method.id}`, style: method.isActive ? 'danger' : 'success' }],
       [{ text: '🗑 حذف طريقة الدفع', callback_data: `adm:pmdelete:${method.id}`, style: 'danger' }],
       [{ text: '⬅️ كل طرق الدفع', callback_data: 'adm:payment_methods' }]
@@ -7560,6 +7777,70 @@ async function showProductContributors(chatId, product) {
 }
 
 async function handleAdminCallback(query, user, data) {
+  if (data === 'adm:admins') {
+    await answerCallback(query.id);
+    return showAdminAccessManager(query.message.chat.id);
+  }
+
+  if (data === 'adm:admin_add') {
+    await setState(user.id, { action: 'admin_add_admin_id' });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      '➕ <b>إضافة أدمن جديد</b>',
+      '',
+      'أرسل Telegram ID رقمي فقط.',
+      'بعد الإضافة يحصل الأدمن على صلاحيات كاملة داخل هذا البوت مباشرة، وتبقى الصلاحية محفوظة في قاعدة البيانات بعد إعادة التشغيل.',
+      '',
+      'مثال: <code>123456789</code>'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:admin_remove_confirm:')) {
+    const id = adminAccess.normalizeTelegramId(data.split(':')[3]);
+    if (id === null) return answerCallback(query.id, 'Telegram ID غير صحيح.', true);
+    if (id === Number(user.id)) return answerCallback(query.id, 'ما تگدر تحذف صلاحيتك بنفسك. خلي أدمن آخر يشيلك.', true);
+    const admins = await adminAccess.listAdmins();
+    const row = admins.find(item => Number(item.telegramId) === id && item.isActive);
+    if (!row) return answerCallback(query.id, 'الأدمن غير موجود أو محذوف مسبقاً.', true);
+    if (row.isProtected) return answerCallback(query.id, 'الأدمن الأساسي محمي من الحذف.', true);
+    await answerCallback(query.id);
+    return bot.sendMessage(query.message.chat.id, [
+      '⚠️ <b>تأكيد إزالة الأدمن</b>',
+      `Telegram ID: <code>${id}</code>`,
+      '',
+      'راح يفقد صلاحية /admin وإدارة هذا البوت فقط. بيانات البوت والمستخدمين والطلبات لن تتأثر.'
+    ].join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[
+        { text: '🗑 نعم، إزالة الأدمن', callback_data: `adm:admin_remove:${id}`, style: 'danger' },
+        { text: 'إلغاء', callback_data: 'adm:admins' }
+      ]] }
+    });
+  }
+
+  if (data.startsWith('adm:admin_remove:')) {
+    const id = adminAccess.normalizeTelegramId(data.split(':')[3]);
+    if (id === null) return answerCallback(query.id, 'Telegram ID غير صحيح.', true);
+    if (id === Number(user.id)) return answerCallback(query.id, 'ما تگدر تحذف صلاحيتك بنفسك.', true);
+    try {
+      await adminAccess.removeAdmin(id, user);
+      await bot.setMyCommands([
+        { command: 'start', description: 'فتح المتجر' },
+        { command: 'cancel', description: 'إلغاء العملية الحالية' }
+      ], { scope: { type: 'chat', chat_id: id } }).catch(() => {});
+      await answerCallback(query.id, 'تمت إزالة صلاحية الأدمن.');
+      await bot.sendMessage(id, 'ℹ️ تم إلغاء صلاحية الإدارة الخاصة بك في هذا البوت.').catch(() => {});
+      return showAdminAccessManager(query.message.chat.id);
+    } catch (error) {
+      const messages = {
+        PROTECTED_ADMIN: 'الأدمن الأساسي محمي من الحذف.',
+        LAST_ADMIN: 'لا يمكن حذف آخر أدمن في البوت.',
+        ADMIN_NOT_FOUND: 'الأدمن غير موجود.'
+      };
+      return answerCallback(query.id, messages[error.message] || `تعذر حذف الأدمن: ${error.message}`, true);
+    }
+  }
+
   if (data === 'adm:home') {
     await answerCallback(query.id);
     return bot.sendMessage(query.message.chat.id, await adminDashboardText(), {
@@ -7746,7 +8027,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:network') {
-    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار للمالك الرئيسي فقط.', true);
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     await answerCallback(query.id);
     const clients = await NetworkClient.findAll({ order: [['id', 'ASC']] });
     const apiEnabled = String(await getSetting('network_api_enabled', 'true')).toLowerCase() !== 'false';
@@ -7769,7 +8050,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:network_global_toggle') {
-    if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     const enabled = String(await getSetting('network_api_enabled', 'true')).toLowerCase() !== 'false';
     await setSetting('network_api_enabled', enabled ? 'false' : 'true');
     await answerCallback(query.id, enabled ? 'تم إغلاق API لجميع الشركاء.' : 'تم فتح API لجميع الشركاء.');
@@ -7777,7 +8058,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:network_add') {
-    if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     await setState(user.id, { action: 'admin_network_add', step: 'name', data: {} });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, '1/3 أرسل اسم صاحب البوت أو اسم المتجر، مثال: أحمد', { reply_markup: cancelInlineKeyboard() });
@@ -7788,7 +8069,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:network_client:')) {
-    if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     const client = await NetworkClient.findByPk(Number(data.split(':')[2]));
     if (!client) return answerCallback(query.id, 'الشريك غير موجود.', true);
     const masterAccounts = await networkLedger.accountsForShop('master');
@@ -7824,7 +8105,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:network_toggle:')) {
-    if (!network.isMaster()) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!network.isMaster()) return answerCallback(query.id, 'هذا الخيار متاح في البوت الرئيسي للشبكة فقط.', true);
     const client = await NetworkClient.findByPk(Number(data.split(':')[2]));
     if (!client) return answerCallback(query.id, 'الشريك غير موجود.', true);
     client.isActive = !client.isActive;
@@ -7834,7 +8115,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:emoji:repairproducts') {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await answerCallback(query.id, 'جاري فحص إيموجيات المنتجات...');
     try {
       const report = await auditProductEmojiMappings({ repair: true });
@@ -7865,7 +8146,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:uitext:search') {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await uiTextOverrides.persistCatalog().catch(error => console.error('UI text catalog flush:', error.message));
     await setState(user.id, { action: 'admin_ui_text_edit', step: 'query', data: {} });
     await answerCallback(query.id);
@@ -7881,7 +8162,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:uitext:yes' || data === 'adm:uitext:next') {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const fresh = await User.findByPk(user.id);
     const state = parseState(fresh);
     if (!state || state.action !== 'admin_ui_text_edit' || state.step !== 'confirm') {
@@ -7893,13 +8174,13 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:uitext:list:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await answerCallback(query.id);
     return showUiTextOverridesAdmin(query.message.chat.id, user, Number(data.split(':')[3] || 0));
   }
 
   if (data.startsWith('adm:uitext:askdel:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const parts = data.split(':');
     const entryId = String(parts[3] || '');
     const page = Math.max(0, Number(parts[4] || 0));
@@ -7926,7 +8207,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:uitext:del:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const parts = data.split(':');
     const entryId = String(parts[3] || '');
     const page = Math.max(0, Number(parts[4] || 0));
@@ -7936,7 +8217,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:emoji:add') {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await setState(user.id, { action: 'admin_premium_emoji_add', step: 'keyword_ar', data: {} });
     await answerCallback(query.id);
     return bot.sendMessage(user.id, [
@@ -7950,7 +8231,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:emoji:askdel:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const parts = data.split(':');
     const entryId = String(parts[3] || '');
     const page = Math.max(0, Number(parts[4] || 0));
@@ -7972,7 +8253,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:emoji:del:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const parts = data.split(':');
     const entryId = String(parts[3] || '');
     const page = Math.max(0, Number(parts[4] || 0));
@@ -7983,25 +8264,25 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:emoji:page:')) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await answerCallback(query.id);
     return showPremiumEmojiAdmin(query.message.chat.id, user, Number(data.split(':')[3] || 0));
   }
 
   if (/^adm:emoji(?::\d+)?$/.test(data)) {
-    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManagePremiumEmojis(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await answerCallback(query.id);
     return showPremiumEmojiAdmin(query.message.chat.id, user, Number(data.split(':')[2] || 0));
   }
 
   if (data === 'adm:vnproviders') {
     await answerCallback(query.id);
-    if (!canManageVirtualProviders(user)) return bot.sendMessage(user.id, '⛔ إعدادات مزودي الأرقام متاحة للمالك الرئيسي فقط.');
+    if (!canManageVirtualProviders(user)) return bot.sendMessage(user.id, '⛔ إعدادات مزودي الأرقام متاحة لأدمنات هذا البوت فقط.');
     return showVirtualProviderAdmin(query.message.chat.id, user);
   }
 
   if (data.startsWith('adm:vnprovider:key:')) {
-    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
     if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
     const providerName = virtualProviderName(providerId);
@@ -8016,7 +8297,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:vnprovider:clear:')) {
-    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
     if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
     try {
@@ -8029,7 +8310,7 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:vnprovider:profit:')) {
-    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
     if (!VIRTUAL_PROVIDER_IDS.has(providerId)) return answerCallback(query.id, 'مزود غير صحيح.', true);
     const providerName = virtualProviderName(providerId);
@@ -8044,13 +8325,13 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data === 'adm:vnprovider:test') {
-    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     await answerCallback(query.id, 'جاري فحص المزودات...');
     return showVirtualProviderAdmin(query.message.chat.id, user);
   }
 
   if (data.startsWith('adm:vnprovider:topup:')) {
-    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'للمالك الرئيسي فقط.', true);
+    if (!canManageVirtualProviders(user)) return answerCallback(query.id, 'لأدمنات هذا البوت فقط.', true);
     const providerId = String(data.split(':')[3] || '').toLowerCase();
     if (providerId !== 'smsbower') return answerCallback(query.id, 'محفظة الشحن متاحة لـ SMSBower فقط.', true);
     const providerName = 'SMSBower';
@@ -8157,6 +8438,19 @@ async function handleAdminCallback(query, user, data) {
     return showAdminPaymentMethods(query.message.chat.id);
   }
 
+  if (data.startsWith('adm:pmmove:')) {
+    const [, , idRaw, direction] = data.split(':');
+    const id = Number(idRaw);
+    if (!['up', 'down'].includes(direction)) return answerCallback(query.id, 'اتجاه الترتيب غير صحيح.', true);
+    try {
+      const result = await movePaymentMethod(id, direction);
+      await answerCallback(query.id, result.moved ? 'تم تغيير ترتيب طريقة الدفع.' : (direction === 'up' ? 'هذه الطريقة بالأعلى أصلاً.' : 'هذه الطريقة بالأسفل أصلاً.'));
+      return showAdminPaymentMethod(query.message.chat.id, id);
+    } catch (error) {
+      return answerCallback(query.id, error.message === 'PAYMENT_METHOD_NOT_FOUND' ? 'طريقة الدفع غير موجودة.' : `تعذر الترتيب: ${error.message}`, true);
+    }
+  }
+
   if (data.startsWith('adm:pmfield:')) {
     const [, , idRaw, field] = data.split(':');
     const id = Number(idRaw);
@@ -8180,6 +8474,7 @@ async function handleAdminCallback(query, user, data) {
     if (network.enabledClient()) await setSetting('custom_payment_override', 'true');
     method.isActive = !method.isActive;
     await method.save({ fields: ['isActive'] });
+    invalidatePaymentMethodsCache();
     try { await syncPaymentMethodToNetwork(method); } catch (error) { console.error('Payment method toggle sync:', error.message); }
     await answerCallback(query.id, method.isActive ? 'تم تشغيل طريقة الدفع بكل البوتات.' : 'تم إيقاف طريقة الدفع بكل البوتات.');
     return showAdminPaymentMethod(query.message.chat.id, method.id);
@@ -8198,6 +8493,7 @@ async function handleAdminCallback(query, user, data) {
     }
     const name = method.nameAr;
     await method.destroy();
+    invalidatePaymentMethodsCache();
     await answerCallback(query.id, 'تم حذف طريقة الدفع.');
     await bot.sendMessage(query.message.chat.id, `🗑 تم حذف <b>${escapeHtml(name)}</b> من هذا البوت ومن طرق الدفع المشتركة. السجلات القديمة تبقى محفوظة بالحسابات.`, { parse_mode: 'HTML' });
     return showAdminPaymentMethods(query.message.chat.id);
@@ -8526,7 +8822,7 @@ async function handleAdminCallback(query, user, data) {
           { text: '📢 القناة الإجبارية', callback_data: 'adm:set:required_channel' },
           { text: '❌ إيقاف القناة', callback_data: 'adm:channel_disable' }
         ],
-        ...(network.isMaster() ? [[{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]] : []),
+        ...(canManageVirtualProviders(user) ? [[{ text: '📱 مزودات الأرقام الافتراضية', callback_data: 'adm:vnproviders', style: 'primary' }]] : []),
         ...(canManagePremiumEmojis(user) ? [[emojiButton('الإيموجيات المميزة', PREMIUM_EMOJI.settings, { callback_data: 'adm:emoji:0', style: 'primary' })]] : []),
         [{ text: '⬅️ رجوع لإعدادات المتجر', callback_data: 'adm:menu:settings' }]
       ] }
@@ -8652,6 +8948,7 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:netprod:price:')) {
     const productId = Number(data.split(':')[3]);
+    if (network.enabledClient()) await network.syncCatalogToLocal({ force: true }).catch(() => null);
     const product = await Merchant.findByPk(productId);
     if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
     if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
@@ -8671,15 +8968,29 @@ async function handleAdminCallback(query, user, data) {
 
   if (data.startsWith('adm:netprod:reject:')) {
     const productId = Number(data.split(':')[3]);
-    const product = await Merchant.findByPk(productId);
-    if (!product || !isForeignPublicProduct(product)) return answerCallback(query.id, 'المنتج العام غير موجود.', true);
-    if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
-      return answerCallback(query.id, 'تم اتخاذ قرار بهذا المنتج مسبقاً داخل هذا البوت.', true);
+    if (network.enabledClient()) await network.syncCatalogToLocal({ force: true }).catch(() => null);
+    let product = null;
+    let alreadyDecided = false;
+    try {
+      await sequelize.transaction(async transaction => {
+        product = await Merchant.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
+        if (!product || !isForeignPublicProduct(product)) throw new Error('NETWORK_PRODUCT_NOT_AVAILABLE');
+        if (String(product.localPublicationStatus || '').toLowerCase() !== 'pending') {
+          alreadyDecided = true;
+          return;
+        }
+        await product.update({
+          localPublicationStatus: 'rejected',
+          localPriceOverrideUsd: null,
+          localReviewNotifiedAt: new Date()
+        }, { transaction });
+      });
+    } catch (error) {
+      if (error.message === 'NETWORK_PRODUCT_NOT_AVAILABLE') return answerCallback(query.id, 'المنتج العام غير موجود.', true);
+      throw error;
     }
-    product.localPublicationStatus = 'rejected';
-    product.localPriceOverrideUsd = null;
-    product.localReviewNotifiedAt = new Date();
-    await product.save({ fields: ['localPublicationStatus', 'localPriceOverrideUsd', 'localReviewNotifiedAt'] });
+    if (alreadyDecided) return answerCallback(query.id, 'تم اتخاذ قرار بهذا المنتج مسبقاً داخل هذا البوت.', true);
+    product = await Merchant.findByPk(productId);
     await clearState(user.id);
     await answerCallback(query.id, 'تم رفضه في هذا البوت فقط.');
     return bot.sendMessage(user.id, `❌ تم رفض <b>${escapeHtml(productDisplayName(product, 'ar'))}</b> داخل هذا البوت فقط. بقية البوتات تتخذ قرارها بشكل مستقل.`, { parse_mode: 'HTML' });
@@ -8773,7 +9084,7 @@ async function handleAdminCallback(query, user, data) {
     const [, , idRaw, field] = data.split(':');
     const managedProduct = await Merchant.findByPk(Number(idRaw));
     if (!canEditProductField(managedProduct, field)) return answerCallback(query.id, 'لا يمكنك تعديل هذا الحقل. استخدم الاسم أو السعر الخاصين بهذا البوت.', true);
-    if (!['nameAr', 'price', 'localNameAr', 'localPrice', 'descriptionAr', 'warrantyAr', 'image'].includes(field)) {
+    if (!['nameAr', 'price', 'localNameAr', 'localPrice', 'localDescriptionAr', 'localWarrantyAr', 'localImage', 'descriptionAr', 'warrantyAr', 'image'].includes(field)) {
       return answerCallback(query.id, 'هذا الحقل لم يعد مستخدماً.', true);
     }
     await setState(user.id, { action: 'admin_edit_product', productId: Number(idRaw), field });
@@ -8785,6 +9096,9 @@ async function handleAdminCallback(query, user, data) {
         ? `أرسل السعر الذي تريد عرضه داخل بوتك فقط. أقل سعر مسموح: ${moneyUsd(networkProductBasePrice(managedProduct))}. تگدر ترفع السعر لكن ما تگدر تنزله عن سعر صاحب المنتج.`
         : 'أرسل السعر الجديد بالدولار.',
       localPrice: `أرسل سعر هذا البوت فقط. أقل سعر مسموح: ${moneyUsd(networkProductBasePrice(managedProduct))}. أرسل السعر الأساسي نفسه لإلغاء التخصيص.`,
+      localDescriptionAr: 'أرسل الوصف الذي تريد عرضه داخل هذا البوت فقط. الترجمة الإنجليزية تلقائية. أرسل - للرجوع إلى الوصف العام.',
+      localWarrantyAr: 'أرسل الضمان الذي تريد عرضه داخل هذا البوت فقط. الترجمة الإنجليزية تلقائية. أرسل - للرجوع إلى الضمان العام.',
+      localImage: 'أرسل صورة مباشرة أو رابطاً لتكون خاصة بهذا البوت. أرسل - للرجوع للصورة العامة، أو اكتب «حذف» حتى لا تظهر صورة في هذا البوت.',
       descriptionAr: 'أرسل الوصف بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
       warrantyAr: 'أرسل الضمان بالعربي، أو - للحذف. الترجمة الإنجليزية تلقائية.',
       image: 'أرسل صورة مباشرة، رابط صورة، أو - لحذف الصورة.'
@@ -9033,7 +9347,7 @@ async function showAdminProductEditor(chatId, productId) {
   const product = await Merchant.findByPk(productId);
   if (!product || !productAccessibleInCurrentShop(product)) return bot.sendMessage(chatId, 'هذا المنتج غير تابع لهذا البوت.');
   const publicationStatus = String(product.localPublicationStatus || 'published').toLowerCase();
-  const description = parseDescription(product.description);
+  const description = productPresentationDescription(product);
   const stock = await getProductStock(product.id);
   const manageable = canManageNetworkProduct(product);
   const foreignPublic = isForeignPublicProduct(product);
@@ -9042,7 +9356,8 @@ async function showAdminProductEditor(chatId, productId) {
   const displayPrice = effectiveProductPrice(product);
   const basePrice = networkProductBasePrice(product);
   const scopeLabel = privateProduct ? 'محلي — هذا البوت فقط' : 'عام — كتالوج الشبكة';
-  const localEmoji = productDisplayEmoji(product, description);
+  const localEmoji = productDisplayEmoji(product, parseDescription(product.description));
+  const displayImage = productDisplayImage(product);
   const text = [
     `📝 <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
     '',
@@ -9057,11 +9372,11 @@ async function showAdminProductEditor(chatId, productId) {
     `نطاق النشر: <b>${scopeLabel}</b>`,
     `الترجمة الإنجليزية: <b>تلقائية</b>`,
     String(product.visibilityScope || 'public').toLowerCase() === 'public' ? `المالك: <code>${escapeHtml(product.networkOwnerShopId || 'master')}</code>${product.createdByDisplayName ? ` — ${escapeHtml(product.createdByDisplayName)}` : ''}` : '',
-    publicProduct ? '💵 <b>التخصيص المحلي:</b> الاسم والسعر والإخفاء والحذف أدناه تخص هذا البوت فقط ولا تغيّر بقية البوتات.' : '',
+    publicProduct ? '🧩 <b>التخصيص المحلي:</b> الاسم والسعر والوصف والضمان والصورة والإخفاء والحذف تخص هذا البوت فقط ولا تغيّر بقية البوتات.' : '',
     '',
     `الوصف: ${escapeHtml(description.ar || '—')}`,
     `الضمان: ${escapeHtml(description.warrantyAr || '—')}`,
-    `الصورة: ${product.image ? 'موجودة' : 'بدون'}`,
+    `الصورة المعروضة بهذا البوت: ${displayImage ? 'موجودة' : 'بدون'}`,
     product.type === 'service' ? `بيانات الزبون المطلوبة: ${escapeHtml(serviceInputModeLabel(description.serviceInputMode || 'text', 'ar'))}` : '',
     product.type === 'service' ? `رسالة الطلب: ${escapeHtml(description.servicePromptAr || '—')}` : '',
     localEmoji?.id ? '✨ Custom Emoji: محفوظة للاسم المعروض' : '✨ Custom Emoji: لا توجد'
@@ -9080,6 +9395,20 @@ async function showAdminProductEditor(chatId, productId) {
     }, {
       text: '💵 سعر هذا البوت فقط',
       callback_data: `adm:field:${product.id}:localPrice`,
+      style: 'primary'
+    }]);
+    keyboard.push([{
+      text: '📝 وصف هذا البوت فقط',
+      callback_data: `adm:field:${product.id}:localDescriptionAr`,
+      style: 'primary'
+    }, {
+      text: '🛡 ضمان هذا البوت فقط',
+      callback_data: `adm:field:${product.id}:localWarrantyAr`,
+      style: 'primary'
+    }]);
+    keyboard.push([{
+      text: '🖼 صورة هذا البوت فقط',
+      callback_data: `adm:field:${product.id}:localImage`,
       style: 'primary'
     }]);
     if (publicationStatus === 'published') {
@@ -9242,7 +9571,7 @@ async function processOwnedSharedPaymentRequests() {
       '',
       'وافق فقط إذا المبلغ وصل فعلاً إلى طريقة الدفع الخاصة بك.'
     ].join('\n');
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       await bot.sendMessage(adminId, text, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[
@@ -9291,7 +9620,7 @@ async function notifySourceAdminsSharedApproval(request, userRow, activityLabel)
     `المبلغ: <b>${amountLocal}</b>`,
     `تمت الموافقة بواسطة: <b>${escapeHtml(approver)}</b>`
   ].join('\n');
-  for (const adminId of config.admins) {
+  for (const adminId of getAdminIds()) {
     await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
   }
 }
@@ -9447,7 +9776,7 @@ async function processDebtRemindersAndStatus(data) {
       `<b>${escapeHtml(account.counterpartyName || counterpartyId)}</b> يطلبك <b>$${amount.toFixed(2)}</b>.`,
       'اختَر Binance للتحقق التلقائي، أو التسديد اليدوي ثم أرسل صورة الدفع للطرف الدائن.'
     ].join('\n');
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       await bot.sendMessage(adminId, text, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
@@ -9479,7 +9808,7 @@ async function processDebtRemindersAndStatus(data) {
     const text = status?.suspended
       ? `⛔ <b>تم إيقاف البيع مؤقتاً</b>\nالالتزامات الحالية: <b>$${Number(status.liabilityUsd || 0).toFixed(2)}</b>\nحد الإيقاف: <b>$${Number(status.thresholdUsd || 40).toFixed(2)}</b>\n\nيبقى البيع متوقفاً إلى أن تُؤكد التسوية عبر Binance أو الدفع اليدوي.`
       : '✅ <b>تم فتح البيع تلقائياً</b> بعد تأكيد تسوية الدين. البوت رجع يشتغل بدون تدخل إضافي.';
-    for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+    for (const adminId of getAdminIds()) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
   }
 }
 
@@ -9509,9 +9838,9 @@ async function processOwnedDebtBinanceVerifications() {
             `Order ID: <code>${escapeHtml(request.submittedOrderId)}</code>`,
             'تم التحقق تلقائياً.'
           ].join('\n');
-          for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+          for (const adminId of getAdminIds()) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
         } else if (resolvedRequest?.verificationError === 'DUPLICATE_TRANSACTION') {
-          for (const adminId of config.admins) {
+          for (const adminId of getAdminIds()) {
             await bot.sendMessage(adminId, [
               '⚠️ <b>رفض Order ID مكرر</b>',
               `من: <b>${escapeHtml(request.debtorName || request.debtorShopId)}</b>`,
@@ -9526,7 +9855,7 @@ async function processOwnedDebtBinanceVerifications() {
           reason: result.reason || 'NO_MATCH'
         });
         if (result.reason === 'REGION_RESTRICTED') {
-          for (const adminId of config.admins) {
+          for (const adminId of getAdminIds()) {
             await bot.sendMessage(adminId, [
               '⚠️ <b>تعذر التحقق التلقائي من تسوية Binance بسبب موقع السيرفر</b>',
               `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
@@ -9558,7 +9887,7 @@ async function processDebtPaymentResults() {
           request.transactionId ? `رقم العملية: <code>${escapeHtml(request.transactionId)}</code>` : '',
           manual ? 'تم إغلاق مبلغ التسوية بعد موافقة الطرف المستلم.' : 'تم إغلاق مبلغ التسوية تلقائياً.'
         ].filter(Boolean).join('\n');
-        for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+        for (const adminId of getAdminIds()) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
       } else if (request.status === 'rejected') {
         const text = [
           '❌ <b>تم رفض إثبات التسديد اليدوي</b>',
@@ -9567,7 +9896,7 @@ async function processDebtPaymentResults() {
           `المبلغ: <b>$${Number(request.amountUsd || 0).toFixed(2)}</b>`,
           'أُعيد الدين إلى الحساب ويمكن إنشاء تسوية جديدة بعد التأكد من الدفع.'
         ].join('\n');
-        for (const adminId of config.admins) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+        for (const adminId of getAdminIds()) await bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
       } else if (request.verificationError) {
         const text = [
           '❌ <b>لم تنجح محاولة تسوية Binance</b>',
@@ -9578,7 +9907,7 @@ async function processDebtPaymentResults() {
           '',
           'الدين ما زال مفتوحاً. أرسل Order ID صحيح للمحاولة مرة ثانية.'
         ].join('\n');
-        for (const adminId of config.admins) {
+        for (const adminId of getAdminIds()) {
           await bot.sendMessage(adminId, text, {
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{
@@ -9616,7 +9945,7 @@ async function processIncomingDebtConfirmations(data) {
       isManualProof ? 'الصورة مرفقة أدناه. وافق فقط إذا المبلغ وصل فعلاً إلى حسابك.' : 'وافق فقط إذا المبلغ وصل فعلاً.'
     ].join('\n');
     let sent = 0;
-    for (const adminId of config.admins) {
+    for (const adminId of getAdminIds()) {
       const options = {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[

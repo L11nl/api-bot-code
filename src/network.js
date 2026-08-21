@@ -24,6 +24,7 @@ const { inventoryFingerprint, inventoryPayloadIsValid, escapeHtml } = require('.
 const { getProductStock, getProductStocksMap, fulfillOrder } = require('./services/orders');
 const binancePay = require('./payments/binancePay');
 const ledger = require('./services/networkLedger');
+const adminAccess = require('./services/adminAccess');
 
 // Runtime caches for read-heavy network data. They cut repeated HTTP/DB work
 // from every button press while keeping writes authoritative.
@@ -257,7 +258,7 @@ async function syncCatalogToLocalNow(options = {}) {
     where: { networkProductId: { [require('sequelize').Op.in]: remoteIds } },
     attributes: [
       'networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt',
-      'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt'
+      'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride'
     ],
     raw: true
   }) : [];
@@ -283,6 +284,7 @@ async function syncCatalogToLocalNow(options = {}) {
       localNameEnOverride: prior?.localNameEnOverride || null,
       localNameEmojiId: prior?.localNameEmojiId || null,
       localNameEmojiAlt: prior?.localNameEmojiAlt || null,
+      localContentOverride: prior?.localContentOverride || {},
       category: remote.category || 'general',
       type: remote.type || 'free',
       description: remote.description || {},
@@ -307,7 +309,7 @@ async function syncCatalogToLocalNow(options = {}) {
     await Merchant.bulkCreate(values, {
       updateOnDuplicate: [
         'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'localPriceOverrideUsd',
-        'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt',
+        'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride',
         'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
         'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock',
         'visibilityScope', 'localPublicationStatus', 'localReviewNotifiedAt',
@@ -1053,7 +1055,7 @@ async function notifySettlement(bot, client, row, summary, activity = 'payment')
     `<b>${escapeHtml(client.name)}</b> يطلبك الآن إجمالاً: <b>$${summary.amountUsd.toFixed(2)}</b>`,
     ...(shopCurrency === 'USD' ? [] : [`الإجمالي بعملة المتجر: <b>${summaryLocal}</b>`])
   ].join('\n');
-  for (const adminId of config.admins) bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
+  for (const adminId of adminAccess.getAdminIds()) bot.sendMessage(adminId, text, { parse_mode: 'HTML' }).catch(() => {});
 }
 
 async function repairLegacyFreeFragmentsNetwork(product, rawText, ownerShopId) {
@@ -1678,7 +1680,7 @@ function installMasterRoutes(app, getBot) {
       const bot = getBot?.();
       if (bot) {
         const text = `💰 تم استلام $${Number(intent.amountUsd).toFixed(2)} عبر Binance الرئيسي لصالح ${escapeHtml(client.name)}. تم تسجيلها تلقائياً في الحسابات.`;
-        for (const adminId of config.admins) bot.sendMessage(adminId, text).catch(() => {});
+        for (const adminId of adminAccess.getAdminIds()) bot.sendMessage(adminId, text).catch(() => {});
       }
     }
     return { verified: true, transactionId: result.transactionId };

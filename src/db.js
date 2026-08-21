@@ -61,6 +61,18 @@ const Setting = sequelize.define('Setting', {
 }, { indexes: [{ unique: true, fields: ['key', 'lang'] }] });
 
 
+const BotAdmin = sequelize.define('BotAdmin', {
+  telegramId: { type: DataTypes.BIGINT, primaryKey: true },
+  displayName: { type: DataTypes.STRING(160), allowNull: true },
+  isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+  isProtected: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  source: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'telegram' },
+  permissions: { type: DataTypes.JSONB, allowNull: false, defaultValue: { full: true } },
+  addedByTelegramId: { type: DataTypes.BIGINT, allowNull: true },
+  removedByTelegramId: { type: DataTypes.BIGINT, allowNull: true },
+  removedAt: { type: DataTypes.DATE, allowNull: true }
+});
+
 const PaymentMethod = sequelize.define('PaymentMethod', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   nameAr: { type: DataTypes.STRING(120), allowNull: false },
@@ -96,6 +108,10 @@ const Merchant = sequelize.define('Merchant', {
   localNameEnOverride: { type: DataTypes.STRING, allowNull: true },
   localNameEmojiId: { type: DataTypes.STRING(32), allowNull: true },
   localNameEmojiAlt: { type: DataTypes.STRING(16), allowNull: true },
+  // Optional presentation overrides that belong only to this storefront.
+  // This lets a local admin edit description/warranty/image without mutating
+  // the shared source product that other bots consume.
+  localContentOverride: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
   category: { type: DataTypes.STRING, defaultValue: 'general' },
   type: { type: DataTypes.STRING, defaultValue: 'free' },
   description: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
@@ -685,6 +701,7 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'localNameEnOverride', { type: DataTypes.STRING, allowNull: true });
   await addColumnIfMissing('Merchants', 'localNameEmojiId', { type: DataTypes.STRING(32), allowNull: true });
   await addColumnIfMissing('Merchants', 'localNameEmojiAlt', { type: DataTypes.STRING(16), allowNull: true });
+  await addColumnIfMissing('Merchants', 'localContentOverride', { type: DataTypes.JSONB, allowNull: true, defaultValue: {} });
   await addColumnIfMissing('Merchants', 'visibilityScope', { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'public' });
   await addColumnIfMissing('Merchants', 'localPublicationStatus', { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'published' });
   await addColumnIfMissing('Merchants', 'createdByAdminId', { type: DataTypes.BIGINT, allowNull: true });
@@ -1065,6 +1082,7 @@ module.exports = {
   Op,
   User,
   Setting,
+  BotAdmin,
   PaymentMethod,
   Merchant,
   Code,

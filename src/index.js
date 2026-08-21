@@ -3,6 +3,7 @@ const config = require('./config');
 const { initializeDatabase, sequelize } = require('./db');
 const binancePay = require('./payments/binancePay');
 const network = require('./network');
+const adminAccess = require('./services/adminAccess');
 
 let startupState = 'starting';
 let startupError = '';
@@ -53,7 +54,7 @@ async function setupTelegramCommands(activeBot) {
       { command: 'start', description: 'فتح المتجر' },
       { command: 'cancel', description: 'إلغاء العملية الحالية' }
     ]);
-    for (const adminId of config.admins) {
+    for (const adminId of adminAccess.getAdminIds()) {
       await activeBot.setMyCommands([
         { command: 'start', description: 'فتح المتجر' },
         { command: 'admin', description: 'لوحة الإدارة' },
@@ -106,7 +107,7 @@ async function main() {
   if (typeof botModule.startVirtualNumbersWatcher === 'function') botModule.startVirtualNumbersWatcher();
 
   startupState = 'ready';
-  console.log('CD Store v8.0.0 is ready');
+  console.log('CD Store v9.0.0 is ready');
 }
 
 main().catch(error => {
