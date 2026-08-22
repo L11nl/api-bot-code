@@ -181,6 +181,10 @@ async function catalogSnapshot(viewerShopId = '') {
       nameAr: product.nameAr,
       nameEn: product.nameEn,
       price: basePrice,
+      networkSupplierPriceUsd: product.networkSupplierPriceUsd == null ? null : Number(product.networkSupplierPriceUsd),
+      quantityPricingTiers: Array.isArray(product.quantityPricingTiers) ? product.quantityPricingTiers : [],
+      quantityPricingOwnerOnly: product.quantityPricingOwnerOnly === true,
+      maxPurchaseQuantity: Math.max(1, Number(product.maxPurchaseQuantity || 100)),
       category: product.category,
       type: product.type,
       description: product.description || {},
@@ -272,6 +276,7 @@ async function syncCatalogToLocalNow(options = {}) {
     attributes: [
       'networkProductId', 'localPriceOverrideUsd', 'localPublicationStatus', 'localReviewNotifiedAt',
       'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride',
+      'networkSupplierPriceUsd', 'quantityPricingTiers', 'quantityPricingOwnerOnly', 'maxPurchaseQuantity',
       'networkDistributionEnabled'
     ],
     raw: true
@@ -293,6 +298,10 @@ async function syncCatalogToLocalNow(options = {}) {
       nameEn: remote.nameEn,
       price: basePrice,
       networkBasePriceUsd: basePrice,
+      networkSupplierPriceUsd: remote.networkSupplierPriceUsd == null ? null : Number(remote.networkSupplierPriceUsd),
+      quantityPricingTiers: Array.isArray(remote.quantityPricingTiers) ? remote.quantityPricingTiers : [],
+      quantityPricingOwnerOnly: remote.quantityPricingOwnerOnly === true,
+      maxPurchaseQuantity: Math.max(1, Number(remote.maxPurchaseQuantity || 100)),
       localPriceOverrideUsd: localOverride,
       localNameArOverride: prior?.localNameArOverride || null,
       localNameEnOverride: prior?.localNameEnOverride || null,
@@ -323,7 +332,8 @@ async function syncCatalogToLocalNow(options = {}) {
   if (values.length) {
     await Merchant.bulkCreate(values, {
       updateOnDuplicate: [
-        'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'localPriceOverrideUsd',
+        'nameAr', 'nameEn', 'price', 'networkBasePriceUsd', 'networkSupplierPriceUsd', 'quantityPricingTiers',
+        'quantityPricingOwnerOnly', 'maxPurchaseQuantity', 'localPriceOverrideUsd',
         'localNameArOverride', 'localNameEnOverride', 'localNameEmojiId', 'localNameEmojiAlt', 'localContentOverride',
         'category', 'type', 'description', 'image', 'isActive', 'sharedLimit',
         'deliveryMode', 'sortOrder', 'networkManaged', 'networkOwnerShopId', 'networkStock',
@@ -1520,7 +1530,7 @@ function installMasterRoutes(app, getBot) {
         buyers: [],
         fingerprint,
         stockOwnerShopId: client.shopId,
-        contributionPriceUsd: Number(product.networkBasePriceUsd ?? product.price ?? 0)
+        contributionPriceUsd: Number(product.networkSupplierPriceUsd ?? product.networkBasePriceUsd ?? product.price ?? 0)
       });
     }
     if (newRows.length) await Code.bulkCreate(newRows);
@@ -1631,8 +1641,10 @@ function installMasterRoutes(app, getBot) {
     const product = await Merchant.findOne({ where: { networkProductId: body.networkProductId, isActive: true } });
     if (!product) throw new Error('PRODUCT_NOT_FOUND');
     const remoteRef = `${client.shopId}:${String(body.localOrderId)}`;
-    const quantity = Math.max(1, Math.min(100, Number(body.quantity || 1)));
-    if (!Number.isInteger(quantity)) throw new Error('INVALID_QUANTITY');
+    const requestedQuantity = Number(body.quantity || 1);
+    const maxQuantity = Math.max(1, Math.floor(Number(product.maxPurchaseQuantity || 100)));
+    if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1 || requestedQuantity > maxQuantity) throw new Error('INVALID_QUANTITY');
+    const quantity = requestedQuantity;
     const basePrice = Number(product.networkBasePriceUsd ?? product.price ?? 0);
     const wantsOverride = Boolean(body.resellerPriceOverride);
     const requestedRetail = Number(body.retailUnitPriceUsd);
@@ -2037,6 +2049,7 @@ module.exports = {
   createClient,
   clientDatabaseSchema,
   getSharedPremiumEmojiMappings,
+  invalidateCatalogCache,
   syncCatalogToLocal,
   bootstrapCatalogToLocal,
   createRemoteProduct,

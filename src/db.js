@@ -101,7 +101,15 @@ const Merchant = sequelize.define('Merchant', {
   // the minimum allowed price. A reseller may keep a higher price only in
   // their own schema without changing the master catalog.
   networkBasePriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  // Optional supplier entitlement used by products that have a fixed network
+  // wholesale cost distinct from the storefront retail price.
+  networkSupplierPriceUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
   localPriceOverrideUsd: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+  // v14: optional quantity-pricing table. Keeping it on the product makes the
+  // rule durable, auditable and easy to hide automatically when stock is low.
+  quantityPricingTiers: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+  quantityPricingOwnerOnly: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  maxPurchaseQuantity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 100 },
   // Storefront-only presentation overrides. The shared source name/price stay
   // untouched, especially on Master where the catalog and storefront share a row.
   localNameArOverride: { type: DataTypes.STRING, allowNull: true },
@@ -703,7 +711,11 @@ async function initializeDatabase() {
   await addColumnIfMissing('Merchants', 'networkOwnerShopId', { type: DataTypes.STRING(80), allowNull: true });
   await addColumnIfMissing('Merchants', 'networkStock', { type: DataTypes.INTEGER, defaultValue: 0 });
   await addColumnIfMissing('Merchants', 'networkBasePriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Merchants', 'networkSupplierPriceUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
   await addColumnIfMissing('Merchants', 'localPriceOverrideUsd', { type: DataTypes.DECIMAL(18, 2), allowNull: true });
+  await addColumnIfMissing('Merchants', 'quantityPricingTiers', { type: DataTypes.JSONB, allowNull: false, defaultValue: [] });
+  await addColumnIfMissing('Merchants', 'quantityPricingOwnerOnly', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+  await addColumnIfMissing('Merchants', 'maxPurchaseQuantity', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 100 });
   await addColumnIfMissing('Merchants', 'localNameArOverride', { type: DataTypes.STRING, allowNull: true });
   await addColumnIfMissing('Merchants', 'localNameEnOverride', { type: DataTypes.STRING, allowNull: true });
   await addColumnIfMissing('Merchants', 'localNameEmojiId', { type: DataTypes.STRING(32), allowNull: true });

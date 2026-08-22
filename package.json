@@ -1,12 +1,12 @@
 {
   "name": "my-bot-store-clean",
-  "version": "13.0.0",
+  "version": "15.0.0",
   "private": true,
-  "description": "Telegram digital store v13 with ordered wallet audit/source tracking, ID-or-username balance controls, permanent delete semantics, API partner delete/disable/enable, public services, smart payment center, and network profit split",
+  "description": "Telegram digital store v15 with Gemini 18-month fixed 24H warranty, 50-link batched user notifications, channel-fed stock, smart quantity pricing, network wholesale margins, wallet audit controls, public services, smart payments, and partner management",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/adminAccess.js && node --check src/services/orders.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/services/uiTextOverrides.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/providers/grizzly.js && node --check src/payments/binancePay.js"
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/db.js && node --check src/network.js && node --check src/utils.js && node --check src/translator.js && node --check src/services/adminAccess.js && node --check src/services/orders.js && node --check src/services/quantityPricing.js && node --check src/services/builtinProducts.js && node --check src/services/networkLedger.js && node --check src/services/referrals.js && node --check src/services/virtualNumbers.js && node --check src/services/premiumEmojis.js && node --check src/services/uiTextOverrides.js && node --check src/providers/smsbower.js && node --check src/providers/smsman.js && node --check src/providers/grizzly.js && node --check src/payments/binancePay.js"
   },
   "engines": {
     "node": ">=20"

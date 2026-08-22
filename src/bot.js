@@ -6,6 +6,7 @@ const {
   sequelize,
   Op,
   User,
+  Setting,
   PaymentMethod,
   Merchant,
   Code,
@@ -43,6 +44,9 @@ const {
   productAccessibleInCurrentShop,
   productVisibleInCurrentShop,
   effectiveProductPrice,
+  productUnitPriceForQuantity,
+  maxProductPurchaseQuantity,
+  networkSupplierUnitPrice,
   sortProductStockRows,
   listActiveProducts,
   createOrder,
@@ -72,6 +76,8 @@ const virtualNumbers = require('./services/virtualNumbers');
 const premiumEmojis = require('./services/premiumEmojis');
 const uiTextOverrides = require('./services/uiTextOverrides');
 const adminAccess = require('./services/adminAccess');
+const { availableTiers, quantityPricingApplies } = require('./services/quantityPricing');
+const { GEMINI_18M_NETWORK_ID, isGemini18mProduct } = require('./services/builtinProducts');
 
 const bot = new TelegramBot(config.token, { polling: false });
 const captchaAnswers = new Map();
@@ -375,6 +381,14 @@ function productPresentationDescription(product) {
   const keys = ['ar', 'en', 'descriptionArHtml', 'warrantyAr', 'warrantyEn', 'warrantyArHtml'];
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(local, key)) description[key] = local[key] ?? '';
+  }
+  // Gemini 18 Months has a fixed 24-hour warranty across every storefront.
+  // Ignore old local overrides so a stale client setting can never show a
+  // different warranty to customers.
+  if (isGemini18mProduct(product)) {
+    description.warrantyAr = '24H — 24 ساعة';
+    description.warrantyEn = '24H — 24 hours';
+    delete description.warrantyArHtml;
   }
   return description;
 }
@@ -2960,6 +2974,22 @@ function stripTelegramCustomEmojiHtml(value) {
   return String(value || '').replace(/<tg-emoji\b[^>]*>[\s\S]*?<\/tg-emoji>/gi, '');
 }
 
+function quantityPricingCaptionLines(product, stock, lang, moneyContext) {
+  if (!quantityPricingApplies(product)) return [];
+  const tiers = availableTiers(product, stock).filter(tier => Number(tier.min) >= 10);
+  if (!tiers.length) return [];
+  const lines = [lang === 'en' ? '💸 <b>Available quantity discounts:</b>' : '💸 <b>خصومات الكمية المتاحة حالياً:</b>'];
+  for (const tier of tiers) {
+    const range = Number(tier.min) === Number(tier.visibleMax)
+      ? String(tier.min)
+      : `${tier.min}–${tier.visibleMax}`;
+    lines.push(lang === 'en'
+      ? `• ${range} units: <b>${customerMoney(Number(tier.price), moneyContext, lang)}</b> / unit`
+      : `• من ${range}: <b>${customerMoney(Number(tier.price), moneyContext, lang)}</b> للوحدة`);
+  }
+  return lines;
+}
+
 function productCaption(product, stock, lang, moneyContext) {
   const descriptionData = productPresentationDescription(product);
   const name = productDisplayName(product, lang);
@@ -2990,10 +3020,12 @@ function productCaption(product, stock, lang, moneyContext) {
   const stockText = product.type === 'service'
     ? (lang === 'en' ? 'On demand' : 'حسب الطلب')
     : String(stock);
+  const pricingLines = quantityPricingCaptionLines(product, stock, lang, moneyContext);
   return [
     `<b>${richName}</b>`,
     `💰 <b>${t(lang, 'price')}:</b> ${customerMoney(effectiveProductPrice(product), moneyContext, lang)}`,
     `📦 <b>${t(lang, 'stock')}:</b> ${stockText}`,
+    ...pricingLines,
     `📈 <b>${t(lang, 'sold')}:</b> ${Number(descriptionData.sold || 0)}`,
     `🛡 <b>${t(lang, 'warranty')}:</b> ${richWarranty}`,
     '',
@@ -3107,6 +3139,302 @@ async function showProduct(chatId, user, merchantId) {
   }
 }
 
+const GEMINI_18M_CHANNEL_SETTING_KEY = 'gemini_18m_inventory_channel_v14';
+const GEMINI_18M_NOTIFY_BATCH_SIZE = 50;
+const GEMINI_18M_NOTIFY_REMAINDER_SETTING_KEY = 'gemini_18m_notify_remainder_v15';
+
+async function getGemini18mInventoryChannel() {
+  try {
+    const raw = String(await getSetting(GEMINI_18M_CHANNEL_SETTING_KEY, '') || '').trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      id: parsed.id == null ? null : String(parsed.id),
+      username: String(parsed.username || '').replace(/^@/, '').trim(),
+      title: String(parsed.title || '').trim()
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function setGemini18mInventoryChannel(value) {
+  if (!value) {
+    await setSetting(GEMINI_18M_CHANNEL_SETTING_KEY, '');
+    return null;
+  }
+  const clean = {
+    id: value.id == null ? null : String(value.id),
+    username: String(value.username || '').replace(/^@/, '').trim(),
+    title: String(value.title || '').trim()
+  };
+  await setSetting(GEMINI_18M_CHANNEL_SETTING_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+function forwardedChannelFromMessage(msg) {
+  const modern = msg?.forward_origin?.type === 'channel' ? msg.forward_origin.chat : null;
+  const legacy = msg?.forward_from_chat?.type === 'channel' ? msg.forward_from_chat : null;
+  const chat = modern || legacy;
+  if (!chat) return null;
+  return {
+    id: String(chat.id),
+    username: String(chat.username || '').replace(/^@/, ''),
+    title: String(chat.title || '')
+  };
+}
+
+function geminiChannelMatches(configured, chat) {
+  if (!configured || !chat) return false;
+  if (configured.id && String(chat.id) === String(configured.id)) return true;
+  const configuredUsername = String(configured.username || '').replace(/^@/, '').toLowerCase();
+  const actualUsername = String(chat.username || '').replace(/^@/, '').toLowerCase();
+  return Boolean(configuredUsername && actualUsername && configuredUsername === actualUsername);
+}
+
+function extractGemini18mActivationLinks(text) {
+  const matches = String(text || '').match(/https:\/\/serviceactivation\.google\.com\/subscription\/new\/[^\s<>"']+/gi) || [];
+  const unique = new Set();
+  for (let raw of matches) {
+    raw = String(raw).replace(/[),.;،؛\]}]+$/g, '');
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'https:' || url.hostname !== 'serviceactivation.google.com') continue;
+      if (!url.pathname.startsWith('/subscription/new/')) continue;
+      if (url.pathname.length <= '/subscription/new/'.length) continue;
+      unique.add(url.toString());
+    } catch {}
+  }
+  return [...unique];
+}
+
+async function gemini18mProductRow() {
+  return Merchant.findOne({ where: { networkProductId: GEMINI_18M_NETWORK_ID } });
+}
+
+async function registerGemini18mNotificationProgress(product, added, transaction) {
+  const amount = Math.max(0, Math.floor(Number(added || 0)));
+  if (!isGemini18mProduct(product) || amount < 1) {
+    return { batches: 0, remainder: 0, batchSize: GEMINI_18M_NOTIFY_BATCH_SIZE };
+  }
+
+  // All sources (channel/manual) share one durable counter. The advisory lock
+  // makes the 50-link threshold exact even if two Telegram updates arrive at
+  // the same time. The counter is kept in PostgreSQL so restarts do not reset it.
+  await sequelize.query('SELECT pg_advisory_xact_lock(7415, :merchantId)', {
+    replacements: { merchantId: Number(product.id) },
+    transaction
+  });
+  let row = await Setting.findOne({
+    where: { key: GEMINI_18M_NOTIFY_REMAINDER_SETTING_KEY, lang: 'global' },
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+  if (!row) {
+    row = await Setting.create({
+      key: GEMINI_18M_NOTIFY_REMAINDER_SETTING_KEY,
+      lang: 'global',
+      value: '0'
+    }, { transaction });
+  }
+  const previous = Math.max(0, Math.min(GEMINI_18M_NOTIFY_BATCH_SIZE - 1, Math.floor(Number(row.value || 0))));
+  const total = previous + amount;
+  const batches = Math.floor(total / GEMINI_18M_NOTIFY_BATCH_SIZE);
+  const remainder = total % GEMINI_18M_NOTIFY_BATCH_SIZE;
+  await row.update({ value: String(remainder) }, { transaction });
+  return { batches, remainder, batchSize: GEMINI_18M_NOTIFY_BATCH_SIZE };
+}
+
+async function publishGemini18mNotificationBatches(product, progress, source = {}) {
+  const batches = Math.max(0, Math.floor(Number(progress?.batches || 0)));
+  if (!batches || !network.isMaster() || !product?.isActive) return;
+  for (let index = 0; index < batches; index += 1) {
+    await network.publishNotificationEvent({
+      eventType: 'stock_added',
+      networkProductId: product.networkProductId,
+      actorShopId: 'master',
+      actorName: String(source.channelTitle || source.actorName || config.network.ownerName || 'Master'),
+      amount: GEMINI_18M_NOTIFY_BATCH_SIZE,
+      payload: {
+        source: source.source || 'gemini_inventory',
+        channelId: source.channelId || null,
+        gemini18mBatch: true,
+        batchSize: GEMINI_18M_NOTIFY_BATCH_SIZE
+      }
+    }).catch(error => console.error('Gemini 18m batched stock notification:', error.message));
+  }
+}
+
+async function importGemini18mLinks(links, source = {}) {
+  if (!network.isMaster()) throw new Error('GEMINI_IMPORT_MASTER_ONLY');
+  const product = await gemini18mProductRow();
+  if (!product || !isGemini18mProduct(product)) throw new Error('GEMINI_PRODUCT_NOT_FOUND');
+  const prepared = [];
+  for (const link of [...new Set((links || []).map(value => String(value || '').trim()).filter(Boolean))]) {
+    const payload = { email: '', password: '', twoFactor: '', code: link, extra: '', raw: link };
+    prepared.push({ payload, fingerprint: inventoryFingerprint('code', payload) });
+  }
+  if (!prepared.length) return { added: 0, duplicate: 0, stock: await getProductStock(product.id), product };
+
+  const transaction = await sequelize.transaction();
+  let added = 0;
+  let duplicate = 0;
+  let notificationProgress = { batches: 0, remainder: 0, batchSize: GEMINI_18M_NOTIFY_BATCH_SIZE };
+  try {
+    // Serialize channel imports for this product so two posts arriving together
+    // cannot insert the same activation link twice.
+    await sequelize.query('SELECT pg_advisory_xact_lock(7414, :merchantId)', {
+      replacements: { merchantId: Number(product.id) },
+      transaction
+    });
+    const fingerprints = prepared.map(row => row.fingerprint);
+    const existingRows = await Code.findAll({
+      where: { merchantId: product.id, fingerprint: { [Op.in]: fingerprints } },
+      attributes: ['fingerprint'],
+      transaction
+    });
+    const existing = new Set(existingRows.map(row => String(row.fingerprint || '')));
+    const rows = [];
+    const supplierPrice = Number(networkSupplierUnitPrice(product) ?? 0.40);
+    for (const item of prepared) {
+      if (existing.has(item.fingerprint)) {
+        duplicate += 1;
+        continue;
+      }
+      existing.add(item.fingerprint);
+      rows.push({
+        value: encryptPayload(item.payload),
+        extra: null,
+        merchantId: product.id,
+        isUsed: false,
+        usedCount: 0,
+        maxUses: 1,
+        buyers: [],
+        fingerprint: item.fingerprint,
+        stockOwnerShopId: 'master',
+        contributionPriceUsd: supplierPrice,
+        isHidden: false
+      });
+    }
+    if (rows.length) {
+      await Code.bulkCreate(rows, { transaction });
+      added = rows.length;
+    }
+    if (added > 0) {
+      notificationProgress = await registerGemini18mNotificationProgress(product, added, transaction);
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+
+  if (typeof network.invalidateCatalogCache === 'function') network.invalidateCatalogCache();
+  const stock = await getProductStock(product.id);
+  if (added > 0 && notificationProgress.batches > 0) {
+    await publishGemini18mNotificationBatches(product, notificationProgress, {
+      source: 'telegram_channel',
+      channelId: source.channelId || null,
+      channelTitle: source.channelTitle || ''
+    });
+  }
+  return { added, duplicate, stock, product, notificationProgress };
+}
+
+async function processGemini18mChannelPost(msg) {
+  if (!network.isMaster()) return;
+  const configured = await getGemini18mInventoryChannel();
+  if (!geminiChannelMatches(configured, msg?.chat)) return;
+  const entityUrls = [...(msg?.entities || []), ...(msg?.caption_entities || [])]
+    .filter(entity => String(entity?.type || '') === 'text_link' && entity?.url)
+    .map(entity => String(entity.url));
+  const links = extractGemini18mActivationLinks([msg?.text || '', msg?.caption || '', ...entityUrls].join('\n'));
+  if (!links.length) return;
+
+  const result = await importGemini18mLinks(links, {
+    channelId: String(msg.chat.id),
+    channelTitle: msg.chat.title || msg.chat.username || ''
+  });
+
+  // If the channel was configured by @username, remember the numeric id after
+  // the first real post so future matching stays stable even if renamed.
+  if (configured && !configured.id) {
+    await setGemini18mInventoryChannel({
+      ...configured,
+      id: String(msg.chat.id),
+      title: configured.title || msg.chat.title || ''
+    });
+  }
+
+  let deleted = false;
+  try {
+    await bot.deleteMessage(msg.chat.id, msg.message_id);
+    deleted = true;
+  } catch (error) {
+    console.error('Gemini channel delete:', error.message);
+  }
+
+  await notifyAdmins([
+    '📡 <b>مخزون جمناي 18 شهر</b>',
+    `تمت قراءة رسالة من القناة: <b>${escapeHtml(msg.chat.title || `#${msg.chat.id}`)}</b>`,
+    `➕ المضاف: <b>${result.added}</b>`,
+    result.duplicate ? `♻️ مكرر ولم يُضف: <b>${result.duplicate}</b>` : '',
+    `📦 المخزون الحالي: <b>${result.stock}</b>`,
+    result.notificationProgress?.batches > 0
+      ? `📣 اكتملت <b>${result.notificationProgress.batches}</b> دفعة إشعار (كل دفعة ${GEMINI_18M_NOTIFY_BATCH_SIZE} رابط) وتم إطلاق إشعار المستخدمين.`
+      : `⏳ عداد إشعار المستخدمين: <b>${result.notificationProgress?.remainder || 0}/${GEMINI_18M_NOTIFY_BATCH_SIZE}</b> — لا يُرسل إشعار قبل اكتمال 50 رابط جديد.`,
+    deleted ? '🗑 تم حذف رسالة الرابط من القناة بعد الحفظ.' : '⚠️ تم حفظ الرابط لكن تعذر حذف الرسالة. أعطِ البوت صلاحية Delete Messages في القناة.'
+  ].filter(Boolean).join('\n'));
+}
+
+async function showGemini18mChannelAdmin(chatId, productId) {
+  const product = await Merchant.findByPk(productId);
+  if (!product || !isGemini18mProduct(product) || !network.isMaster()) return bot.sendMessage(chatId, 'هذه الميزة متاحة لمنتج جمناي 18 شهر في البوت الرئيسي فقط.');
+  const configured = await getGemini18mInventoryChannel();
+  const stock = await getProductStock(product.id);
+  const channelLabel = configured
+    ? (configured.title || (configured.username ? `@${configured.username}` : configured.id || 'مربوطة'))
+    : 'غير مربوطة';
+  const keyboard = [
+    [{ text: configured ? '🔁 تغيير قناة المخزون' : '🔗 ربط قناة المخزون', callback_data: `adm:gemini_channel_bind:${product.id}`, style: 'primary' }]
+  ];
+  if (configured) {
+    keyboard.push([{ text: '🧪 فحص صلاحية القناة', callback_data: `adm:gemini_channel_test:${product.id}` }]);
+    keyboard.push([{ text: '🗑 فك ربط القناة', callback_data: `adm:gemini_channel_unbind:${product.id}`, style: 'danger' }]);
+  }
+  keyboard.push([{ text: '⬅️ رجوع للمنتج', callback_data: `adm:edit:${product.id}` }]);
+  return bot.sendMessage(chatId, [
+    '📡 <b>قناة مخزون جمناي 18 شهر</b>',
+    `القناة الحالية: <b>${escapeHtml(channelLabel)}</b>`,
+    `المخزون: <b>${stock}</b>`,
+    '',
+    'من توصل رسالة جديدة بالقناة وتحتوي رابط serviceactivation.google.com/subscription/new/، البوت يحفظ الرابط كمخزون ثم يحذف الرسالة بعد نجاح الحفظ.',
+    '📣 إشعار المستخدمين مجمّع: لا يرسل عند كل رابط؛ يرسل فقط كلما اكتملت 50 إضافة جديدة فعلية.',
+    'لا تُحذف الرسالة إذا صار خطأ بقاعدة البيانات. الروابط المكررة لا تدخل مرتين.',
+    '',
+    'مهم: لازم تضيف البوت Admin بالقناة وتعطيه صلاحية حذف الرسائل.'
+  ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function testGemini18mChannelAccess() {
+  const configured = await getGemini18mInventoryChannel();
+  if (!configured) return { ok: false, reason: 'القناة غير مربوطة.' };
+  const target = configured.id || (configured.username ? `@${configured.username}` : '');
+  if (!target) return { ok: false, reason: 'معرف القناة غير صالح.' };
+  try {
+    const me = await bot.getMe();
+    const member = await bot.getChatMember(target, me.id);
+    const admin = ['administrator', 'creator'].includes(String(member?.status || ''));
+    const canDelete = member?.status === 'creator' || member?.can_delete_messages === true;
+    if (!admin) return { ok: false, reason: 'البوت موجود لكنه ليس Admin بالقناة.' };
+    if (!canDelete) return { ok: false, reason: 'البوت Admin لكن ما عنده صلاحية Delete Messages.' };
+    return { ok: true, reason: 'البوت Admin وعنده صلاحية حذف الرسائل. الاستيراد جاهز.' };
+  } catch (error) {
+    return { ok: false, reason: `تعذر الوصول للقناة: ${error.message}` };
+  }
+}
+
 async function notifyAdmins(text, options = {}) {
   for (const adminId of getAdminIds()) {
     try {
@@ -3116,6 +3444,14 @@ async function notifyAdmins(text, options = {}) {
     }
   }
 }
+
+
+bot.on('channel_post', msg => {
+  processGemini18mChannelPost(msg).catch(error => console.error('Gemini channel import:', error.message));
+});
+bot.on('edited_channel_post', msg => {
+  processGemini18mChannelPost(msg).catch(error => console.error('Gemini edited channel import:', error.message));
+});
 
 
 function wait(ms) {
@@ -3196,6 +3532,11 @@ async function broadcastStockNotification(product, added, actorName = '') {
   if (!product?.isActive || !productVisibleInCurrentShop(product) || !Number.isInteger(added) || added < 1) {
     return { sent: 0, failed: 0 };
   }
+  // Gemini 18 Months is intentionally quiet until a full 50-link batch is
+  // available. This also blocks stale/older immediate stock events.
+  if (isGemini18mProduct(product) && (added < GEMINI_18M_NOTIFY_BATCH_SIZE || added % GEMINI_18M_NOTIFY_BATCH_SIZE !== 0)) {
+    return { sent: 0, failed: 0, waitingForBatch: true };
+  }
 
   const users = await getBroadcastUsers();
   let sent = 0;
@@ -3245,6 +3586,9 @@ async function broadcastNewProductNotification(product, actorName = '') {
 
   const users = await getBroadcastUsers();
   const stock = await getProductStock(product.id);
+  if (isGemini18mProduct(product) && stock < GEMINI_18M_NOTIFY_BATCH_SIZE) {
+    return { sent: 0, failed: 0, waitingForBatch: true };
+  }
   const isServiceProduct = String(product.type || '') === 'service';
   let sent = 0;
   let failed = 0;
@@ -4140,9 +4484,10 @@ bot.on('callback_query', async query => {
       if (!product) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
       const stock = await getProductStock(product.id);
       if (stock < 1) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
+      const maxAllowed = maxProductPurchaseQuantity(product, stock);
       await setState(user.id, { action: 'custom_quantity', merchantId: product.id });
       await answerCallback(query.id);
-      return bot.sendMessage(user.id, user.lang === 'en' ? `Send quantity from 1 to ${Math.min(stock, 100)}:` : `أرسل الكمية من 1 إلى ${Math.min(stock, 100)}:`, { reply_markup: cancelInlineKeyboard() });
+      return bot.sendMessage(user.id, user.lang === 'en' ? `Send quantity from 1 to ${maxAllowed}:` : `أرسل الكمية من 1 إلى ${maxAllowed}:`, { reply_markup: cancelInlineKeyboard() });
     }
     if (data.startsWith('pay:')) {
       if (!isAdmin(user.id) && (await currentCommerceStatus())?.suspended) return answerCallback(query.id, user.lang === 'en' ? 'Store temporarily paused.' : 'المتجر متوقف مؤقتاً.', true);
@@ -4183,8 +4528,11 @@ async function handleBuy(query, user, merchantId) {
   const product = await Merchant.findByPk(merchantId);
   const stock = product ? await getProductStock(product.id) : 0;
   if (!product || !product.isActive || !productVisibleInCurrentShop(product) || (product.type !== 'service' && stock < 1)) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
-  const max = ['service', 'shared'].includes(String(product?.type || '')) ? 1 : Math.min(stock, 100);
-  const presets = [...new Set([1, 2, 3, 5, 10, max].filter(q => q >= 1 && q <= max))].sort((a, b) => a - b);
+  const max = maxProductPurchaseQuantity(product, stock);
+  const pricingBreaks = quantityPricingApplies(product)
+    ? availableTiers(product, stock).map(tier => Number(tier.min)).filter(value => value > 1)
+    : [];
+  const presets = [...new Set([1, 2, 5, 10, 25, 50, 100, 500, ...pricingBreaks, max].filter(q => q >= 1 && q <= max))].sort((a, b) => a - b);
   const rows = [];
   for (let i = 0; i < presets.length; i += 3) {
     rows.push(presets.slice(i, i + 3).map(quantity => ({
@@ -4206,7 +4554,9 @@ async function sendCheckoutOptions(chatId, user, product, quantity) {
   }
 
   const moneyContext = await customerMoneyContext(freshUser || user);
-  const total = effectiveProductPrice(product) * Number(quantity);
+  const unitPrice = productUnitPriceForQuantity(product, Number(quantity));
+  const baseUnitPrice = effectiveProductPrice(product);
+  const total = unitPrice * Number(quantity);
   const balance = Number(freshUser?.balance || 0);
   const canUseWallet = balance + 1e-9 >= total;
   const missing = Math.max(0, total - balance);
@@ -4224,6 +4574,16 @@ async function sendCheckoutOptions(chatId, user, product, quantity) {
   buttons.push(...await externalPaymentButtons(freshUser, 'pay', missing > 0 ? missing : total));
 
   const lines = [];
+  lines.push(user.lang === 'en'
+    ? `📦 <b>Quantity:</b> ${Number(quantity)} × ${customerMoney(unitPrice, moneyContext, user.lang)}`
+    : `📦 <b>الكمية:</b> ${Number(quantity)} × ${customerMoney(unitPrice, moneyContext, user.lang)}`);
+  if (unitPrice + 1e-9 < baseUnitPrice) {
+    const saved = Math.max(0, (baseUnitPrice - unitPrice) * Number(quantity));
+    lines.push(user.lang === 'en'
+      ? `💸 <b>Quantity discount:</b> saved ${customerMoney(saved, moneyContext, user.lang)}`
+      : `💸 <b>خصم الكمية:</b> وفّرت ${customerMoney(saved, moneyContext, user.lang)}`);
+  }
+  lines.push('');
   if (!canUseWallet) {
     lines.push(`${premiumEmojiHtml(PREMIUM_EMOJI.wallet)} <b>${t(user.lang, 'walletBalance')}:</b> ${customerMoney(balance, moneyContext, user.lang)}`);
     lines.push(`💰 <b>${user.lang === 'en' ? 'Product total' : 'سعر المنتج'}:</b> ${customerMoney(total, moneyContext, user.lang)}`);
@@ -4297,7 +4657,7 @@ async function handlePayment(query, user, data) {
 
   const product = await Merchant.findByPk(state.merchantId);
   if (!product) return answerCallback(query.id, t(user.lang, 'outOfStock'), true);
-  const expectedTotal = effectiveProductPrice(product) * Number(state.quantity);
+  const expectedTotal = productUnitPriceForQuantity(product, Number(state.quantity)) * Number(state.quantity);
 
   let method = methodToken;
   let customMethod = null;
@@ -5001,6 +5361,36 @@ async function completePartnerBotSetup(user, data, partnerBotToken) {
 }
 
 async function handleStateMessage(msg, user, state) {
+  if (state.action === 'admin_bind_gemini_channel' && isAdmin(user.id) && network.isMaster()) {
+    const product = await Merchant.findByPk(Number(state.productId));
+    if (!product || !isGemini18mProduct(product)) {
+      await clearState(user.id);
+      await bot.sendMessage(user.id, '❌ منتج جمناي 18 شهر غير موجود.');
+      return true;
+    }
+    const forwarded = forwardedChannelFromMessage(msg);
+    const text = String(msg.text || '').trim();
+    let channel = forwarded;
+    if (!channel && /^-100\d{6,}$/.test(text)) {
+      channel = { id: text, username: '', title: text };
+    } else if (!channel && /^@[A-Za-z0-9_]{5,}$/.test(text)) {
+      channel = { id: null, username: text.slice(1), title: text };
+    }
+    if (!channel) {
+      await bot.sendMessage(user.id, [
+        '❌ ما قدرت أحدد القناة.',
+        'أسهل طريقة: سوِ Forward لأي رسالة من قناة المخزون إلى هنا.',
+        'أو أرسل @username للقناة العامة، أو Channel ID يبدأ بـ -100.'
+      ].join('\n'), { reply_markup: cancelInlineKeyboard() });
+      return true;
+    }
+    await setGemini18mInventoryChannel(channel);
+    await clearState(user.id);
+    await bot.sendMessage(user.id, `✅ تم ربط قناة المخزون: <b>${escapeHtml(channel.title || (channel.username ? `@${channel.username}` : channel.id))}</b>`, { parse_mode: 'HTML' });
+    await showGemini18mChannelAdmin(user.id, product.id);
+    return true;
+  }
+
   if (state.action === 'virtual_number_search') {
     const queryText = String(msg.text || '').trim();
     if (!queryText) {
@@ -5272,7 +5662,7 @@ async function handleStateMessage(msg, user, state) {
     const quantity = Number(String(msg.text || '').trim());
     const product = await Merchant.findByPk(state.merchantId);
     const stock = product ? await getProductStock(product.id) : 0;
-    const maxAllowed = product?.type === 'service' ? 1 : Math.min(stock, 100);
+    const maxAllowed = product ? maxProductPurchaseQuantity(product, stock) : 0;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > maxAllowed) {
       await bot.sendMessage(user.id, user.lang === 'en' ? `❌ Send a whole number from 1 to ${maxAllowed}.` : `❌ أرسل رقم صحيح من 1 إلى ${maxAllowed}.`);
       return true;
@@ -6626,18 +7016,26 @@ async function handleStateMessage(msg, user, state) {
       return true;
     }
     const basePrice = networkProductBasePrice(product);
+    const supplierPrice = networkSupplierUnitPrice(product);
     if (value + 1e-9 < basePrice) {
-      await bot.sendMessage(user.id, `❌ أقل سعر مسموح هو ${moneyUsd(basePrice)} لأنه حق صاحب المنتج.`);
+      await bot.sendMessage(user.id, `❌ أقل سعر بيع مسموح داخل بوتك هو ${moneyUsd(basePrice)}.`);
       return true;
     }
-    const profit = Math.max(0, value - basePrice);
+    const profitBasis = supplierPrice !== null ? Number(supplierPrice) : basePrice;
+    const profit = Math.max(0, value - profitBasis);
     await setState(user.id, { action: 'admin_confirm_network_product_price', productId: product.id, price: value });
+    const pricingLines = supplierPrice !== null
+      ? [
+          `السعر الافتراضي الأدنى للزبون: <b>${moneyUsd(basePrice)}</b>`,
+          `تكلفة/حق المصدر على بوتك: <b>${moneyUsd(supplierPrice)}</b>`
+        ]
+      : [`${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`];
     await bot.sendMessage(user.id, [
       `🧾 <b>تأكيد نشر ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'}</b>`,
       `الاسم: <b>${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
-      `${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`,
+      ...pricingLines,
       `سعر البيع في بوتك: <b>${moneyUsd(value)}</b>`,
-      `ربح بوتك من فرق السعر: <b>${moneyUsd(profit)}</b> لكل عملية بيع.`,
+      `ربح بوتك: <b>${moneyUsd(profit)}</b> لكل عملية بيع.`,
       '',
       'هل أنت موافق وتريد نشره الآن في بوتك؟'
     ].join('\n'), {
@@ -7113,11 +7511,14 @@ async function handleStateMessage(msg, user, state) {
           buyers: [],
           fingerprint,
           stockOwnerShopId: network.enabledClient() ? config.network.shopId : 'master',
-          contributionPriceUsd: Number(product.price || 0)
+          contributionPriceUsd: Number(networkSupplierUnitPrice(product) ?? product.price ?? 0)
         });
       }
       if (rowsToCreate.length) await Code.bulkCreate(rowsToCreate, { transaction });
       const added = rowsToCreate.length;
+      const geminiNotificationProgress = added > 0 && isGemini18mProduct(product)
+        ? await registerGemini18mNotificationProgress(product, added, transaction)
+        : null;
 
       await transaction.commit();
 
@@ -7133,14 +7534,26 @@ async function handleStateMessage(msg, user, state) {
       ].filter(Boolean).join('\n'));
 
       if (added > 0 && product.isActive && network.isMaster() && !state.afterCreate) {
-        await network.publishNotificationEvent({
-          eventType: 'stock_added',
-          networkProductId: product.networkProductId,
-          actorShopId: 'master',
-          actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي',
-          amount: added,
-          payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
-        }).catch(error => console.error('Publish stock notification:', error.message));
+        if (isGemini18mProduct(product)) {
+          if (geminiNotificationProgress?.batches > 0) {
+            await publishGemini18mNotificationBatches(product, geminiNotificationProgress, {
+              source: 'manual_inventory',
+              actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي'
+            });
+          }
+          await bot.sendMessage(user.id, geminiNotificationProgress?.batches > 0
+            ? `📣 اكتملت ${geminiNotificationProgress.batches} دفعة إشعار × ${GEMINI_18M_NOTIFY_BATCH_SIZE} رابط.`
+            : `⏳ عداد إشعار المستخدمين: ${geminiNotificationProgress?.remainder || 0}/${GEMINI_18M_NOTIFY_BATCH_SIZE}. ما راح يطلع إشعار قبل اكتمال 50 رابط جديد.`).catch(() => {});
+        } else {
+          await network.publishNotificationEvent({
+            eventType: 'stock_added',
+            networkProductId: product.networkProductId,
+            actorShopId: 'master',
+            actorName: config.network.ownerName || config.network.shopName || 'المالك الرئيسي',
+            amount: added,
+            payload: { nameAr: product.nameAr, nameEn: product.nameEn, price: Number(product.price) }
+          }).catch(error => console.error('Publish stock notification:', error.message));
+        }
       }
 
       if (added > 0 && product.isActive && !network.isMaster()) {
@@ -8569,6 +8982,48 @@ async function showProductContributors(chatId, product) {
 }
 
 async function handleAdminCallback(query, user, data) {
+  if (data.startsWith('adm:gemini_channel_bind:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'الميزة خاصة بمنتج جمناي 18 شهر في البوت الرئيسي.', true);
+    await setState(user.id, { action: 'admin_bind_gemini_channel', productId });
+    await answerCallback(query.id);
+    return bot.sendMessage(user.id, [
+      '📡 <b>ربط قناة مخزون جمناي 18 شهر</b>',
+      '',
+      'الأسهل: سوِ <b>Forward</b> لأي رسالة من قناة المخزون إلى هذا البوت.',
+      'أو أرسل @username إذا القناة عامة.',
+      'أو أرسل Channel ID مثل <code>-1001234567890</code>.',
+      '',
+      'بعد الربط، خلّي البوت Admin بالقناة مع صلاحية حذف الرسائل.'
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
+  }
+
+  if (data.startsWith('adm:gemini_channel_unbind:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    await setGemini18mInventoryChannel(null);
+    await clearState(user.id);
+    await answerCallback(query.id, 'تم فك الربط.');
+    return showGemini18mChannelAdmin(query.message.chat.id, product.id);
+  }
+
+  if (data.startsWith('adm:gemini_channel_test:')) {
+    const productId = Number(data.split(':')[3]);
+    const product = await Merchant.findByPk(productId);
+    if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
+    const test = await testGemini18mChannelAccess();
+    await answerCallback(query.id, test.ok ? 'جاهز' : 'يحتاج تعديل');
+    return bot.sendMessage(user.id, `${test.ok ? '✅' : '⚠️'} ${escapeHtml(test.reason)}`, { parse_mode: 'HTML' });
+  }
+
+  if (/^adm:gemini_channel:\d+$/.test(data)) {
+    const productId = Number(data.split(':')[2]);
+    await answerCallback(query.id);
+    return showGemini18mChannelAdmin(query.message.chat.id, productId);
+  }
+
   if (data === 'adm:admins') {
     await answerCallback(query.id);
     return showAdminAccessManager(query.message.chat.id);
@@ -9913,14 +10368,24 @@ async function handleAdminCallback(query, user, data) {
       return answerCallback(query.id, 'المنتج ليس بانتظار تسعير حالياً. افتح قسم النشر والظهور لتغيير حالته.', true);
     }
     const basePrice = networkProductBasePrice(product);
+    const supplierPrice = networkSupplierUnitPrice(product);
     await setState(user.id, { action: 'admin_publish_network_product', productId: product.id });
     await answerCallback(query.id);
+    const pricingLines = supplierPrice !== null
+      ? [
+          `السعر الافتراضي الأدنى للزبون: <b>${moneyUsd(basePrice)}</b>`,
+          `تكلفة/حق المصدر على بوتك: <b>${moneyUsd(supplierPrice)}</b>`,
+          `إذا بعته بالسعر الافتراضي ${moneyUsd(basePrice)} يكون ربحك <b>${moneyUsd(Math.max(0, basePrice - Number(supplierPrice)))}</b> لكل كود.`
+        ]
+      : [`سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`];
     return bot.sendMessage(user.id, [
       `💵 <b>تسعير ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'}: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
-      `سعر صاحب المنتج: <b>${moneyUsd(basePrice)}</b>`,
+      ...pricingLines,
       '',
       `أرسل سعر البيع داخل بوتك. يجب أن يكون ${moneyUsd(basePrice)} أو أكثر.`,
-      'فرق السعر فوق السعر الأساسي يكون ربحاً لهذا البوت. بعد إدخال السعر راح أطلب منك تأكيد النشر قبل ما يظهر للزبائن.'
+      supplierPrice !== null
+        ? 'تگدر ترفع السعر فوق الحد الأدنى، وأي زيادة تضاف إلى ربح بوتك. بعد إدخال السعر راح أطلب منك تأكيد النشر.'
+        : 'فرق السعر فوق السعر الأساسي يكون ربحاً لهذا البوت. بعد إدخال السعر راح أطلب منك تأكيد النشر قبل ما يظهر للزبائن.'
     ].join('\n'), { parse_mode: 'HTML', reply_markup: cancelInlineKeyboard() });
   }
 
@@ -9954,11 +10419,19 @@ async function handleAdminCallback(query, user, data) {
     await clearState(user.id);
     product = await Merchant.findByPk(productId);
     const basePrice = networkProductBasePrice(product);
-    const profit = Math.max(0, value - basePrice);
+    const supplierPrice = networkSupplierUnitPrice(product);
+    const profitBasis = supplierPrice !== null ? Number(supplierPrice) : basePrice;
+    const profit = Math.max(0, value - profitBasis);
+    const pricingLines = supplierPrice !== null
+      ? [
+          `السعر الافتراضي الأدنى: <b>${moneyUsd(basePrice)}</b>`,
+          `تكلفة/حق المصدر: <b>${moneyUsd(supplierPrice)}</b>`
+        ]
+      : [`${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`];
     await answerCallback(query.id, 'تم النشر في هذا البوت.');
     await bot.sendMessage(user.id, [
       `✅ <b>تم نشر ${String(product.type || '') === 'service' ? 'الخدمة' : 'المنتج'} في بوتك</b>`,
-      `${String(product.type || '') === 'service' ? 'سعر صاحب الخدمة' : 'سعر صاحب المنتج'}: <b>${moneyUsd(basePrice)}</b>`,
+      ...pricingLines,
       `سعر البيع: <b>${moneyUsd(value)}</b>`,
       `ربح بوتك: <b>${moneyUsd(profit)}</b> لكل عملية بيع.`,
       '',
@@ -10188,6 +10661,9 @@ async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:field:')) {
     const [, , idRaw, field] = data.split(':');
     const managedProduct = await Merchant.findByPk(Number(idRaw));
+    if (isGemini18mProduct(managedProduct) && ['warrantyAr', 'localWarrantyAr'].includes(field)) {
+      return answerCallback(query.id, 'ضمان جمناي 18 شهر ثابت: 24H (24 ساعة) ولا يحتاج تعديل.', true);
+    }
     if (!canEditProductField(managedProduct, field)) return answerCallback(query.id, 'لا يمكنك تعديل هذا الحقل. استخدم الاسم أو السعر الخاصين بهذا البوت.', true);
     if (!['nameAr', 'price', 'localNameAr', 'localPrice', 'localDescriptionAr', 'localWarrantyAr', 'localImage', 'descriptionAr', 'warrantyAr', 'image'].includes(field)) {
       return answerCallback(query.id, 'هذا الحقل لم يعد مستخدماً.', true);
@@ -10793,15 +11269,23 @@ async function showAdminProductFieldsMenu(chatId, productId) {
       callback_data: `adm:field:${product.id}:localPrice`,
       style: 'primary'
     }]);
-    keyboard.push([{
-      text: '📝 وصف هذا البوت فقط',
-      callback_data: `adm:field:${product.id}:localDescriptionAr`,
-      style: 'primary'
-    }, {
-      text: '🛡 ضمان هذا البوت فقط',
-      callback_data: `adm:field:${product.id}:localWarrantyAr`,
-      style: 'primary'
-    }]);
+    if (isGemini18mProduct(product)) {
+      keyboard.push([{
+        text: '📝 وصف هذا البوت فقط',
+        callback_data: `adm:field:${product.id}:localDescriptionAr`,
+        style: 'primary'
+      }]);
+    } else {
+      keyboard.push([{
+        text: '📝 وصف هذا البوت فقط',
+        callback_data: `adm:field:${product.id}:localDescriptionAr`,
+        style: 'primary'
+      }, {
+        text: '🛡 ضمان هذا البوت فقط',
+        callback_data: `adm:field:${product.id}:localWarrantyAr`,
+        style: 'primary'
+      }]);
+    }
     keyboard.push([{
       text: '🖼 صورة هذا البوت فقط',
       callback_data: `adm:field:${product.id}:localImage`,
@@ -10817,13 +11301,20 @@ async function showAdminProductFieldsMenu(chatId, productId) {
       text: publicProduct ? '💵 السعر العام' : '💵 السعر',
       callback_data: `adm:field:${product.id}:price`
     }]);
-    keyboard.push([{
-      text: publicProduct ? '📝 الوصف العام' : '📝 الوصف',
-      callback_data: `adm:field:${product.id}:descriptionAr`
-    }, {
-      text: publicProduct ? '🛡 الضمان العام' : '🛡 الضمان',
-      callback_data: `adm:field:${product.id}:warrantyAr`
-    }]);
+    if (isGemini18mProduct(product)) {
+      keyboard.push([{
+        text: publicProduct ? '📝 الوصف العام' : '📝 الوصف',
+        callback_data: `adm:field:${product.id}:descriptionAr`
+      }]);
+    } else {
+      keyboard.push([{
+        text: publicProduct ? '📝 الوصف العام' : '📝 الوصف',
+        callback_data: `adm:field:${product.id}:descriptionAr`
+      }, {
+        text: publicProduct ? '🛡 الضمان العام' : '🛡 الضمان',
+        callback_data: `adm:field:${product.id}:warrantyAr`
+      }]);
+    }
     keyboard.push([{
       text: publicProduct ? '🖼 الصورة العامة' : '🖼 الصورة',
       callback_data: `adm:field:${product.id}:image`
@@ -10837,9 +11328,11 @@ async function showAdminProductFieldsMenu(chatId, productId) {
   return bot.sendMessage(chatId, [
     `✏️ <b>تعديل بيانات: ${escapeHtml(productDisplayName(product, 'ar'))}</b>`,
     '',
-    publicProduct
-      ? 'الحقول المكتوب عليها «هذا البوت فقط» لا تغيّر نسخ البوتات الأخرى. إذا كنت صاحب المنتج تظهر لك أيضاً الحقول العامة.'
-      : 'أي تعديل هنا يخص المنتج المحلي داخل بوتك. استخدم - في الوصف أو الضمان لإزالته.'
+    isGemini18mProduct(product)
+      ? 'ضمان هذا المنتج ثابت 24H (24 ساعة) في كل البوتات. باقي الحقول تقدر تعدلها حسب الصلاحيات.'
+      : (publicProduct
+        ? 'الحقول المكتوب عليها «هذا البوت فقط» لا تغيّر نسخ البوتات الأخرى. إذا كنت صاحب المنتج تظهر لك أيضاً الحقول العامة.'
+        : 'أي تعديل هنا يخص المنتج المحلي داخل بوتك. استخدم - في الوصف أو الضمان لإزالته.')
   ].join('\n'), { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
@@ -10938,6 +11431,15 @@ async function showAdminProductEditor(chatId, productId) {
     publicProduct ? `السعر العام لصاحب المنتج: <b>${moneyUsd(basePrice)}</b>` : '',
     publicProduct && hasLocalNetworkPriceOverride(product) ? `ربح فرق السعر بهذا البوت: <b>${moneyUsd(displayPrice - basePrice)}</b> لكل وحدة` : '',
     `المخزون المتاح: <b>${product.type === 'service' ? 'لا يحتاج مخزون' : product.type === 'shared' ? `${stock} استخدام` : stock}</b>`,
+    isGemini18mProduct(product) && quantityPricingApplies(product)
+      ? `خصومات الكمية: <b>تلقائية حسب الكمية والمخزون</b> — الحد الأعلى ${Number(product.maxPurchaseQuantity || 1000)}`
+      : '',
+    isGemini18mProduct(product) && !quantityPricingApplies(product) && isPublicProduct(product)
+      ? 'خصومات الكمية: <b>غير مفعلة في بوتات إعادة البيع</b>'
+      : '',
+    isGemini18mProduct(product) && networkSupplierUnitPrice(product) !== null
+      ? `تكلفة الشريك من الشبكة: <b>${moneyUsd(networkSupplierUnitPrice(product))}</b> • السعر الافتراضي: <b>${moneyUsd(basePrice)}</b> • الربح الافتراضي: <b>${moneyUsd(Math.max(0, basePrice - networkSupplierUnitPrice(product)))}</b>`
+      : '',
     product.type === 'shared' ? `حد المشاركة لكل حساب: <b>${Number(product.sharedLimit || 5)} زبائن</b>` : '',
     `حالة هذا البوت: <b>${productLocalStatusLabel(publicationStatus)}</b>`,
     `الحالة العامة: <b>${product.isActive ? 'فعّال' : 'متوقف'}</b>`,
@@ -10959,6 +11461,9 @@ async function showAdminProductEditor(chatId, productId) {
   ];
   if (String(product.type || '') !== 'service') {
     keyboard.push([{ text: '🔐 إدارة وكشف المخزون والكودات', callback_data: `adm:inventory:${product.id}:0`, style: 'primary' }]);
+    if (isGemini18mProduct(product) && network.isMaster() && manageable) {
+      keyboard.push([{ text: '📡 قناة المخزون التلقائي', callback_data: `adm:gemini_channel:${product.id}`, style: 'success' }]);
+    }
     keyboard.push([{ text: '📊 المخزون والمبيعات والمساهمون', callback_data: `adm:contributors:${product.id}`, style: 'primary' }]);
   }
   keyboard.push([{ text: '🌐 النشر والظهور', callback_data: `adm:product_publish:${product.id}`, style: 'primary' }]);
@@ -11259,7 +11764,8 @@ async function processNetworkNotificationEvents() {
         if (event.eventType === 'new_product' && publicationStatus === 'pending' && isForeignPublicProduct(product)) {
           await notifyAdminsForNetworkProductReview(product, event.actorName || '');
         } else if (event.eventType === 'new_product' && productVisibleInCurrentShop(product)) {
-          await broadcastNewProductNotification(product, event.actorName || '');
+          const readyForCustomers = String(product.type || '') === 'service' || (await getProductStock(product.id)) > 0;
+          if (readyForCustomers) await broadcastNewProductNotification(product, event.actorName || '');
         } else if (event.eventType === 'stock_added' && Number(event.amount || 0) > 0 && productVisibleInCurrentShop(product)) {
           await broadcastStockNotification(product, Number(event.amount), event.actorName || '');
         }
@@ -11594,4 +12100,4 @@ function startVirtualNumbersWatcher() {
 
 bot.on('polling_error', error => console.error('Telegram polling error:', error.message));
 
-module.exports = { bot, notifyBinanceResult, sendDeliveryToUser, startNetworkAccountWatcher, startVirtualNumbersWatcher, loadPersistentRuntimeConfig };
+module.exports = { bot, notifyBinanceResult, sendDeliveryToUser, startNetworkAccountWatcher, startVirtualNumbersWatcher, loadPersistentRuntimeConfig, broadcastNewProductNotification };

@@ -5,6 +5,12 @@ const { parseDescription } = require('../utils');
 const { decryptPayload } = require('../cryptoStore');
 const config = require('../config');
 const networkLedger = require('./networkLedger');
+const {
+  effectiveProductPrice,
+  unitPriceForQuantity,
+  maxPurchaseQuantity,
+  networkSupplierUnitPrice
+} = require('./quantityPricing');
 
 function quotedSchema() {
   return `"${String(config.databaseSchema).replace(/"/g, '""')}"`;
@@ -37,12 +43,6 @@ function productVisibleInCurrentShop(product) {
   if (product.isActive === false) return false;
   const status = String(product.localPublicationStatus || 'published').toLowerCase();
   return status === 'published';
-}
-
-function effectiveProductPrice(product) {
-  const base = Math.max(0, Number(product?.price || 0));
-  const override = product?.localPriceOverrideUsd == null ? NaN : Number(product.localPriceOverrideUsd);
-  return Number.isFinite(override) && override >= 0 ? override : base;
 }
 
 async function getProductStock(merchantId) {
@@ -187,10 +187,11 @@ async function createOrder({ userId, merchantId, quantity, paymentMethod }) {
   const product = await Merchant.findByPk(merchantId);
   if (!product || !product.isActive || !productVisibleInCurrentShop(product)) throw new Error('PRODUCT_NOT_FOUND');
   const qty = Number(quantity);
-  if (!Number.isInteger(qty) || qty < 1 || qty > 100) throw new Error('INVALID_QUANTITY');
   const stock = product.type === 'service' ? 999999 : await getProductStock(product.id);
+  const maxQty = maxPurchaseQuantity(product, stock);
+  if (!Number.isInteger(qty) || qty < 1 || qty > maxQty) throw new Error('INVALID_QUANTITY');
   if (product.type !== 'service' && stock < qty) throw new Error('OUT_OF_STOCK');
-  const unitPrice = effectiveProductPrice(product);
+  const unitPrice = unitPriceForQuantity(product, qty);
   return PurchaseOrder.create({
     userId,
     merchantId,
@@ -472,13 +473,17 @@ async function fulfillOrder(orderId, options = {}) {
       const externalStock = inventoryOwnerShopId !== sellerShopId;
       const basePriceUsd = Number(product.networkBasePriceUsd ?? product.price ?? 0);
       const hasLocalPriceOverride = Number(product.localPriceOverrideUsd || 0) > basePriceUsd + 1e-9;
-      const resellerPriceOverride = externalStock && (Boolean(options.resellerPriceOverride) || hasLocalPriceOverride);
+      const fixedSupplierPriceUsd = networkSupplierUnitPrice(product);
+      // A product may define a fixed network wholesale entitlement that is
+      // intentionally lower than its default retail price. This applies even
+      // when the reseller keeps the default retail price.
+      const fixedSupplierPricing = externalStock && fixedSupplierPriceUsd !== null;
+      const resellerPriceOverride = externalStock && (fixedSupplierPricing || Boolean(options.resellerPriceOverride) || hasLocalPriceOverride);
       let split;
       if (resellerPriceOverride) {
-        // Reseller markup model: the stock owner keeps the exact value recorded
-        // when that inventory was contributed, and the selling bot keeps only
-        // the amount above it. The legacy 10% commission does not apply.
-        const supplierFloorUsd = Math.max(0, Number(delivery.contributionPriceUsd || 0));
+        // Reseller markup model: the stock owner keeps the recorded/fixed
+        // supplier value and the selling bot keeps the exact retail difference.
+        const supplierFloorUsd = Math.max(0, Number(delivery.contributionPriceUsd ?? fixedSupplierPriceUsd ?? 0));
         const supplierUsd = Math.min(retailUnitPriceUsd, supplierFloorUsd);
         const markupUsd = Math.max(0, retailUnitPriceUsd - supplierUsd);
         split = {
@@ -861,6 +866,9 @@ module.exports = {
   productAccessibleInCurrentShop,
   productVisibleInCurrentShop,
   effectiveProductPrice,
+  productUnitPriceForQuantity: unitPriceForQuantity,
+  maxProductPurchaseQuantity: maxPurchaseQuantity,
+  networkSupplierUnitPrice,
   normalizeProductFamilyName,
   sortProductStockRows,
   listActiveProducts,

@@ -4,10 +4,12 @@ const { initializeDatabase, sequelize } = require('./db');
 const binancePay = require('./payments/binancePay');
 const network = require('./network');
 const adminAccess = require('./services/adminAccess');
+const { ensureGemini18MonthProduct } = require('./services/builtinProducts');
 
 let startupState = 'starting';
 let startupError = '';
 let bot = null;
+let seededGemini18m = null;
 
 // Start the HTTP server immediately so Railway health checks do not time out
 // while database migrations / inventory cleanup are still running.
@@ -71,6 +73,23 @@ async function main() {
   console.log('Starting database initialization...');
   await initializeDatabase();
   console.log('Database ready');
+
+  const seededGemini18m = await ensureGemini18MonthProduct();
+  if (seededGemini18m?.created && seededGemini18m?.product && network.isMaster()) {
+    await network.publishNotificationEvent({
+      eventType: 'new_product',
+      networkProductId: seededGemini18m.product.networkProductId,
+      actorShopId: 'master',
+      actorName: config.network.ownerName || config.network.shopName || 'Master',
+      payload: {
+        nameAr: seededGemini18m.product.nameAr,
+        nameEn: seededGemini18m.product.nameEn,
+        price: Number(seededGemini18m.product.price || 0.50),
+        type: seededGemini18m.product.type,
+        description: seededGemini18m.product.description || {}
+      }
+    }).catch(error => console.error('Gemini 18m network publish event:', error.message));
+  }
 
   // Bootstrap a client storefront before Telegram starts accepting customer
   // commands. A temporary Master/API outage must not prevent the bot itself
