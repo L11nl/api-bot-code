@@ -1,6 +1,6 @@
 {
   "name": "my-bot-store-clean",
-  "version": "15.0.1",
+  "version": "15.0.2",
   "private": true,
   "description": "Telegram digital store v15 with Gemini 18-month fixed 24H warranty, 50-link batched user notifications, channel-fed stock, smart quantity pricing, network wholesale margins, wallet audit controls, public services, smart payments, and partner management",
   "main": "src/index.js",

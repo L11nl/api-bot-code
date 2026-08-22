@@ -3375,7 +3375,7 @@ async function processGemini18mChannelPost(msg) {
     console.error('Gemini channel delete:', error.message);
   }
 
-  await notifyAdmins([
+  const importReport = [
     '📡 <b>مخزون جمناي 18 شهر</b>',
     `تمت قراءة رسالة من القناة: <b>${escapeHtml(msg.chat.title || `#${msg.chat.id}`)}</b>`,
     `➕ المضاف: <b>${result.added}</b>`,
@@ -3385,7 +3385,21 @@ async function processGemini18mChannelPost(msg) {
       ? `📣 اكتملت <b>${result.notificationProgress.batches}</b> دفعة إشعار (كل دفعة ${GEMINI_18M_NOTIFY_BATCH_SIZE} رابط) وتم إطلاق إشعار المستخدمين.`
       : `⏳ عداد إشعار المستخدمين: <b>${result.notificationProgress?.remainder || 0}/${GEMINI_18M_NOTIFY_BATCH_SIZE}</b> — لا يُرسل إشعار قبل اكتمال 50 رابط جديد.`,
     deleted ? '🗑 تم حذف رسالة الرابط من القناة بعد الحفظ.' : '⚠️ تم حفظ الرابط لكن تعذر حذف الرسالة. أعطِ البوت صلاحية Delete Messages في القناة.'
-  ].filter(Boolean).join('\n'));
+  ].filter(Boolean).join('\n');
+
+  // تقرير الاستيراد يرجع إلى قناة المخزون نفسها، وليس إلى محادثات الأدمن.
+  // إذا كانت صلاحية النشر ناقصة نكتفي بتنبيه الأدمن عن الخطأ حتى يعرف ما يصلحه.
+  try {
+    await bot.sendMessage(msg.chat.id, importReport, { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error('Gemini channel report:', error.message);
+    await notifyAdmins([
+      '⚠️ <b>تعذر نشر تقرير مخزون جمناي داخل القناة</b>',
+      `القناة: <b>${escapeHtml(msg.chat.title || `#${msg.chat.id}`)}</b>`,
+      'أعطِ البوت صلاحية <b>Post Messages</b> داخل القناة ثم جرّب مرة ثانية.',
+      `الخطأ: <code>${escapeHtml(error.message || 'unknown')}</code>`
+    ].join('\n')).catch(() => {});
+  }
 }
 
 async function showGemini18mChannelAdmin(chatId, productId) {
