@@ -4511,7 +4511,9 @@ bot.on('callback_query', async query => {
 
     if (data.startsWith('adm:')) {
       if (!isAdmin(user.id)) return answerCallback(query.id, t(user.lang, 'adminOnly'), true);
-      return handleAdminCallback(query, user, data);
+      // Await here so any async admin error is caught by this handler's try/catch
+      // instead of becoming an unhandled rejection that can terminate the bot process.
+      return await handleAdminCallback(query, user, data);
     }
 
     console.warn('Unhandled callback_data:', data, 'from user', user.id);
@@ -8983,7 +8985,8 @@ async function showProductContributors(chatId, product) {
 
 async function handleAdminCallback(query, user, data) {
   if (data.startsWith('adm:gemini_channel_bind:')) {
-    const productId = Number(data.split(':')[3]);
+    const productId = Number(data.slice('adm:gemini_channel_bind:'.length));
+    if (!Number.isInteger(productId) || productId <= 0) return answerCallback(query.id, 'معرّف المنتج غير صالح. افتح إدارة المنتج من جديد.', true);
     const product = await Merchant.findByPk(productId);
     if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'الميزة خاصة بمنتج جمناي 18 شهر في البوت الرئيسي.', true);
     await setState(user.id, { action: 'admin_bind_gemini_channel', productId });
@@ -9000,7 +9003,8 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:gemini_channel_unbind:')) {
-    const productId = Number(data.split(':')[3]);
+    const productId = Number(data.slice('adm:gemini_channel_unbind:'.length));
+    if (!Number.isInteger(productId) || productId <= 0) return answerCallback(query.id, 'معرّف المنتج غير صالح. افتح إدارة المنتج من جديد.', true);
     const product = await Merchant.findByPk(productId);
     if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
     await setGemini18mInventoryChannel(null);
@@ -9010,7 +9014,8 @@ async function handleAdminCallback(query, user, data) {
   }
 
   if (data.startsWith('adm:gemini_channel_test:')) {
-    const productId = Number(data.split(':')[3]);
+    const productId = Number(data.slice('adm:gemini_channel_test:'.length));
+    if (!Number.isInteger(productId) || productId <= 0) return answerCallback(query.id, 'معرّف المنتج غير صالح. افتح إدارة المنتج من جديد.', true);
     const product = await Merchant.findByPk(productId);
     if (!network.isMaster() || !product || !isGemini18mProduct(product)) return answerCallback(query.id, 'المنتج غير موجود.', true);
     const test = await testGemini18mChannelAccess();
